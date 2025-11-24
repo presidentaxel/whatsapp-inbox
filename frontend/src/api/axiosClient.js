@@ -18,7 +18,7 @@ const resolveBaseURL = () => {
   }
 
   if (typeof window !== "undefined" && window.location?.origin) {
-    return window.location.origin;
+    return `${normalizeUrl(window.location.origin)}/api`;
   }
 
   return "";
