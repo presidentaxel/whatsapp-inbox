@@ -244,6 +244,31 @@ Secrets requis côté GitHub :
 - Docker tourne en réseau privé `appnet` ; seul Caddy expose 80/443.
 - `HUMAN_BACKUP_NUMBER` et les clés Meta sont chargés via `.env`.
 
+### Mettre à jour les fichiers `.env`
+
+Les secrets vivent dans `backend/.env` et `frontend/.env`. Pour les modifier :
+
+1. Mets à jour les fichiers **en local** (dans ton repo).
+2. Copie-les sur le serveur :
+
+   ```bash
+   cd D:\Code\whatsapp-inbox  # ou ton dossier local
+   scp backend/.env ubuntu@217.182.65.32:/opt/whatsapp-inbox/backend/.env
+   scp frontend/.env ubuntu@217.182.65.32:/opt/whatsapp-inbox/frontend/.env
+   ```
+
+3. Redeploie pour recharger les nouveaux secrets :
+
+   ```bash
+    ssh ubuntu@217.182.65.32
+    cd /opt/whatsapp-inbox/deploy
+    export DOMAIN=whatsapp.lamaisonduchauffeurvtc.fr
+    export EMAIL=ton.email@domaine.com
+    bash deploy.sh
+   ```
+
+Les workflows GitHub n’écrasent pas ces fichiers (ils sont listés dans `.gitignore`). Si tu veux aller plus loin, tu peux utiliser un gestionnaire de secrets (OVH Secret Manager, Hashicorp Vault…) pour les injecter dynamiquement avant `docker compose up`, mais pour un petit setup, l’étape `scp + deploy.sh` reste la plus simple et sûre.
+
 ### 6. Coûts & scalabilité
 
 | Poste                                  | Estimation mensuelle |
