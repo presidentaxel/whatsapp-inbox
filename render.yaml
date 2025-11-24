@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: whatsapp-inbox-backend
+    env: docker
+    plan: free
+    autoDeploy: true
+    dockerfilePath: backend/Dockerfile
+    healthCheckPath: /healthz
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER
+        sync: false
+      - key: PORT
+        value: "8000"
+
+  - type: web
+    name: whatsapp-inbox-frontend
+    env: static
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install && npm run build
+    rootDir: frontend
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_BACKEND_URL
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false
+
