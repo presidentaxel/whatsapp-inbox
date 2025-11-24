@@ -234,6 +234,8 @@ Secrets requis côté GitHub :
 | `OVH_SSH_KEY`     | Clé privée (deploy key)                   |
 | `OVH_DOMAIN`      | Domaine public (ex. `chat.example.com`)   |
 | `OVH_TLS_EMAIL`   | Email pour Let’s Encrypt                  |
+| `BACKEND_ENV`     | Contenu complet de `backend/.env`         |
+| `FRONTEND_ENV`    | Contenu complet de `frontend/.env`        |
 
 > Tu peux déclencher le workflow manuellement via **Actions → Deploy to OVH → Run workflow** si tu veux déployer sans commit.
 
@@ -268,6 +270,8 @@ Les secrets vivent dans `backend/.env` et `frontend/.env`. Pour les modifier :
    ```
 
 Les workflows GitHub n’écrasent pas ces fichiers (ils sont listés dans `.gitignore`). Si tu veux aller plus loin, tu peux utiliser un gestionnaire de secrets (OVH Secret Manager, Hashicorp Vault…) pour les injecter dynamiquement avant `docker compose up`, mais pour un petit setup, l’étape `scp + deploy.sh` reste la plus simple et sûre.
+
+> **Option automatisée :** tu peux stocker le contenu complet des `.env` dans les secrets GitHub `BACKEND_ENV` et `FRONTEND_ENV` (multiligne, par exemple en collant directement le fichier entre guillemets). Le workflow `Deploy to OVH` réécrira automatiquement `backend/.env` et `frontend/.env` sur le serveur avant chaque déploiement.
 
 ### 6. Coûts & scalabilité
 

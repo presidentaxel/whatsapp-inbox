@@ -34,9 +34,16 @@ jobs:
           username: ${{ secrets.OVH_USER }}
           key: ${{ secrets.OVH_SSH_KEY }}
           script: |
+            set -euo pipefail
+            mkdir -p /opt/whatsapp-inbox/backend /opt/whatsapp-inbox/frontend
+            cat <<'EOF' > /opt/whatsapp-inbox/backend/.env
+${{ secrets.BACKEND_ENV }}
+EOF
+            cat <<'EOF' > /opt/whatsapp-inbox/frontend/.env
+${{ secrets.FRONTEND_ENV }}
+EOF
             cd /opt/whatsapp-inbox/deploy
             export DOMAIN=${{ secrets.OVH_DOMAIN }}
             export EMAIL=${{ secrets.OVH_TLS_EMAIL }}
-            chmod +x deploy.sh
-            ./deploy.sh
+            bash deploy.sh
 
