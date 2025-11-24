@@ -142,9 +142,31 @@ def _assign_bootstrap_admin(user_id: str):
     ).execute()
 
 
+def _assign_default_viewer(user_id: str):
+    """
+    Ensure every newly invited user has at least the viewer role so they can load the app.
+    """
+    existing = (
+        supabase.table("app_user_roles").select("id").eq("user_id", user_id).limit(1).execute()
+    )
+    if existing.data:
+        return
+
+    viewer_role = (
+        supabase.table("app_roles").select("id").eq("slug", "viewer").limit(1).execute()
+    )
+    if not viewer_role.data:
+        return
+
+    supabase.table("app_user_roles").insert(
+        {"user_id": user_id, "role_id": viewer_role.data[0]["id"]}
+    ).execute()
+
+
 def load_current_user(supabase_user: Any) -> CurrentUser:
     app_profile = _ensure_app_user_record(supabase_user)
     _assign_bootstrap_admin(supabase_user.id)
+    _assign_default_viewer(supabase_user.id)
     permissions = PermissionMatrix()
 
     role_rows_raw = (
