@@ -16,6 +16,7 @@ import { useAuth } from "../context/AuthContext";
 import SettingsPanel from "../components/settings/SettingsPanel";
 import GeminiPanel from "../components/bot/GeminiPanel";
 
+
 export default function InboxPage() {
   const { signOut, profile, hasPermission } = useAuth();
   const [accounts, setAccounts] = useState([]);
