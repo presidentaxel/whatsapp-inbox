@@ -9,6 +9,9 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      BACKEND_ENV: ${{ secrets.BACKEND_ENV }}
+      FRONTEND_ENV: ${{ secrets.FRONTEND_ENV }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,12 +39,8 @@ jobs:
           script: |
             set -euo pipefail
             mkdir -p /opt/whatsapp-inbox/backend /opt/whatsapp-inbox/frontend
-            cat <<'EOF' > /opt/whatsapp-inbox/backend/.env
-${{ secrets.BACKEND_ENV }}
-EOF
-            cat <<'EOF' > /opt/whatsapp-inbox/frontend/.env
-${{ secrets.FRONTEND_ENV }}
-EOF
+            printf '%s\n' "$BACKEND_ENV" > /opt/whatsapp-inbox/backend/.env
+            printf '%s\n' "$FRONTEND_ENV" > /opt/whatsapp-inbox/frontend/.env
             cd /opt/whatsapp-inbox/deploy
             export DOMAIN=${{ secrets.OVH_DOMAIN }}
             export EMAIL=${{ secrets.OVH_TLS_EMAIL }}
