@@ -27,7 +27,12 @@ export default function ConversationList({
                 {displayName}
                 {c.is_favorite && <span className="favorite-dot">★</span>}
               </div>
-              <span className="conversation-time">{timeLabel}</span>
+              <div className="conversation-item__header-meta">
+                <span className={`bot-pill ${c.bot_enabled ? "bot-pill--on" : "bot-pill--off"}`}>
+                  {c.bot_enabled ? "Bot" : "Humain"}
+                </span>
+                <span className="conversation-time">{timeLabel}</span>
+              </div>
             </div>
             <div className="conversation-meta">
               <span>{c.client_number}</span>

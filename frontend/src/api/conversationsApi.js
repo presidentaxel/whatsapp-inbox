@@ -8,3 +8,6 @@ export const markConversationRead = (conversationId) =>
 
 export const toggleConversationFavorite = (conversationId, favorite) =>
   api.post(`/conversations/${conversationId}/favorite`, { favorite });
+
+export const toggleConversationBotMode = (conversationId, enabled) =>
+  api.post(`/conversations/${conversationId}/bot`, { enabled });

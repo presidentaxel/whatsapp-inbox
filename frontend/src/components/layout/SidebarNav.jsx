@@ -1,8 +1,9 @@
-import { FiMessageSquare, FiUsers, FiSettings } from "react-icons/fi";
+import { FiCpu, FiMessageSquare, FiUsers, FiSettings } from "react-icons/fi";
 
 const NAV_ITEMS = [
   { id: "chat", icon: <FiMessageSquare /> },
   { id: "contacts", icon: <FiUsers /> },
+  { id: "assistant", icon: <FiCpu /> },
   { id: "settings", icon: <FiSettings /> },
 ];
 

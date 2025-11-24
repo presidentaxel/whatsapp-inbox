@@ -8,6 +8,7 @@ from app.api.routes_accounts import router as accounts_router
 from app.api.routes_contacts import router as contacts_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_admin import router as admin_router
+from app.api.routes_bot import router as bot_router
 
 app = FastAPI()
 
@@ -26,6 +27,7 @@ app.include_router(messages_router, prefix="/messages", tags=["messages"])
 app.include_router(accounts_router, prefix="/accounts", tags=["accounts"])
 app.include_router(contacts_router, prefix="/contacts", tags=["contacts"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
+app.include_router(bot_router, prefix="/bot", tags=["bot"])
 
 @app.get("/")
 def root():

@@ -13,7 +13,7 @@ from app.schemas.accounts import AccountCreate
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def list_accounts(current_user: CurrentUser = Depends(get_current_user)):
     allowed_scope = current_user.accounts_for(PermissionCodes.ACCOUNTS_VIEW)
     if allowed_scope is None:
@@ -23,7 +23,7 @@ async def list_accounts(current_user: CurrentUser = Depends(get_current_user)):
     return expose_accounts_limited(allowed_scope)
 
 
-@router.post("/")
+@router.post("")
 async def create_account_api(
     payload: AccountCreate, current_user: CurrentUser = Depends(get_current_user)
 ):

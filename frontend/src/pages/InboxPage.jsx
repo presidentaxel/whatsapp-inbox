@@ -3,6 +3,7 @@ import {
   getConversations,
   markConversationRead,
   toggleConversationFavorite,
+  toggleConversationBotMode,
 } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
 import { getContacts } from "../api/contactsApi";
@@ -13,6 +14,7 @@ import SidebarNav from "../components/layout/SidebarNav";
 import ContactsPanel from "../components/contacts/ContactsPanel";
 import { useAuth } from "../context/AuthContext";
 import SettingsPanel from "../components/settings/SettingsPanel";
+import GeminiPanel from "../components/bot/GeminiPanel";
 
 export default function InboxPage() {
   const { signOut, profile, hasPermission } = useAuth();
@@ -25,7 +27,14 @@ export default function InboxPage() {
   const [contacts, setContacts] = useState([]);
   const [contactSearch, setContactSearch] = useState("");
   const [selectedContact, setSelectedContact] = useState(null);
+  const [isWindowActive, setIsWindowActive] = useState(true);
   const canViewContacts = hasPermission?.("contacts.view");
+  useEffect(() => {
+    const handleVisibility = () => setIsWindowActive(!document.hidden);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
 
   const loadAccounts = useCallback(() => {
     getAccounts().then((res) => {
@@ -105,12 +114,25 @@ export default function InboxPage() {
   };
 
   useEffect(() => {
-    if (!activeAccount || navMode !== "chat") {
+    if (!activeAccount || navMode !== "chat" || !isWindowActive) {
       return;
     }
-    const interval = setInterval(() => refreshConversations(activeAccount), 5000);
-    return () => clearInterval(interval);
-  }, [activeAccount, navMode, refreshConversations]);
+    let cancelled = false;
+    let timeoutId;
+    const poll = async () => {
+      await refreshConversations(activeAccount);
+      if (!cancelled) {
+        timeoutId = setTimeout(poll, 7000);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [activeAccount, navMode, isWindowActive, refreshConversations]);
 
   const filteredConversations = useMemo(() => {
     switch (filter) {
@@ -130,14 +152,34 @@ export default function InboxPage() {
     refreshConversations();
   };
 
+  const handleBotModeChange = async (conversation, enabled) => {
+    if (!conversation) return;
+    const res = await toggleConversationBotMode(conversation.id, enabled);
+    const updated = res.data?.conversation ?? { ...conversation, bot_enabled: enabled };
+    setConversations((prev) =>
+      prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+    );
+    setSelectedConversation((prev) =>
+      prev && prev.id === updated.id ? { ...prev, ...updated } : prev
+    );
+  };
+
+  const canManageAccounts = hasPermission?.("accounts.manage");
+  const canManageRoles = hasPermission?.("roles.manage");
+  const canManageUsers = hasPermission?.("users.manage");
+  const canManageSettings = hasPermission?.("settings.manage");
+
   const allowedNavItems = useMemo(() => {
     const items = ["chat"];
     if (canViewContacts) {
       items.push("contacts");
     }
+    if (canManageSettings) {
+      items.push("assistant");
+    }
     items.push("settings");
     return items;
-  }, [canViewContacts]);
+  }, [canViewContacts, canManageSettings]);
 
   useEffect(() => {
     if (!allowedNavItems.includes(navMode)) {
@@ -149,10 +191,6 @@ export default function InboxPage() {
     selectedConversation && selectedConversation.account_id
       ? hasPermission?.("messages.send", selectedConversation.account_id)
       : false;
-
-  const canManageAccounts = hasPermission?.("accounts.manage");
-  const canManageRoles = hasPermission?.("roles.manage");
-  const canManageUsers = hasPermission?.("users.manage");
 
   return (
     <div className="app-shell">
@@ -196,6 +234,14 @@ export default function InboxPage() {
               canManageRoles={canManageRoles}
               canManageUsers={canManageUsers}
               onAccountsRefresh={loadAccounts}
+            />
+          </div>
+        ) : navMode === "assistant" ? (
+          <div className="workspace-main settings-mode">
+            <GeminiPanel
+              accountId={activeAccount}
+              accounts={accounts}
+              onAccountChange={setActiveAccount}
             />
           </div>
         ) : (
@@ -251,6 +297,8 @@ export default function InboxPage() {
             <ChatWindow
               conversation={selectedConversation}
               onFavoriteToggle={handleFavoriteToggle}
+              onBotModeChange={handleBotModeChange}
+              isWindowActive={isWindowActive && navMode === "chat"}
               canSend={canSendMessage}
             />
           </div>

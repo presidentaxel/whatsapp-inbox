@@ -7,7 +7,7 @@ from app.services.contact_service import list_contacts
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def fetch_contacts(current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.CONTACTS_VIEW)
     return await list_contacts()

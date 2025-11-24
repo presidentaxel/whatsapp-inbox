@@ -40,3 +40,13 @@ async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
     if not res.data:
         return None
     return res.data[0]
+
+
+async def set_conversation_bot_mode(conversation_id: str, enabled: bool) -> Optional[dict]:
+    supabase.table("conversations").update({"bot_enabled": enabled}).eq("id", conversation_id).execute()
+    updated = (
+        supabase.table("conversations").select("*").eq("id", conversation_id).limit(1).execute()
+    )
+    if not updated.data:
+        return None
+    return updated.data[0]

@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -6,10 +7,19 @@ import httpx
 
 from app.core.config import settings
 from app.core.db import supabase
+from app.services import bot_service
 from app.services.account_service import (
     get_account_by_id,
     get_account_by_phone_number_id,
 )
+from app.services.conversation_service import get_conversation_by_id, set_conversation_bot_mode
+
+logger = logging.getLogger("uvicorn.error").getChild("bot.message")
+logger.setLevel(logging.INFO)
+
+FALLBACK_MESSAGE = "Je me renseigne auprès d’un collègue et je reviens vers vous au plus vite."
+
+logger = logging.getLogger(__name__)
 
 
 async def handle_incoming_message(data: dict):
@@ -31,7 +41,7 @@ async def handle_incoming_message(data: dict):
             contacts_map = {c.get("wa_id"): c for c in value.get("contacts", []) if c.get("wa_id")}
 
             for message in value.get("messages", []):
-                _process_incoming_message(account["id"], message, contacts_map)
+                await _process_incoming_message(account["id"], message, contacts_map)
 
             for status in value.get("statuses", []):
                 _process_status(status, account)
@@ -39,7 +49,7 @@ async def handle_incoming_message(data: dict):
     return True
 
 
-def _process_incoming_message(
+async def _process_incoming_message(
     account_id: str, message: Dict[str, Any], contacts_map: Dict[str, Any]
 ):
     wa_id = message.get("from")
@@ -80,6 +90,8 @@ def _process_incoming_message(
 
     _update_conversation_timestamp(conversation["id"], timestamp_iso)
     _increment_unread_count(conversation)
+
+    await _maybe_trigger_bot_reply(conversation["id"], content_text, contact, message.get("type"))
 
 
 def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any]):
@@ -226,6 +238,79 @@ def _increment_unread_count(conversation: Dict[str, Any]):
     conversation["unread_count"] = new_value
 
 
+async def _maybe_trigger_bot_reply(
+    conversation_id: str,
+    content_text: Optional[str],
+    contact: Dict[str, Any],
+    message_type: Optional[str] = "text",
+):
+    message_text = (content_text or "").strip()
+    if not message_text:
+        logger.info("Bot skip: empty message for %s", conversation_id)
+        return
+
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation or not conversation.get("bot_enabled"):
+        logger.info(
+            "Bot skip: bot disabled/missing conversation (id=%s, enabled=%s)",
+            conversation_id,
+            conversation.get("bot_enabled") if conversation else None,
+        )
+        return
+
+    account_id = conversation["account_id"]
+
+    if message_type and message_type.lower() != "text":
+        fallback = "Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ?"
+        logger.info("Non-text message detected for %s; sending fallback", conversation_id)
+        await send_message({"conversation_id": conversation_id, "content": fallback})
+        return
+
+    contact_name = contact.get("display_name") or contact.get("whatsapp_number")
+
+    try:
+        logger.info(
+            "Gemini invocation for conversation %s (account=%s, contact=%s)",
+            conversation_id,
+            conversation["account_id"],
+            contact_name,
+        )
+        reply = await bot_service.generate_bot_reply(
+            conversation_id,
+            conversation["account_id"],
+            message_text,
+            contact_name,
+        )
+    except Exception as exc:
+        logger.warning("Bot generation failed for %s: %s", conversation_id, exc)
+        return
+
+    if not reply:
+        logger.info("Gemini returned empty text for %s, escalating to human", conversation_id)
+        await send_message({"conversation_id": conversation_id, "content": FALLBACK_MESSAGE})
+        await _escalate_to_human(conversation, message_text)
+        return
+
+    normalized_reply = reply.strip().lower()
+    requires_escalation = normalized_reply.startswith(FALLBACK_MESSAGE.lower())
+
+    send_result = await send_message({"conversation_id": conversation_id, "content": reply})
+    if isinstance(send_result, dict) and send_result.get("error"):
+        logger.warning("Bot send failed for %s: %s", conversation_id, send_result)
+        if message_type and message_type != "text":
+            logger.info("Disabling bot for %s after unsupported content", conversation_id)
+            await set_conversation_bot_mode(conversation_id, False)
+        return
+
+    logger.info("Bot reply sent for conversation %s (length=%d)", conversation_id, len(reply))
+    supabase.table("conversations").update(
+        {"bot_last_reply_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("id", conversation_id).execute()
+
+    if requires_escalation:
+        await _escalate_to_human(conversation, message_text)
+
+
 async def get_messages(conversation_id: str):
     res = (
         supabase.table("messages")
@@ -352,6 +437,61 @@ async def get_message_by_id(message_id: str) -> Optional[Dict[str, Any]]:
     if not res.data:
         return None
     return res.data[0]
+
+
+async def _escalate_to_human(conversation: Dict[str, Any], last_customer_message: str):
+    await set_conversation_bot_mode(conversation["id"], False)
+    await _notify_backup(conversation, last_customer_message)
+
+
+async def _notify_backup(conversation: Dict[str, Any], last_customer_message: str):
+    backup_number = settings.HUMAN_BACKUP_NUMBER
+    if not backup_number:
+        logger.info("No HUMAN_BACKUP_NUMBER configured; skipping backup notification")
+        return
+
+    account_id = conversation["account_id"]
+    summary = (
+        f"[Escalade] Conversation {conversation['id']} (client: {conversation.get('client_number')})\n"
+        f"Dernier message: {last_customer_message}"
+    )
+    await _send_direct_whatsapp(account_id, backup_number, summary)
+
+
+async def _send_direct_whatsapp(account_id: str, to_number: str, text: str):
+    if not text.strip():
+        return
+    account = get_account_by_id(account_id)
+    if not account:
+        logger.warning("Cannot notify backup: account %s not found", account_id)
+        return
+
+    phone_id = account.get("phone_number_id") or settings.WHATSAPP_PHONE_ID
+    token = account.get("access_token") or settings.WHATSAPP_TOKEN
+    if not phone_id or not token:
+        logger.warning("Cannot notify backup: missing phone id/token for account %s", account_id)
+        return
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"body": text},
+    }
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(
+            f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json=payload,
+        )
+        if resp.is_error:
+            logger.warning(
+                "Failed to notify backup %s (status=%s): %s",
+                to_number,
+                resp.status_code,
+                resp.text,
+            )
 
 
 async def fetch_message_media_content(

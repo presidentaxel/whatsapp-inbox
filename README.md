@@ -21,6 +21,10 @@ WHATSAPP_VERIFY_TOKEN=mon_token_webhook
 WHATSAPP_PHONE_NUMBER=+15551234567
 META_APP_ID=1234567890
 META_APP_SECRET=votre_app_secret
+GEMINI_API_KEY=sk-xxx
+# optionnel, change le modèle si nécessaire
+GEMINI_MODEL=gemini-1.5-flash
+HUMAN_BACKUP_NUMBER=+33123456789
 ```
 
 ### Frontend (`frontend/.env`)
@@ -35,6 +39,24 @@ VITE_DEV_PROXY=true
 
 > En local, laisse `VITE_BACKEND_URL` vide pour t'appuyer sur le proxy `/api` de Vite (il redirige vers `VITE_DEV_BACKEND_URL`). Positionne `VITE_DEV_PROXY=false` si tu préfères cibler l'URL explicite même en mode dev.
 
+### Assistant Gemini
+
+- Active le toggle **Bot** dans l'en-tête d'une conversation pour laisser Gemini répondre automatiquement (un badge « Bot » est visible dans la liste).
+- L’onglet **Assistant Gemini** (icône CPU dans la barre latérale) contient maintenant un **template structuré** :
+  1. Règles système (langue, ton, mission, style, sécurité…)
+  2. Infos entreprise (adresse, zone, rendez-vous, activité…)
+  3. Offres / produits par catégorie (tableau libre)
+  4. Conditions & documents
+  5. Procédures simplifiées
+  6. FAQ
+  7. Cas spéciaux (réponses standardisées)
+  8. Liens utiles
+  9. Escalade humain (procédure interne)
+  10. Règles spéciales
+- Chaque bloc alimente automatiquement le prompt (visible dans la section “Aperçu généré”). Clique sur **“Copier dans la base”** si tu veux tout déverser dans la zone libre.
+- Si une information est absente du template, le bot répond strictement : *« Je me renseigne auprès d’un collègue et je reviens vers vous au plus vite. »* et `HUMAN_BACKUP_NUMBER` reçoit un SMS/WhatsApp d’alerte (si renseigné).
+- Les pièces jointes (audio / image / vidéo) déclenchent automatiquement : *« Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ? »*.
+
 ### Docker
 `docker-compose.yml` charge automatiquement les fichiers `.env` ci-dessus.
 
@@ -46,6 +68,8 @@ VITE_DEV_PROXY=true
 4. Pour les filtres (favoris, non lues, groupes), appliquer `004_conversation_flags.sql` qui ajoute `is_favorite`, `is_group`, `unread_count`
 5. **RBAC / permissions** : exécuter `005_rbac.sql` pour créer les tables `app_users`, `app_roles`, `app_permissions`, etc. La première personne qui se connecte obtient automatiquement le rôle `admin`.
 6. **Médias** : appliquer `006_message_media.sql` qui ajoute `media_id`, `media_mime_type`, `media_filename` aux messages pour pouvoir diffuser audio / images côté interface.
+7. **Bot Gemini** : `007_gemini_bot.sql` ajoute `bot_enabled`, `bot_last_reply_at` et la table `bot_profiles`.
+8. **Template bot** : `008_bot_template.sql` ajoute la colonne `template_config` (JSON) pour stocker le playbook.
 
 ### Table `whatsapp_accounts`
 
@@ -149,32 +173,91 @@ L’accès à l’UI est maintenant protégé via [Supabase Auth](https://supaba
 
 > ⚠️ Le webhook WhatsApp et Supabase restent publics ; seule l’interface et les API internes nécessitent un utilisateur authentifié.
 
-## Déploiement gratuit
+## Déploiement OVH (VPS + Caddy + Docker)
 
-### Backend (Render)
+> Objectif : garder un coût très bas (~15 €/mois) tout en automatisant le `git push → prod`.
 
-Tu peux utiliser le fichier `render.yaml` fourni à la racine :
+### 1. Provisionner un VPS
 
-1. Pousse le repo sur GitHub (branche `main`).
-2. Sur [Render](https://render.com/), choisis **Blueprint** → connecte ton repo → Render détecte `render.yaml`.
-3. Le blueprint crée :
-   - un service web Docker (`backend/Dockerfile`, port 8000)
-   - un site statique (build Vite dans `frontend/`)
-4. Sur l’onglet **Environment** de chaque service, saisis les valeurs :
-   - Backend : `SUPABASE_URL`, `SUPABASE_KEY`, `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_PHONE_NUMBER`
-   - Frontend : `VITE_BACKEND_URL` (URL du service backend), `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
-5. Déploie → Render fournit deux URLs (`.onrender.com`).
+- **OVH VPS Essential (2 vCPU / 4 Go / 80 Go SSD)** ≈ 13 € / mois.
+- Ajoute un nom de domaine (~1 € / mois) et un enregistrement `A` vers l’IP du VPS.
+- Supabase (base de données + auth) reste sur l’offre gratuite pour des charges modestes.
 
-### Frontend (Netlify / Vercel)
+### 2. Préparer le serveur
 
-Tu peux aussi utiliser Netlify en te basant sur `netlify.toml` :
+```bash
+sudo apt update && sudo apt install -y git curl ca-certificates
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+sudo apt install docker-compose-plugin
+mkdir -p /opt/whatsapp-inbox
+```
 
-1. Connecte le repo à [Netlify](https://www.netlify.com/).
-2. Le fichier `netlify.toml` définit `base=frontend`, `command=npm run build`, `publish=dist`.
-3. Variables : `VITE_BACKEND_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
-4. Déploie → Netlify fournit `https://xxx.netlify.app`.
+Clone ton repo dans `/opt/whatsapp-inbox` et copie les `.env` :
 
-> Tu peux aussi utiliser `docker-compose up --build` en local pour valider avant chaque push : les Dockerfile backend/frontend sont prêts pour Render/Netlify.
+```
+scp backend/.env vps:/opt/whatsapp-inbox/backend/.env
+scp frontend/.env vps:/opt/whatsapp-inbox/frontend/.env
+```
+
+### 3. Stack Docker prête à l’emploi
+
+- `deploy/docker-compose.prod.yml` : backend, frontend et **Caddy** (reverse proxy HTTPS auto).
+- `deploy/Caddyfile` : reverse proxy + sécurité HTTP (HSTS, Referrer Policy, etc.).
+- `deploy/deploy.sh` : script idempotent (git pull + `docker compose up -d --build` + prune des images).
+
+Usage manuel :
+
+```bash
+cd /opt/whatsapp-inbox
+chmod +x deploy/deploy.sh
+cd deploy
+export DOMAIN=chat.example.com
+export EMAIL=admin@example.com
+./deploy.sh
+```
+
+### 4. Action GitHub automatique
+
+Le workflow `.github/workflows/deploy-ovh.yml` :
+
+1. Push sur `main`.
+2. `rsync` des fichiers vers `/opt/whatsapp-inbox`.
+3. SSH + exécution de `deploy/deploy.sh`.
+
+Secrets requis côté GitHub :
+
+| Secret            | Contenu                                  |
+|-------------------|------------------------------------------|
+| `OVH_HOST`        | IP ou domaine du VPS                      |
+| `OVH_USER`        | Utilisateur SSH                           |
+| `OVH_SSH_KEY`     | Clé privée (deploy key)                   |
+| `OVH_DOMAIN`      | Domaine public (ex. `chat.example.com`)   |
+| `OVH_TLS_EMAIL`   | Email pour Let’s Encrypt                  |
+
+> Tu peux déclencher le workflow manuellement via **Actions → Deploy to OVH → Run workflow** si tu veux déployer sans commit.
+
+### 5. Sécurité
+
+- Caddy force HTTPS + entêtes de sécurité.
+- `backend/.env` et `frontend/.env` ne sont jamais commités (copiés via SCP ou Secret Manager).
+- Docker tourne en réseau privé `appnet` ; seul Caddy expose 80/443.
+- `HUMAN_BACKUP_NUMBER` et les clés Meta sont chargés via `.env`.
+
+### 6. Coûts & scalabilité
+
+| Poste                                  | Estimation mensuelle |
+|----------------------------------------|----------------------|
+| OVH VPS Essential                      | ~13 €                |
+| Nom de domaine                         | ~1 €                 |
+| Supabase (plan gratuit)                | 0 € (jusqu’à 500 Mo) |
+| Let’s Encrypt / Caddy                  | 0 €                  |
+
+**Scalabilité** :
+
+- Démarre sur le VPS Essential. Si la charge augmente, passe en **VPS Advance** (6 vCPU / 8 Go, ~25 €).
+- Au-delà, bascule vers *OVH Managed Kubernetes* : pousse tes images sur GHCR/Docker Hub et réutilise la même stack (backend+frontend+caddy) sous forme de deployments + services + ingress.
+- La base Supabase peut passer au plan Pro (25 $) si tu dépasses les quotas gratuits.
 
 ## RBAC : rôles & permissions
 

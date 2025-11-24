@@ -5,11 +5,18 @@ import { getMessages, sendMessage } from "../../api/messagesApi";
 import MessageBubble from "./MessageBubble";
 import MessageInput from "./MessageInput";
 
-export default function ChatWindow({ conversation, onFavoriteToggle, canSend = true }) {
+export default function ChatWindow({
+  conversation,
+  onFavoriteToggle,
+  onBotModeChange,
+  canSend = true,
+  isWindowActive = true,
+}) {
   const [messages, setMessages] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [showInfo, setShowInfo] = useState(false);
+  const [botTogglePending, setBotTogglePending] = useState(false);
 
   const conversationId = conversation?.id;
   const messagesEndRef = useRef(null);
@@ -31,12 +38,25 @@ export default function ChatWindow({ conversation, onFavoriteToggle, canSend = t
   }, [refreshMessages]);
 
   useEffect(() => {
-    if (!conversationId) {
+    if (!conversationId || !isWindowActive) {
       return;
     }
-    const interval = setInterval(refreshMessages, 3000);
-    return () => clearInterval(interval);
-  }, [conversationId, refreshMessages]);
+    let cancelled = false;
+    let timeoutId;
+    const poll = async () => {
+      await refreshMessages();
+      if (!cancelled) {
+        timeoutId = setTimeout(poll, 4500);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    };
+  }, [conversationId, refreshMessages, isWindowActive]);
 
   const onSend = async (text) => {
     if (!conversationId) return;
@@ -48,6 +68,8 @@ export default function ChatWindow({ conversation, onFavoriteToggle, canSend = t
     if (!conversation) return "";
     return conversation.client_number;
   }, [conversation]);
+
+  const botEnabled = !!conversation?.bot_enabled;
 
   const filteredMessages = useMemo(() => {
     if (!showSearch || !searchTerm.trim()) {
@@ -86,6 +108,28 @@ export default function ChatWindow({ conversation, onFavoriteToggle, canSend = t
         <div>
           <div className="chat-title">{displayName}</div>
           <div className="chat-subtitle">{subtitle}</div>
+        </div>
+        <div className="chat-bot-toggle">
+          <span className="chat-bot-toggle__label">
+            {botEnabled ? "Bot Gemini actif" : "Mode opérateur"}
+          </span>
+          <label className={`switch ${botEnabled ? "switch--on" : ""}`}>
+            <input
+              type="checkbox"
+              checked={botEnabled}
+              onChange={async () => {
+                if (!conversation || !onBotModeChange) return;
+                setBotTogglePending(true);
+                try {
+                  await onBotModeChange(conversation, !botEnabled);
+                } finally {
+                  setBotTogglePending(false);
+                }
+              }}
+              disabled={!conversation || botTogglePending}
+            />
+            <span className="switch__slider" />
+          </label>
         </div>
         <div className="chat-actions">
           <button

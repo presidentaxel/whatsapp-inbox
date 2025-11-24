@@ -6,13 +6,14 @@ from app.services.conversation_service import (
     get_all_conversations,
     get_conversation_by_id,
     mark_conversation_read,
+    set_conversation_bot_mode,
     set_conversation_favorite,
 )
 
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def list_conversations(
     account_id: str = Query(..., description="WhatsApp account ID"),
     current_user: CurrentUser = Depends(get_current_user),
@@ -45,3 +46,18 @@ async def toggle_favorite(
     favorite = bool(payload.get("favorite"))
     await set_conversation_favorite(conversation_id, favorite)
     return {"status": "ok", "favorite": favorite}
+
+
+@router.post("/{conversation_id}/bot")
+async def toggle_bot(
+    conversation_id: str, payload: dict, current_user: CurrentUser = Depends(get_current_user)
+):
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+    enabled = bool(payload.get("enabled"))
+    updated = await set_conversation_bot_mode(conversation_id, enabled)
+    if not updated:
+        raise HTTPException(status_code=500, detail="bot_toggle_failed")
+    return {"status": "ok", "conversation": updated}
