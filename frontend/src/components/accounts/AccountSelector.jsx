@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FiChevronDown, FiChevronUp } from "react-icons/fi";
 
 export default function AccountSelector({
-  accounts,
+  accounts = [],
   value,
   onChange,
   label = "Compte WhatsApp",
@@ -20,12 +20,17 @@ export default function AccountSelector({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const selected = useMemo(() => {
-    if (!accounts.length) return null;
-    return accounts.find((acc) => acc.id === value) ?? accounts[0];
-  }, [accounts, value]);
+  const normalizedAccounts = useMemo(
+    () => (Array.isArray(accounts) ? accounts : []),
+    [accounts]
+  );
 
-  if (!accounts.length) {
+  const selected = useMemo(() => {
+    if (!normalizedAccounts.length) return null;
+    return normalizedAccounts.find((acc) => acc.id === value) ?? normalizedAccounts[0];
+  }, [normalizedAccounts, value]);
+
+  if (!normalizedAccounts.length) {
     return (
       <div className="account-selector">
         <span>{label}</span>
@@ -56,7 +61,7 @@ export default function AccountSelector({
 
       {open && (
         <div className="account-selector__menu">
-          {accounts.map((acc) => (
+          {normalizedAccounts.map((acc) => (
             <button
               type="button"
               key={acc.id}

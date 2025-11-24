@@ -36,16 +36,27 @@ export default function InboxPage() {
   }, []);
 
 
-  const loadAccounts = useCallback(() => {
-    getAccounts().then((res) => {
-      setAccounts(res.data);
+  const loadAccounts = useCallback(async () => {
+    try {
+      const res = await getAccounts();
+      const payload = Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res?.data?.data)
+          ? res.data.data
+          : [];
+
+      setAccounts(payload);
       setActiveAccount((prev) => {
-        if (prev && res.data.some((acc) => acc.id === prev)) {
+        if (prev && payload.some((acc) => acc.id === prev)) {
           return prev;
         }
-        return res.data[0]?.id ?? null;
+        return payload[0]?.id ?? null;
       });
-    });
+    } catch (error) {
+      console.error("Failed to load accounts", error);
+      setAccounts([]);
+      setActiveAccount(null);
+    }
   }, []);
 
   const refreshConversations = useCallback(
