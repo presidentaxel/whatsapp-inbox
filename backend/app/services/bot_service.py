@@ -157,9 +157,9 @@ async def generate_bot_reply(
         "Si un utilisateur envoie une image, vidéo, audio ou tout contenu non textuel, réponds : "
         "\"Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ?\" "
         "N'invente jamais de données. "
-        "Si l'information n'apparaît pas dans le contexte fourni, réponds exactement : "
-        "\"Je me renseigne auprès d’un collègue et je reviens vers vous au plus vite.\" "
-        "Ne promets jamais de tarifs, délais, disponibilités ou réservations sans confirmation dans le contexte."
+        "Si une information manque dans le contexte, indique simplement que tu dois la vérifier et pose des questions pour avancer. "
+        "N'interromps pas la conversation tant que tu peux guider l'utilisateur ou collecter des détails utiles. "
+        "Ne promets jamais de tarifs, délais, disponibilités ou réservations sans confirmation explicite dans le contexte."
     )
 
     payload = {

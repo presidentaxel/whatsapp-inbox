@@ -292,7 +292,7 @@ async def _maybe_trigger_bot_reply(
         return
 
     normalized_reply = reply.strip().lower()
-    requires_escalation = normalized_reply.startswith(FALLBACK_MESSAGE.lower())
+    requires_escalation = normalized_reply == FALLBACK_MESSAGE.lower()
 
     send_result = await send_message({"conversation_id": conversation_id, "content": reply})
     if isinstance(send_result, dict) and send_result.get("error"):
