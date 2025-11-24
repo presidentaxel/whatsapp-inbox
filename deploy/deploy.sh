@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 
 echo "[deploy] Pulling latest changes..."
-git -C "$REPO_DIR" pull --rebase
+git -C "$REPO_DIR" pull --rebase --autostash
 
 echo "[deploy] Building and starting containers..."
 cd "$REPO_DIR/deploy"
