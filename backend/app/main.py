@@ -10,7 +10,9 @@ from app.api.routes_contacts import router as contacts_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_admin import router as admin_router
 from app.api.routes_bot import router as bot_router
+from app.api.routes_health import router as health_router
 from app.core.config import settings
+from app.core.http_client import close_http_client
 
 app = FastAPI()
 
@@ -30,6 +32,7 @@ app.include_router(accounts_router, prefix="/accounts", tags=["accounts"])
 app.include_router(contacts_router, prefix="/contacts", tags=["contacts"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
 app.include_router(bot_router, prefix="/bot", tags=["bot"])
+app.include_router(health_router, tags=["health"])
 
 if settings.PROMETHEUS_ENABLED:
     instrumentator = Instrumentator(
@@ -43,6 +46,12 @@ if settings.PROMETHEUS_ENABLED:
         include_in_schema=False,
         endpoint=settings.PROMETHEUS_METRICS_PATH,
     )
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Nettoyage propre lors de l'arrêt de l'application."""
+    await close_http_client()
 
 
 @app.get("/")

@@ -4,3 +4,5 @@ supabase
 httpx
 python-dotenv
 prometheus-fastapi-instrumentator
+tenacity>=8.0.0
+cachetools>=5.3.0
