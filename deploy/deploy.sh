@@ -3,8 +3,12 @@ set -euo pipefail
 
 REPO_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 
-echo "[deploy] Pulling latest changes..."
-git -C "$REPO_DIR" pull --rebase --autostash
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+
+echo "[deploy] Syncing repository (branch: $DEPLOY_BRANCH)..."
+git -C "$REPO_DIR" fetch origin "$DEPLOY_BRANCH"
+git -C "$REPO_DIR" reset --hard "origin/$DEPLOY_BRANCH"
+git -C "$REPO_DIR" clean -fd
 
 echo "[deploy] Building and starting containers..."
 cd "$REPO_DIR/deploy"
