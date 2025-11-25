@@ -354,22 +354,23 @@ async def _send_to_whatsapp_with_retry(phone_id: str, token: str, body: dict) ->
 
 
 async def send_message(payload: dict):
+    import asyncio
+    
     conv_id = payload.get("conversation_id")
     text = payload.get("content")
 
     if not conv_id or not text:
         return {"error": "invalid_payload", "message": "conversation_id and content are required"}
 
-    conv_res = await supabase_execute(
-        supabase.table("conversations").select("*").eq("id", conv_id)
-    )
-    if not conv_res.data:
+    # Récupérer la conversation (avec cache)
+    conversation = await get_conversation_by_id(conv_id)
+    if not conversation:
         return {"error": "conversation_not_found"}
 
-    conversation = conv_res.data[0]
     to_number = conversation["client_number"]
     account_id = conversation.get("account_id")
 
+    # Récupérer l'account (avec cache)
     account = await get_account_by_id(account_id)
     if not account:
         return {"error": "account_not_found"}
@@ -388,6 +389,8 @@ async def send_message(payload: dict):
     }
 
     # Utiliser le client HTTP partagé avec retry automatique
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    
     try:
         response = await _send_to_whatsapp_with_retry(phone_id, token, body)
     except httpx.HTTPError as exc:
@@ -399,7 +402,7 @@ async def send_message(payload: dict):
         }
 
     if response.is_error:
-        print("WhatsApp send error:", response.status_code, response.text)
+        logger.error("WhatsApp send error: %s %s", response.status_code, response.text)
         return {
             "error": "whatsapp_api_error",
             "status_code": response.status_code,
@@ -413,7 +416,6 @@ async def send_message(payload: dict):
     except ValueError:
         response_json = None
 
-    timestamp_iso = datetime.now(timezone.utc).isoformat()
     message_payload = {
         "conversation_id": conv_id,
         "direction": "outbound",
@@ -424,10 +426,13 @@ async def send_message(payload: dict):
         "status": "sent",
     }
 
-    await supabase_execute(
-        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+    # Paralléliser l'insertion du message et l'update de la conversation
+    await asyncio.gather(
+        supabase_execute(
+            supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+        ),
+        _update_conversation_timestamp(conv_id, timestamp_iso)
     )
-    await _update_conversation_timestamp(conv_id, timestamp_iso)
 
     return {"status": "sent", "message_id": message_id}
 
