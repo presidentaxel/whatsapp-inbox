@@ -217,7 +217,25 @@ scp backend/.env vps:/opt/whatsapp-inbox/backend/.env
 scp frontend/.env vps:/opt/whatsapp-inbox/frontend/.env
 ```
 
-### 3. Stack Docker prête à l’emploi
+**Important** : Créez également un fichier `deploy/.env` avec les variables nécessaires pour Caddy et Grafana (le workflow GitHub le génère automatiquement depuis les secrets `OVH_DOMAIN` et `OVH_TLS_EMAIL`, mais en déploiement manuel vous devez le créer vous‑même) :
+
+```bash
+cd deploy
+cat > .env << EOF
+DOMAIN=votre-domaine.com
+EMAIL=votre-email@example.com
+EOF
+```
+
+Ou utilisez le script automatique :
+```powershell
+cd deploy
+.\setup-env.ps1
+```
+
+Ce fichier est nécessaire pour que Caddy puisse générer les certificats SSL et que Grafana soit correctement configuré (et il est créé automatiquement par la GitHub Action lors des déploiements vers OVH).
+
+### 3. Stack Docker prête à l'emploi
 
 - `deploy/docker-compose.prod.yml` : backend, frontend et **Caddy** (reverse proxy HTTPS auto).
 - `deploy/Caddyfile` : reverse proxy + sécurité HTTP (HSTS, Referrer Policy, etc.).
@@ -230,11 +248,19 @@ Usage manuel :
 ```bash
 cd /opt/whatsapp-inbox
 chmod +x deploy/deploy.sh
+
+# Créer le fichier deploy/.env (ou utiliser setup-env.ps1 sur Windows)
 cd deploy
-export DOMAIN=chat.example.com
-export EMAIL=admin@example.com
+cat > .env << EOF
+DOMAIN=chat.example.com
+EMAIL=admin@example.com
+EOF
+
+# Déployer
 ./deploy.sh
 ```
+
+**Note** : Le fichier `deploy/.env` est maintenant requis pour que Caddy et Grafana fonctionnent correctement. Il sera automatiquement chargé par docker-compose.
 
 ### 4. Action GitHub automatique
 

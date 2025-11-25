@@ -32,6 +32,8 @@ services:
 
   grafana:
     image: grafana/grafana:latest
+    env_file:
+      - ./.env
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -47,6 +49,8 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    env_file:
+      - ./.env
     environment:
       - DOMAIN=${DOMAIN}
       - EMAIL=${EMAIL}

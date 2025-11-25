@@ -45,6 +45,11 @@ jobs:
             ${{ secrets.FRONTEND_ENV }}
             EOF
 
+            cat <<EOF >/opt/whatsapp-inbox/deploy/.env
+            DOMAIN=${{ secrets.OVH_DOMAIN }}
+            EMAIL=${{ secrets.OVH_TLS_EMAIL }}
+            EOF
+
             cd /opt/whatsapp-inbox/deploy
             export DOMAIN=${{ secrets.OVH_DOMAIN }}
             export EMAIL=${{ secrets.OVH_TLS_EMAIL }}
