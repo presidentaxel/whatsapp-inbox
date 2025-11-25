@@ -6,6 +6,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
+from app.core.http_client import get_http_client
 from app.core.permissions import CurrentUser, load_current_user
 
 http_bearer = HTTPBearer(auto_error=False)
@@ -20,14 +21,20 @@ async def _fetch_supabase_user(token: str) -> SimpleNamespace:
         "apikey": settings.SUPABASE_KEY,
         "Authorization": f"Bearer {token}",
     }
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-        except httpx.HTTPStatusError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
-        except httpx.HTTPError:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="supabase_unreachable")
+    
+    # Utiliser le client HTTP partagé avec timeout réduit
+    client = await get_http_client()
+    timeout = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0)
+    
+    try:
+        response = await client.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="supabase_timeout")
+    except httpx.HTTPStatusError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="supabase_unreachable")
 
     payload = response.json()
     return SimpleNamespace(

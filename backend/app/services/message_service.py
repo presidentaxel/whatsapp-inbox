@@ -7,6 +7,8 @@ import httpx
 
 from app.core.config import settings
 from app.core.db import supabase, supabase_execute
+from app.core.http_client import get_http_client, get_http_client_for_media
+from app.core.retry import retry_on_network_error
 from app.services import bot_service
 from app.services.account_service import (
     get_account_by_id,
@@ -339,6 +341,18 @@ async def get_messages(
     return rows
 
 
+@retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)
+async def _send_to_whatsapp_with_retry(phone_id: str, token: str, body: dict) -> httpx.Response:
+    """Envoie un message WhatsApp avec retry automatique sur erreurs réseau."""
+    client = await get_http_client()
+    response = await client.post(
+        f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+        headers={"Authorization": f"Bearer {token}"},
+        json=body,
+    )
+    return response
+
+
 async def send_message(payload: dict):
     conv_id = payload.get("conversation_id")
     text = payload.get("content")
@@ -373,12 +387,16 @@ async def send_message(payload: dict):
         "text": {"body": text},
     }
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(
-            f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            json=body,
-        )
+    # Utiliser le client HTTP partagé avec retry automatique
+    try:
+        response = await _send_to_whatsapp_with_retry(phone_id, token, body)
+    except httpx.HTTPError as exc:
+        logger.error("WhatsApp API error after retries: %s", exc)
+        return {
+            "error": "whatsapp_api_error",
+            "status_code": getattr(exc, "response", {}).get("status_code", 0),
+            "details": str(exc),
+        }
 
     if response.is_error:
         print("WhatsApp send error:", response.status_code, response.text)
@@ -496,12 +514,8 @@ async def _send_direct_whatsapp(account_id: str, to_number: str, text: str):
         "text": {"body": text},
     }
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(
-            f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-            headers={"Authorization": f"Bearer {token}"},
-            json=payload,
-        )
+    try:
+        resp = await _send_to_whatsapp_with_retry(phone_id, token, payload)
         if resp.is_error:
             logger.warning(
                 "Failed to notify backup %s (status=%s): %s",
@@ -509,6 +523,8 @@ async def _send_direct_whatsapp(account_id: str, to_number: str, text: str):
                 resp.status_code,
                 resp.text,
             )
+    except httpx.HTTPError as exc:
+        logger.warning("Failed to notify backup %s: %s", to_number, exc)
 
 
 async def fetch_message_media_content(
@@ -522,26 +538,28 @@ async def fetch_message_media_content(
     if not token:
         raise ValueError("missing_token")
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        meta_resp = await client.get(
-            f"https://graph.facebook.com/v19.0/{media_id}",
-            params={"access_token": token},
-        )
-        meta_resp.raise_for_status()
-        meta_json = meta_resp.json()
-        download_url = meta_json.get("url")
-        mime_type = (
-            meta_json.get("mime_type")
-            or message.get("media_mime_type")
-            or "application/octet-stream"
-        )
+    # Utiliser le client pour médias (timeout plus long)
+    client = await get_http_client_for_media()
+    
+    meta_resp = await client.get(
+        f"https://graph.facebook.com/v19.0/{media_id}",
+        params={"access_token": token},
+    )
+    meta_resp.raise_for_status()
+    meta_json = meta_resp.json()
+    download_url = meta_json.get("url")
+    mime_type = (
+        meta_json.get("mime_type")
+        or message.get("media_mime_type")
+        or "application/octet-stream"
+    )
 
-        if not download_url:
-            raise ValueError("media_url_missing")
+    if not download_url:
+        raise ValueError("media_url_missing")
 
-        media_resp = await client.get(download_url, params={"access_token": token})
-        media_resp.raise_for_status()
-        content = media_resp.content
+    media_resp = await client.get(download_url, params={"access_token": token})
+    media_resp.raise_for_status()
+    content = media_resp.content
 
     filename = message.get("media_filename") or meta_json.get("file_name")
     return content, mime_type, filename

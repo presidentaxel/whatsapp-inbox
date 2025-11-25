@@ -35,9 +35,17 @@ async def fetch_messages(
 async def fetch_message_media(
     message_id: str, current_user: CurrentUser = Depends(get_current_user)
 ):
+    import asyncio
+
     message = await get_message_by_id(message_id)
-    if not message or not message.get("media_id"):
-        raise HTTPException(status_code=404, detail="media_not_found")
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+
+    # Paralléliser les 2 appels suivants
+    conversation, account = await asyncio.gather(
+        get_conversation_by_id(message["conversation_id"]),
+        get_account_by_id(message["account_id"])  # Si on a l'ID directement
+    )
 
     conversation = await get_conversation_by_id(message["conversation_id"])
     if not conversation:

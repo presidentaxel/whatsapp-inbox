@@ -1,6 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import get_current_user
+from app.core.cache import get_cache
+from app.core.circuit_breaker import (
+    get_all_circuit_breakers,
+    gemini_circuit_breaker,
+    whatsapp_circuit_breaker,
+    supabase_circuit_breaker,
+)
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services import admin_service
 
@@ -69,5 +76,61 @@ async def update_user_overrides(user_id: str, payload: dict, current_user: Curre
     overrides = payload.get("overrides", [])
     admin_service.set_user_overrides(user_id, overrides)
     return {"status": "ok"}
+
+
+# === Endpoints de monitoring (Phase 3) ===
+
+@router.get("/circuit-breakers")
+async def get_circuit_breakers_status(current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Retourne l'état de tous les circuit breakers.
+    Utile pour monitorer les dépendances externes.
+    """
+    current_user.require(PermissionCodes.ROLES_MANAGE)
+    return get_all_circuit_breakers()
+
+
+@router.post("/circuit-breakers/{name}/reset")
+async def reset_circuit_breaker(name: str, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Reset manuel d'un circuit breaker.
+    Utile après avoir résolu un problème sur une dépendance externe.
+    """
+    current_user.require(PermissionCodes.ROLES_MANAGE)
+    
+    breakers = {
+        "gemini": gemini_circuit_breaker,
+        "whatsapp": whatsapp_circuit_breaker,
+        "supabase": supabase_circuit_breaker,
+    }
+    
+    breaker = breakers.get(name)
+    if not breaker:
+        raise HTTPException(status_code=404, detail=f"Circuit breaker '{name}' not found")
+    
+    breaker.reset()
+    return {"status": "reset", "name": name}
+
+
+@router.get("/cache/stats")
+async def get_cache_stats(current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Retourne des statistiques sur le cache.
+    """
+    current_user.require(PermissionCodes.ROLES_MANAGE)
+    cache = await get_cache()
+    return cache.get_stats()
+
+
+@router.post("/cache/clear")
+async def clear_cache(current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Vide tout le cache.
+    Utile après une mise à jour de données critiques.
+    """
+    current_user.require(PermissionCodes.ROLES_MANAGE)
+    cache = await get_cache()
+    await cache.clear()
+    return {"status": "cleared"}
 
 

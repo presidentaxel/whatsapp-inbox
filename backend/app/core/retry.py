@@ -84,12 +84,6 @@ def retry_on_server_error(
     return retry(
         stop=stop_after_attempt(max_attempts),
         wait=wait_exponential(multiplier=1, min=min_wait, max=max_wait),
-        retry=retry_if_exception_type((
-            httpx.HTTPStatusError,
-            httpx.TimeoutException,
-            httpx.NetworkError,
-            httpx.ConnectError,
-        )),
         retry=should_retry_on_status,
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True

@@ -1,3 +1,13 @@
+"""
+Version améliorée de bot_service avec:
+- Circuit breaker pour Gemini API
+- Retry logic sur les erreurs réseau
+- Cache pour les bot profiles
+- Meilleure gestion des erreurs
+- Timeouts optimisés
+
+INSTRUCTIONS: Renommer ce fichier en bot_service.py pour l'activer
+"""
 from __future__ import annotations
 
 import logging
@@ -5,9 +15,14 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 import httpx
+from fastapi import HTTPException
 
+from app.core.cache import cached, invalidate_cache_pattern
+from app.core.circuit_breaker import gemini_circuit_breaker, CircuitBreakerOpenError
 from app.core.config import settings
 from app.core.db import supabase, supabase_execute
+from app.core.http_client import get_http_client
+from app.core.retry import retry_on_network_error
 
 logger = logging.getLogger("uvicorn.error").getChild("bot.gemini")
 logger.setLevel(logging.INFO)
@@ -42,7 +57,13 @@ def _normalize_profile(row: Dict[str, Any], account_id: str) -> Dict[str, Any]:
     }
 
 
+@cached(ttl_seconds=300, key_prefix="bot_profile")
 async def get_bot_profile(account_id: str) -> Dict[str, Any]:
+    """
+    Récupère le bot profile avec cache (5 min TTL).
+    
+    Les profils changent rarement, le cache évite des appels DB inutiles.
+    """
     res = await supabase_execute(
         supabase.table("bot_profiles").select("*").eq("account_id", account_id).limit(1)
     )
@@ -63,6 +84,9 @@ async def get_bot_profile(account_id: str) -> Dict[str, Any]:
 
 
 async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Met à jour le bot profile et invalide le cache.
+    """
     custom_fields = payload.get("custom_fields") or []
     normalized_fields = []
     for field in custom_fields:
@@ -92,7 +116,59 @@ async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[s
             on_conflict="account_id",
         )
     )
+    
+    # Invalider le cache
+    await invalidate_cache_pattern(f"bot_profile:{account_id}")
+    
     return await get_bot_profile(account_id)
+
+
+@retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)
+async def _call_gemini_api(
+    endpoint: str,
+    payload: dict,
+    conversation_id: str
+) -> dict:
+    """
+    Appelle l'API Gemini avec retry sur les erreurs réseau.
+    
+    Raises:
+        httpx.HTTPStatusError: Si l'API retourne une erreur HTTP
+        httpx.TimeoutException: Si le timeout est dépassé
+        httpx.NetworkError: Si problème réseau
+    """
+    client = await get_http_client()
+    
+    # Timeout spécifique pour Gemini: plus court que l'original
+    timeout = httpx.Timeout(
+        connect=3.0,
+        read=15.0,  # 15s au lieu de 45s
+        write=5.0,
+        pool=5.0
+    )
+    
+    try:
+        response = await client.post(
+            endpoint,
+            params={"key": settings.GEMINI_API_KEY},
+            json=payload,
+            timeout=timeout
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.TimeoutException as exc:
+        logger.error("Gemini timeout for conversation %s after 15s", conversation_id)
+        raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        body = exc.response.text
+        logger.warning(
+            "Gemini API error for conversation %s (status=%s): %s",
+            conversation_id,
+            status_code,
+            body[:200]
+        )
+        raise
 
 
 async def generate_bot_reply(
@@ -101,6 +177,16 @@ async def generate_bot_reply(
     latest_user_message: str,
     contact_name: Optional[str] = None,
 ) -> Optional[str]:
+    """
+    Génère une réponse bot via Gemini avec:
+    - Circuit breaker pour éviter les appels si Gemini est down
+    - Retry automatique sur les erreurs réseau
+    - Timeout réduit (15s au lieu de 45s)
+    - Cache du bot profile
+    
+    Returns:
+        La réponse générée, ou None en cas d'erreur
+    """
     if not settings.GEMINI_API_KEY:
         logger.info("GEMINI_API_KEY absent, skipping bot generation for %s", conversation_id)
         return None
@@ -110,8 +196,10 @@ async def generate_bot_reply(
         logger.info("Gemini skip: empty user message for %s", conversation_id)
         return None
 
+    # Récupérer le profil (avec cache)
     profile = await get_bot_profile(account_id)
     knowledge_text = _build_knowledge_text(profile, contact_name)
+    
     logger.info(
         "Gemini context for conversation %s: account=%s, message_len=%d, knowledge_len=%d",
         conversation_id,
@@ -119,8 +207,9 @@ async def generate_bot_reply(
         len(latest_user_message),
         len(knowledge_text),
     )
-    logger.info("Gemini knowledge payload for %s:\n%s", conversation_id, _trim_for_log(knowledge_text))
+    logger.debug("Gemini knowledge payload for %s:\n%s", conversation_id, _trim_for_log(knowledge_text))
 
+    # Récupérer l'historique
     history_rows = (
         await supabase_execute(
             supabase.table("messages")
@@ -144,7 +233,8 @@ async def generate_bot_reply(
         conversation_parts.append(
             {"role": "user", "parts": [{"text": latest_user_message}]}
         )
-    logger.info(
+    
+    logger.debug(
         "Gemini conversation payload for %s:\n%s",
         conversation_id,
         _format_conversation_preview(conversation_parts),
@@ -180,21 +270,32 @@ async def generate_bot_reply(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(
-                endpoint,
-                params={"key": settings.GEMINI_API_KEY},
-                json=payload,
-            )
-            response.raise_for_status()
-    except httpx.HTTPError as exc:
-        body = getattr(exc, "response", None)
-        detail = body.text if body else str(exc)
-        status_code = getattr(body, "status_code", None)
-        logger.warning("Gemini API error for %s (status=%s): %s", conversation_id, status_code, detail)
+        # Utiliser le circuit breaker
+        data = await gemini_circuit_breaker.call_async(
+            _call_gemini_api,
+            endpoint,
+            payload,
+            conversation_id
+        )
+    except CircuitBreakerOpenError:
+        # Le circuit est ouvert, Gemini est considéré down
+        logger.error("Circuit breaker OPEN for Gemini, skipping call for conversation %s", conversation_id)
+        return None
+    except httpx.TimeoutException:
+        logger.error("Gemini timeout for conversation %s", conversation_id)
+        return None
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        if status_code >= 500:
+            logger.error("Gemini server error for conversation %s", conversation_id)
+        else:
+            logger.warning("Gemini client error for conversation %s (status=%s)", conversation_id, status_code)
+        return None
+    except Exception as exc:
+        logger.error("Unexpected error calling Gemini for conversation %s: %s", conversation_id, exc)
         return None
 
-    data = response.json()
+    # Parser la réponse
     candidates: List[Dict[str, Any]] = data.get("candidates") or []
     for candidate in candidates:
         parts = candidate.get("content", {}).get("parts") or []
@@ -207,6 +308,7 @@ async def generate_bot_reply(
                     len(text),
                 )
                 return text
+    
     logger.info("Gemini returned no usable candidates for conversation %s", conversation_id)
     return None
 
