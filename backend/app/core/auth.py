@@ -1,10 +1,12 @@
 from types import SimpleNamespace
+import hashlib
 
 import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from starlette.concurrency import run_in_threadpool
 
+from app.core.cache import get_cached_or_fetch
 from app.core.config import settings
 from app.core.http_client import get_http_client
 from app.core.permissions import CurrentUser, load_current_user
@@ -52,6 +54,19 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_token")
 
     token = credentials.credentials
-    supabase_user = await _fetch_supabase_user(token)
-    return await run_in_threadpool(load_current_user, supabase_user)
+    
+    # Cache de l'utilisateur basé sur le hash du token (TTL: 2 minutes)
+    # Cela réduit drastiquement les appels à Supabase pour /auth/me
+    token_hash = hashlib.sha256(token.encode()).hexdigest()[:16]
+    cache_key = f"auth_user:{token_hash}"
+    
+    async def fetch_and_load_user():
+        supabase_user = await _fetch_supabase_user(token)
+        return await run_in_threadpool(load_current_user, supabase_user)
+    
+    return await get_cached_or_fetch(
+        key=cache_key,
+        fetch_func=fetch_and_load_user,
+        ttl_seconds=120  # 2 minutes - balance entre fraîcheur et performance
+    )
 

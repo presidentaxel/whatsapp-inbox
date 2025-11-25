@@ -1,5 +1,6 @@
 from typing import Optional
 
+from app.core.cache import cached
 from app.core.db import supabase, supabase_execute
 from app.services.account_service import get_account_by_id
 
@@ -40,7 +41,12 @@ async def set_conversation_favorite(conversation_id: str, favorite: bool) -> boo
     return True
 
 
+@cached(ttl_seconds=60, key_prefix="conversation")
 async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
+    """
+    Récupère une conversation avec cache (1 min TTL).
+    Les conversations changent peu fréquemment.
+    """
     res = await supabase_execute(
         supabase.table("conversations").select("*").eq("id", conversation_id).limit(1)
     )
