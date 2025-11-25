@@ -20,7 +20,7 @@ async def list_accounts(current_user: CurrentUser = Depends(get_current_user)):
         current_user.require(PermissionCodes.ACCOUNTS_VIEW)
     elif not allowed_scope:
         raise HTTPException(status_code=403, detail="no_account_access")
-    return expose_accounts_limited(allowed_scope)
+    return await expose_accounts_limited(allowed_scope)
 
 
 @router.post("")
@@ -28,15 +28,15 @@ async def create_account_api(
     payload: AccountCreate, current_user: CurrentUser = Depends(get_current_user)
 ):
     current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
-    return create_account(payload.dict())
+    return await create_account(payload.dict())
 
 
 @router.delete("/{account_id}")
 async def delete_account_api(account_id: str, current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
-    account = get_account_by_id(account_id)
+    account = await get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
-    delete_account(account_id)
+    await delete_account(account_id)
     return {"status": "deleted", "account_id": account_id}
 

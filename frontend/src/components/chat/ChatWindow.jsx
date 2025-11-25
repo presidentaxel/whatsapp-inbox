@@ -4,6 +4,7 @@ import { AiFillStar, AiOutlineStar } from "react-icons/ai";
 import { getMessages, sendMessage } from "../../api/messagesApi";
 import MessageBubble from "./MessageBubble";
 import MessageInput from "./MessageInput";
+import { supabaseClient } from "../../api/supabaseClient";
 
 export default function ChatWindow({
   conversation,
@@ -18,6 +19,14 @@ export default function ChatWindow({
   const [showInfo, setShowInfo] = useState(false);
   const [botTogglePending, setBotTogglePending] = useState(false);
 
+  const sortMessages = useCallback((items) => {
+    return [...items].sort((a, b) => {
+      const aTs = new Date(a.timestamp || a.created_at || 0).getTime();
+      const bTs = new Date(b.timestamp || b.created_at || 0).getTime();
+      return aTs - bTs;
+    });
+  }, []);
+
   const conversationId = conversation?.id;
   const messagesEndRef = useRef(null);
   const displayName =
@@ -30,8 +39,8 @@ export default function ChatWindow({
       setMessages([]);
       return;
     }
-    getMessages(conversationId).then((res) => setMessages(res.data));
-  }, [conversationId]);
+    getMessages(conversationId).then((res) => setMessages(sortMessages(res.data)));
+  }, [conversationId, sortMessages]);
 
   useEffect(() => {
     refreshMessages();
@@ -58,10 +67,72 @@ export default function ChatWindow({
     };
   }, [conversationId, refreshMessages, isWindowActive]);
 
+  useEffect(() => {
+    if (!conversationId) {
+      return undefined;
+    }
+
+    const channel = supabaseClient
+      .channel(`messages:${conversationId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const incoming = payload.new;
+          setMessages((prev) => {
+            const exists = prev.some((msg) => msg.id === incoming.id);
+            if (exists) {
+              return sortMessages(prev.map((msg) => (msg.id === incoming.id ? incoming : msg)));
+            }
+            return sortMessages([...prev, incoming]);
+          });
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${conversationId}`,
+        },
+        (payload) => {
+          const updated = payload.new;
+          setMessages((prev) =>
+            sortMessages(prev.map((msg) => (msg.id === updated.id ? updated : msg)))
+          );
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
+  }, [conversationId, sortMessages]);
+
   const onSend = async (text) => {
     if (!conversationId) return;
-    await sendMessage({ conversation_id: conversationId, content: text });
-    refreshMessages();
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage = {
+      id: tempId,
+      client_temp_id: tempId,
+      conversation_id: conversationId,
+      direction: "outbound",
+      content_text: text,
+      status: "pending",
+      timestamp: new Date().toISOString(),
+    };
+    setMessages((prev) => sortMessages([...prev, optimisticMessage]));
+    try {
+      await sendMessage({ conversation_id: conversationId, content: text });
+    } finally {
+      refreshMessages();
+    }
   };
 
   const subtitle = useMemo(() => {

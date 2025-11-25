@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from app.api.routes_webhook import router as webhook_router
 from app.api.routes_conversations import router as conversations_router
@@ -9,6 +10,7 @@ from app.api.routes_contacts import router as contacts_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_admin import router as admin_router
 from app.api.routes_bot import router as bot_router
+from app.core.config import settings
 
 app = FastAPI()
 
@@ -28,6 +30,20 @@ app.include_router(accounts_router, prefix="/accounts", tags=["accounts"])
 app.include_router(contacts_router, prefix="/contacts", tags=["contacts"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
 app.include_router(bot_router, prefix="/bot", tags=["bot"])
+
+if settings.PROMETHEUS_ENABLED:
+    instrumentator = Instrumentator(
+        should_group_status_codes=True,
+        should_ignore_untemplated=True,
+        should_instrument_requests_inprogress=True,
+        excluded_handlers={settings.PROMETHEUS_METRICS_PATH},
+    )
+    instrumentator.instrument(app).expose(
+        app,
+        include_in_schema=False,
+        endpoint=settings.PROMETHEUS_METRICS_PATH,
+    )
+
 
 @app.get("/")
 def root():

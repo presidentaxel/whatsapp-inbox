@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.core.permissions import CurrentUser, load_current_user
@@ -45,5 +46,5 @@ async def get_current_user(
 
     token = credentials.credentials
     supabase_user = await _fetch_supabase_user(token)
-    return load_current_user(supabase_user)
+    return await run_in_threadpool(load_current_user, supabase_user)
 

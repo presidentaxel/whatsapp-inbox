@@ -25,6 +25,9 @@ GEMINI_API_KEY=sk-xxx
 # optionnel, change le modèle si nécessaire
 GEMINI_MODEL=gemini-1.5-flash
 HUMAN_BACKUP_NUMBER=+33123456789
+PROMETHEUS_ENABLED=true
+PROMETHEUS_METRICS_PATH=/metrics
+PROMETHEUS_APP_LABEL=whatsapp_inbox_api
 ```
 
 ### Frontend (`frontend/.env`)
@@ -117,6 +120,20 @@ npm run dev
    npm run dev -- --host
    ```
 
+### Monitoring continu (dev & prod)
+
+- L'appli expose désormais `/metrics` (Prometheus) dès que `PROMETHEUS_ENABLED=true`.
+- En local, lance la stack avec Prometheus + Grafana déjà configurés :
+  ```bash
+  docker compose up backend frontend prometheus grafana
+  ```
+  - Prometheus : http://localhost:9090 (scrute `backend:8000`)
+  - Grafana : http://localhost:3001 (login par défaut `admin/admin`, à changer dans `docker-compose.yml`)
+- En production, `deploy/docker-compose.prod.yml` embarque les mêmes services :
+  - Prometheus reste interne (pas de port exposé).
+  - Grafana est accessible via `https://ton-domaine/grafana` derrière Caddy (auth Grafana obligatoire).
+- Ajoute tes dashboards Prometheus/Grafana favoris ou importe un template FastAPI (ID 14369) pour suivre latence P95, requêtes/minute, erreurs 4xx/5xx, etc.
+
 ## Webhook WhatsApp
 
 Configurer dans le dashboard Meta :
@@ -205,6 +222,8 @@ scp frontend/.env vps:/opt/whatsapp-inbox/frontend/.env
 - `deploy/docker-compose.prod.yml` : backend, frontend et **Caddy** (reverse proxy HTTPS auto).
 - `deploy/Caddyfile` : reverse proxy + sécurité HTTP (HSTS, Referrer Policy, etc.).
 - `deploy/deploy.sh` : script idempotent (git pull + `docker compose up -d --build` + prune des images).
+- `monitoring/prometheus/prometheus.yml` : configuration Prometheus partagée dev/prod.
+- Grafana est déjà branché sur Prometheus et exposé via `https://{$DOMAIN}/grafana` (utilise les creds définis dans `docker-compose.prod.yml`).
 
 Usage manuel :
 

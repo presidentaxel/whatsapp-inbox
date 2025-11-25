@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, Optional, Sequence
 
 from app.core.config import settings
-from app.core.db import supabase
+from app.core.db import supabase, supabase_execute
 
 DEFAULT_ACCOUNT_SLUG = "default-env-account"
+_CACHE_TTL_SECONDS = 60
+_account_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_phone_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_verify_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_default_account_synced = False
+_default_account_record: Optional[Dict[str, Any]] = None
 
 
 def _sanitize_account(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -18,8 +25,27 @@ def _sanitize_account(record: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Sequence[Dict[str, Any]]:
-    ensure_default_account()
+def _cache_get(cache: Dict[str, tuple[float, Dict[str, Any]]], key: str) -> Optional[Dict[str, Any]]:
+    entry = cache.get(key)
+    if not entry:
+        return None
+    expires_at, payload = entry
+    if expires_at < time.time():
+        cache.pop(key, None)
+        return None
+    return payload
+
+
+def _cache_set(cache: Dict[str, tuple[float, Dict[str, Any]]], key: str, value: Dict[str, Any]):
+    cache[key] = (time.time() + _CACHE_TTL_SECONDS, value)
+
+
+def _cache_pop(cache: Dict[str, tuple[float, Dict[str, Any]]], key: str):
+    cache.pop(key, None)
+
+
+async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Sequence[Dict[str, Any]]:
+    await ensure_default_account()
     query = (
         supabase.table("whatsapp_accounts")
         .select("id,name,slug,phone_number,phone_number_id,is_active")
@@ -30,65 +56,85 @@ def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Sequence[Di
         if not account_ids:
             return []
         query = query.in_("id", list(account_ids))
-    res = query.execute()
+    res = await supabase_execute(query)
     return res.data
 
 
-def get_account_by_id(account_id: str) -> Optional[Dict[str, Any]]:
+async def get_account_by_id(account_id: str) -> Optional[Dict[str, Any]]:
     if not account_id:
         return None
 
-    res = (
-        supabase.table("whatsapp_accounts")
-        .select("*")
-        .eq("id", account_id)
-        .limit(1)
-        .execute()
+    cached = _cache_get(_account_cache, account_id)
+    if cached:
+        return cached
+
+    res = await supabase_execute(
+        supabase.table("whatsapp_accounts").select("*").eq("id", account_id).limit(1)
     )
     if res.data:
-        return res.data[0]
+        record = res.data[0]
+        _cache_set(_account_cache, account_id, record)
+        if record.get("phone_number_id"):
+            _cache_set(_phone_cache, record["phone_number_id"], record)
+        if record.get("verify_token"):
+            _cache_set(_verify_cache, record["verify_token"], record)
+        return record
+
+    _cache_pop(_account_cache, account_id)
     return None
 
 
-def get_account_by_verify_token(token: str | None) -> Optional[Dict[str, Any]]:
+async def get_account_by_verify_token(token: str | None) -> Optional[Dict[str, Any]]:
     if not token:
         return None
 
-    ensure_default_account()
-    res = (
-        supabase.table("whatsapp_accounts")
-        .select("*")
-        .eq("verify_token", token)
-        .limit(1)
-        .execute()
+    cached = _cache_get(_verify_cache, token)
+    if cached:
+        return cached
+
+    await ensure_default_account()
+    res = await supabase_execute(
+        supabase.table("whatsapp_accounts").select("*").eq("verify_token", token).limit(1)
     )
     if res.data:
-        return res.data[0]
+        record = res.data[0]
+        _cache_set(_verify_cache, token, record)
+        return record
+    _cache_pop(_verify_cache, token)
     return None
 
 
-def get_account_by_phone_number_id(phone_number_id: str | None) -> Optional[Dict[str, Any]]:
+async def get_account_by_phone_number_id(phone_number_id: str | None) -> Optional[Dict[str, Any]]:
     if not phone_number_id:
         return None
 
-    ensure_default_account()
-    res = (
+    cached = _cache_get(_phone_cache, phone_number_id)
+    if cached:
+        return cached
+
+    await ensure_default_account()
+    res = await supabase_execute(
         supabase.table("whatsapp_accounts")
         .select("*")
         .eq("phone_number_id", phone_number_id)
         .limit(1)
-        .execute()
     )
     if res.data:
-        return res.data[0]
+        record = res.data[0]
+        _cache_set(_phone_cache, phone_number_id, record)
+        _cache_set(_account_cache, record["id"], record)
+        return record
+    _cache_pop(_phone_cache, phone_number_id)
     return None
 
 
-def ensure_default_account() -> Optional[Dict[str, Any]]:
+async def ensure_default_account() -> Optional[Dict[str, Any]]:
     """
     If legacy env vars are set, mirror them inside whatsapp_accounts
     so the rest of the system can treat everything uniformly.
     """
+    global _default_account_synced, _default_account_record
+
     if not (
         settings.WHATSAPP_PHONE_ID
         and settings.WHATSAPP_TOKEN
@@ -96,12 +142,11 @@ def ensure_default_account() -> Optional[Dict[str, Any]]:
     ):
         return None
 
-    existing = (
-        supabase.table("whatsapp_accounts")
-        .select("*")
-        .eq("slug", DEFAULT_ACCOUNT_SLUG)
-        .limit(1)
-        .execute()
+    if _default_account_synced and _default_account_record:
+        return _default_account_record
+
+    existing = await supabase_execute(
+        supabase.table("whatsapp_accounts").select("*").eq("slug", DEFAULT_ACCOUNT_SLUG).limit(1)
     )
 
     if existing.data:
@@ -120,8 +165,17 @@ def ensure_default_account() -> Optional[Dict[str, Any]]:
             updates["phone_number"] = settings.WHATSAPP_PHONE_NUMBER
 
         if updates:
-            supabase.table("whatsapp_accounts").update(updates).eq("id", record["id"]).execute()
+            await supabase_execute(
+                supabase.table("whatsapp_accounts").update(updates).eq("id", record["id"])
+            )
             record.update(updates)
+        _default_account_synced = True
+        _default_account_record = record
+        _cache_set(_account_cache, record["id"], record)
+        if record.get("phone_number_id"):
+            _cache_set(_phone_cache, record["phone_number_id"], record)
+        if record.get("verify_token"):
+            _cache_set(_verify_cache, record["verify_token"], record)
         return record
 
     payload = {
@@ -133,31 +187,51 @@ def ensure_default_account() -> Optional[Dict[str, Any]]:
         "verify_token": settings.WHATSAPP_VERIFY_TOKEN,
         "is_active": True,
     }
-    inserted = supabase.table("whatsapp_accounts").insert(payload).execute()
+    inserted = await supabase_execute(supabase.table("whatsapp_accounts").insert(payload))
     if inserted.data:
-        return inserted.data[0]
+        record = inserted.data[0]
+        _default_account_synced = True
+        _default_account_record = record
+        _cache_set(_account_cache, record["id"], record)
+        if record.get("phone_number_id"):
+            _cache_set(_phone_cache, record["phone_number_id"], record)
+        if record.get("verify_token"):
+            _cache_set(_verify_cache, record["verify_token"], record)
+        return record
     return None
 
 
-def expose_accounts_public() -> Sequence[Dict[str, Any]]:
+async def expose_accounts_public() -> Sequence[Dict[str, Any]]:
     """Utility used by API routes to avoid leaking credentials."""
-    return [_sanitize_account(acc) for acc in get_all_accounts()]
+    accounts = await get_all_accounts()
+    return [_sanitize_account(acc) for acc in accounts]
 
 
-def expose_accounts_limited(account_ids: Optional[Sequence[str]]) -> Sequence[Dict[str, Any]]:
+async def expose_accounts_limited(account_ids: Optional[Sequence[str]]) -> Sequence[Dict[str, Any]]:
     if account_ids is None:
-        return expose_accounts_public()
-    return [_sanitize_account(acc) for acc in get_all_accounts(account_ids)]
+        return await expose_accounts_public()
+    accounts = await get_all_accounts(account_ids)
+    return [_sanitize_account(acc) for acc in accounts]
 
 
-def create_account(payload: Dict[str, Any]) -> Dict[str, Any]:
-    ensure_default_account()
-    result = supabase.table("whatsapp_accounts").insert(payload).execute()
-    return _sanitize_account(result.data[0])
+async def create_account(payload: Dict[str, Any]) -> Dict[str, Any]:
+    await ensure_default_account()
+    result = await supabase_execute(supabase.table("whatsapp_accounts").insert(payload))
+    record = result.data[0]
+    _cache_set(_account_cache, record["id"], record)
+    if record.get("phone_number_id"):
+        _cache_set(_phone_cache, record["phone_number_id"], record)
+    if record.get("verify_token"):
+        _cache_set(_verify_cache, record["verify_token"], record)
+    return _sanitize_account(record)
 
 
-def delete_account(account_id: str) -> bool:
-    supabase.table("whatsapp_accounts").delete().eq("id", account_id).execute()
+async def delete_account(account_id: str) -> bool:
+    await supabase_execute(supabase.table("whatsapp_accounts").delete().eq("id", account_id))
+    _cache_pop(_account_cache, account_id)
+    # Clear from derived caches in case key equals id
+    for cache in (_phone_cache, _verify_cache):
+        keys_to_purge = [key for key, (_, record) in cache.items() if record.get("id") == account_id]
+        for key in keys_to_purge:
+            cache.pop(key, None)
     return True
-
-

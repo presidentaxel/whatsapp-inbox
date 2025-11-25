@@ -16,10 +16,14 @@ router = APIRouter()
 @router.get("")
 async def list_conversations(
     account_id: str = Query(..., description="WhatsApp account ID"),
+    limit: int = Query(50, ge=1, le=200, description="Nombre max de conversations"),
+    cursor: str | None = Query(
+        None, description="ISO timestamp cursor: retourne les conversations avant cette date"
+    ),
     current_user: CurrentUser = Depends(get_current_user),
 ):
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
-    conversations = await get_all_conversations(account_id)
+    conversations = await get_all_conversations(account_id, limit=limit, cursor=cursor)
     if conversations is None:
         raise HTTPException(status_code=404, detail="account_not_found")
     return conversations

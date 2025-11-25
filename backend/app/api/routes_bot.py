@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
@@ -14,11 +14,11 @@ async def fetch_bot_profile(
     account_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    account = get_account_by_id(account_id)
+    account = await get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
     current_user.require(PermissionCodes.SETTINGS_MANAGE, account_id)
-    return get_bot_profile(account_id)
+    return await get_bot_profile(account_id)
 
 
 @router.put("/profile/{account_id}")
@@ -27,9 +27,9 @@ async def update_bot_profile(
     payload: BotProfileUpdate,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    account = get_account_by_id(account_id)
+    account = await get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
     current_user.require(PermissionCodes.SETTINGS_MANAGE, account_id)
-    return upsert_bot_profile(account_id, payload.dict())
+    return await upsert_bot_profile(account_id, payload.dict())
 

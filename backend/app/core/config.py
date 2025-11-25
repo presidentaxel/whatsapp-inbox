@@ -29,4 +29,8 @@ class Settings:
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     HUMAN_BACKUP_NUMBER: str | None = os.getenv("HUMAN_BACKUP_NUMBER")
 
+    PROMETHEUS_ENABLED: bool = os.getenv("PROMETHEUS_ENABLED", "true").lower() == "true"
+    PROMETHEUS_METRICS_PATH: str = os.getenv("PROMETHEUS_METRICS_PATH", "/metrics")
+    PROMETHEUS_APP_LABEL: str = os.getenv("PROMETHEUS_APP_LABEL", "whatsapp_inbox_api")
+
 settings = Settings()

@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from app.core.config import settings
-from app.core.db import supabase
+from app.core.db import supabase, supabase_execute
 from app.services import bot_service
 from app.services.account_service import (
     get_account_by_id,
@@ -33,7 +33,7 @@ async def handle_incoming_message(data: dict):
         for change in changes:
             value = change.get("value", {})
             metadata = value.get("metadata", {})
-            account = get_account_by_phone_number_id(metadata.get("phone_number_id"))
+            account = await get_account_by_phone_number_id(metadata.get("phone_number_id"))
             if not account:
                 print("Unknown account for payload; skipping", metadata)
                 continue
@@ -44,7 +44,7 @@ async def handle_incoming_message(data: dict):
                 await _process_incoming_message(account["id"], message, contacts_map)
 
             for status in value.get("statuses", []):
-                _process_status(status, account)
+                await _process_status(status, account)
 
     return True
 
@@ -64,37 +64,39 @@ async def _process_incoming_message(
     )
 
     timestamp_iso = _timestamp_to_iso(message.get("timestamp"))
-    contact = _upsert_contact(wa_id, profile_name)
-    conversation = _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
+    contact = await _upsert_contact(wa_id, profile_name)
+    conversation = await _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
     msg_type_raw = message.get("type")
     msg_type = msg_type_raw.lower() if isinstance(msg_type_raw, str) else msg_type_raw
 
     content_text = _extract_content_text(message)
     media_meta = _extract_media_metadata(message)
 
-    supabase.table("messages").upsert(
-        {
-            "conversation_id": conversation["id"],
-            "direction": "inbound",
-            "content_text": content_text,
-            "timestamp": timestamp_iso,
-            "wa_message_id": message.get("id"),
-            "message_type": msg_type,
-            "status": "received",
-            "media_id": media_meta.get("media_id"),
-            "media_mime_type": media_meta.get("media_mime_type"),
-            "media_filename": media_meta.get("media_filename"),
-        },
-        on_conflict="wa_message_id",
-    ).execute()
+    await supabase_execute(
+        supabase.table("messages").upsert(
+            {
+                "conversation_id": conversation["id"],
+                "direction": "inbound",
+                "content_text": content_text,
+                "timestamp": timestamp_iso,
+                "wa_message_id": message.get("id"),
+                "message_type": msg_type,
+                "status": "received",
+                "media_id": media_meta.get("media_id"),
+                "media_mime_type": media_meta.get("media_mime_type"),
+                "media_filename": media_meta.get("media_filename"),
+            },
+            on_conflict="wa_message_id",
+        )
+    )
 
-    _update_conversation_timestamp(conversation["id"], timestamp_iso)
-    _increment_unread_count(conversation)
+    await _update_conversation_timestamp(conversation["id"], timestamp_iso)
+    await _increment_unread_count(conversation)
 
     await _maybe_trigger_bot_reply(conversation["id"], content_text, contact, message.get("type"))
 
 
-def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any]):
+async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any]):
     message_id = status_payload.get("id")
     status_value = status_payload.get("status")
     recipient_id = status_payload.get("recipient_id")
@@ -103,74 +105,73 @@ def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any]):
     if not message_id or not status_value:
         return
 
-    existing = (
+    existing = await supabase_execute(
         supabase.table("messages")
         .select("id, conversation_id")
         .eq("wa_message_id", message_id)
         .limit(1)
-        .execute()
     )
 
     if existing.data:
         record = existing.data[0]
-        supabase.table("messages").update(
-            {"status": status_value, "timestamp": timestamp_iso}
-        ).eq("id", record["id"]).execute()
-        _update_conversation_timestamp(record["conversation_id"], timestamp_iso)
+        await supabase_execute(
+            supabase.table("messages")
+            .update({"status": status_value, "timestamp": timestamp_iso})
+            .eq("id", record["id"])
+        )
+        await _update_conversation_timestamp(record["conversation_id"], timestamp_iso)
         return
 
     if not recipient_id or not account:
         return
 
-    conversation = (
+    conversation = await supabase_execute(
         supabase.table("conversations")
         .select("id")
         .eq("account_id", account.get("id"))
         .eq("client_number", recipient_id)
         .limit(1)
-        .execute()
     )
 
     if conversation.data:
         conv = conversation.data[0]
     else:
-        contact = _upsert_contact(recipient_id, None)
-        conv = _upsert_conversation(account["id"], contact["id"], recipient_id, timestamp_iso)
+        contact = await _upsert_contact(recipient_id, None)
+        conv = await _upsert_conversation(account["id"], contact["id"], recipient_id, timestamp_iso)
 
-    supabase.table("messages").upsert(
-        {
-            "conversation_id": conv["id"],
-            "direction": "outbound",
-            "content_text": "[status update]",
-            "timestamp": timestamp_iso,
-            "wa_message_id": message_id,
-            "message_type": status_payload.get("type") or "status",
-            "status": status_value,
-        },
-        on_conflict="wa_message_id",
-    ).execute()
-    _update_conversation_timestamp(conv["id"], timestamp_iso)
+    await supabase_execute(
+        supabase.table("messages").upsert(
+            {
+                "conversation_id": conv["id"],
+                "direction": "outbound",
+                "content_text": "[status update]",
+                "timestamp": timestamp_iso,
+                "wa_message_id": message_id,
+                "message_type": status_payload.get("type") or "status",
+                "status": status_value,
+            },
+            on_conflict="wa_message_id",
+        )
+    )
+    await _update_conversation_timestamp(conv["id"], timestamp_iso)
 
 
-def _upsert_contact(wa_id: str, profile_name: Optional[str]):
+async def _upsert_contact(wa_id: str, profile_name: Optional[str]):
     payload = {"whatsapp_number": wa_id}
     if profile_name:
         payload["display_name"] = profile_name
 
-    res = (
-        supabase.table("contacts")
-        .upsert(payload, on_conflict="whatsapp_number")
-        .execute()
+    res = await supabase_execute(
+        supabase.table("contacts").upsert(payload, on_conflict="whatsapp_number")
     )
     return res.data[0]
 
 
-def _upsert_conversation(
+async def _upsert_conversation(
     account_id: str, contact_id: str, client_number: str, timestamp_iso: str
 ):
-    res = (
-        supabase.table("conversations")
-        .upsert(
+    res = await supabase_execute(
+        supabase.table("conversations").upsert(
             {
                 "contact_id": contact_id,
                 "client_number": client_number,
@@ -180,7 +181,6 @@ def _upsert_conversation(
             },
             on_conflict="account_id,client_number",
         )
-        .execute()
     )
     return res.data[0]
 
@@ -225,16 +225,22 @@ def _timestamp_to_iso(raw_ts: Optional[str]) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Optional[str] = None):
-    supabase.table("conversations").update(
-        {"updated_at": timestamp_iso or datetime.now(timezone.utc).isoformat()}
-    ).eq("id", conversation_id).execute()
+async def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Optional[str] = None):
+    await supabase_execute(
+        supabase.table("conversations")
+        .update({"updated_at": timestamp_iso or datetime.now(timezone.utc).isoformat()})
+        .eq("id", conversation_id)
+    )
 
 
-def _increment_unread_count(conversation: Dict[str, Any]):
+async def _increment_unread_count(conversation: Dict[str, Any]):
     current = conversation.get("unread_count") or 0
     new_value = current + 1
-    supabase.table("conversations").update({"unread_count": new_value}).eq("id", conversation["id"]).execute()
+    await supabase_execute(
+        supabase.table("conversations").update({"unread_count": new_value}).eq(
+            "id", conversation["id"]
+        )
+    )
     conversation["unread_count"] = new_value
 
 
@@ -303,23 +309,34 @@ async def _maybe_trigger_bot_reply(
         return
 
     logger.info("Bot reply sent for conversation %s (length=%d)", conversation_id, len(reply))
-    supabase.table("conversations").update(
-        {"bot_last_reply_at": datetime.now(timezone.utc).isoformat()}
-    ).eq("id", conversation_id).execute()
+    await supabase_execute(
+        supabase.table("conversations")
+        .update({"bot_last_reply_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", conversation_id)
+    )
 
     if requires_escalation:
         await _escalate_to_human(conversation, message_text)
 
 
-async def get_messages(conversation_id: str):
-    res = (
+async def get_messages(
+    conversation_id: str,
+    limit: int = 100,
+    before: Optional[str] = None,
+):
+    query = (
         supabase.table("messages")
         .select("*")
         .eq("conversation_id", conversation_id)
-        .order("timestamp")
-        .execute()
+        .order("timestamp", desc=True)
+        .limit(limit)
     )
-    return res.data
+    if before:
+        query = query.lt("timestamp", before)
+    res = await supabase_execute(query)
+    rows = res.data or []
+    rows.reverse()
+    return rows
 
 
 async def send_message(payload: dict):
@@ -329,7 +346,9 @@ async def send_message(payload: dict):
     if not conv_id or not text:
         return {"error": "invalid_payload", "message": "conversation_id and content are required"}
 
-    conv_res = supabase.table("conversations").select("*").eq("id", conv_id).execute()
+    conv_res = await supabase_execute(
+        supabase.table("conversations").select("*").eq("id", conv_id)
+    )
     if not conv_res.data:
         return {"error": "conversation_not_found"}
 
@@ -337,7 +356,7 @@ async def send_message(payload: dict):
     to_number = conversation["client_number"]
     account_id = conversation.get("account_id")
 
-    account = get_account_by_id(account_id)
+    account = await get_account_by_id(account_id)
     if not account:
         return {"error": "account_not_found"}
 
@@ -387,8 +406,10 @@ async def send_message(payload: dict):
         "status": "sent",
     }
 
-    supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id").execute()
-    _update_conversation_timestamp(conv_id, timestamp_iso)
+    await supabase_execute(
+        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+    )
+    await _update_conversation_timestamp(conv_id, timestamp_iso)
 
     return {"status": "sent", "message_id": message_id}
 
@@ -427,12 +448,8 @@ def _extract_media_metadata(message: Dict[str, Any]) -> Dict[str, Optional[str]]
 
 
 async def get_message_by_id(message_id: str) -> Optional[Dict[str, Any]]:
-    res = (
-        supabase.table("messages")
-        .select("*")
-        .eq("id", message_id)
-        .limit(1)
-        .execute()
+    res = await supabase_execute(
+        supabase.table("messages").select("*").eq("id", message_id).limit(1)
     )
     if not res.data:
         return None
@@ -461,7 +478,7 @@ async def _notify_backup(conversation: Dict[str, Any], last_customer_message: st
 async def _send_direct_whatsapp(account_id: str, to_number: str, text: str):
     if not text.strip():
         return
-    account = get_account_by_id(account_id)
+    account = await get_account_by_id(account_id)
     if not account:
         logger.warning("Cannot notify backup: account %s not found", account_id)
         return

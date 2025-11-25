@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from app.core.config import settings
-from app.core.db import supabase
+from app.core.db import supabase, supabase_execute
 
 logger = logging.getLogger("uvicorn.error").getChild("bot.gemini")
 logger.setLevel(logging.INFO)
@@ -42,13 +42,9 @@ def _normalize_profile(row: Dict[str, Any], account_id: str) -> Dict[str, Any]:
     }
 
 
-def get_bot_profile(account_id: str) -> Dict[str, Any]:
-    res = (
-        supabase.table("bot_profiles")
-        .select("*")
-        .eq("account_id", account_id)
-        .limit(1)
-        .execute()
+async def get_bot_profile(account_id: str) -> Dict[str, Any]:
+    res = await supabase_execute(
+        supabase.table("bot_profiles").select("*").eq("account_id", account_id).limit(1)
     )
     if res.data:
         return _normalize_profile(res.data[0], account_id)
@@ -66,7 +62,7 @@ def get_bot_profile(account_id: str) -> Dict[str, Any]:
     return placeholder
 
 
-def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     custom_fields = payload.get("custom_fields") or []
     normalized_fields = []
     for field in custom_fields:
@@ -90,11 +86,13 @@ def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[str, An
         "custom_fields": normalized_fields,
         "template_config": _sanitize_template_config(payload.get("template_config") or {}),
     }
-    supabase.table("bot_profiles").upsert(
-        upsert_payload,
-        on_conflict="account_id",
-    ).execute()
-    return get_bot_profile(account_id)
+    await supabase_execute(
+        supabase.table("bot_profiles").upsert(
+            upsert_payload,
+            on_conflict="account_id",
+        )
+    )
+    return await get_bot_profile(account_id)
 
 
 async def generate_bot_reply(
@@ -112,7 +110,7 @@ async def generate_bot_reply(
         logger.info("Gemini skip: empty user message for %s", conversation_id)
         return None
 
-    profile = get_bot_profile(account_id)
+    profile = await get_bot_profile(account_id)
     knowledge_text = _build_knowledge_text(profile, contact_name)
     logger.info(
         "Gemini context for conversation %s: account=%s, message_len=%d, knowledge_len=%d",
@@ -124,12 +122,13 @@ async def generate_bot_reply(
     logger.info("Gemini knowledge payload for %s:\n%s", conversation_id, _trim_for_log(knowledge_text))
 
     history_rows = (
-        supabase.table("messages")
-        .select("direction, content_text")
-        .eq("conversation_id", conversation_id)
-        .order("timestamp", desc=True)
-        .limit(10)
-        .execute()
+        await supabase_execute(
+            supabase.table("messages")
+            .select("direction, content_text")
+            .eq("conversation_id", conversation_id)
+            .order("timestamp", desc=True)
+            .limit(10)
+        )
     ).data
     history_rows.reverse()
 
