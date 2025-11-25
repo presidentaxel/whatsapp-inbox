@@ -5,6 +5,7 @@ import { getMessages, sendMessage } from "../../api/messagesApi";
 import MessageBubble from "./MessageBubble";
 import MessageInput from "./MessageInput";
 import { supabaseClient } from "../../api/supabaseClient";
+import { formatPhoneNumber } from "../../utils/formatPhone";
 
 export default function ChatWindow({
   conversation,
@@ -137,7 +138,7 @@ export default function ChatWindow({
 
   const subtitle = useMemo(() => {
     if (!conversation) return "";
-    return conversation.client_number;
+    return formatPhoneNumber(conversation.client_number);
   }, [conversation]);
 
   const botEnabled = !!conversation?.bot_enabled;
@@ -160,7 +161,13 @@ export default function ChatWindow({
     return (
       <div className="chat-window empty-state">
         <div>
-          <h2>Bienvenue 👋</h2>
+          <img 
+            src="/favicon.svg" 
+            alt="Logo LMDCVTC" 
+            className="empty-state-logo"
+            style={{ width: "120px", height: "120px", marginBottom: "1.5rem" }}
+          />
+          <h2>Bienvenue sur WhatsApp LMDCVTC</h2>
           <p>Sélectionne un compte puis une conversation pour commencer.</p>
         </div>
       </div>
@@ -258,7 +265,7 @@ export default function ChatWindow({
             </div>
             <div className="info-row">
               <span>Numéro</span>
-              <strong>{conversation.client_number}</strong>
+              <strong>{formatPhoneNumber(conversation.client_number)}</strong>
             </div>
             <div className="info-row">
               <span>Statut</span>

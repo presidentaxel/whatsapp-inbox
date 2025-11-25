@@ -1,3 +1,5 @@
+import { formatPhoneNumber } from "../../utils/formatPhone";
+
 export default function ConversationList({
   data,
   selectedId,
@@ -35,7 +37,7 @@ export default function ConversationList({
               </div>
             </div>
             <div className="conversation-meta">
-              <span>{c.client_number}</span>
+              <span>{formatPhoneNumber(c.client_number)}</span>
               {c.unread_count > 0 && <span className="badge">{c.unread_count}</span>}
             </div>
           </div>

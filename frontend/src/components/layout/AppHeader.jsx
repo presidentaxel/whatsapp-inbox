@@ -5,7 +5,7 @@ export default function AppHeader() {
     <header className="top-bar">
       <div className="top-bar__brand">
         <SiWhatsapp size={20} />
-        <span>La Maison Du Chauffeur VTC</span>
+        <span>WHATSAPP LMDCVTC</span>
       </div>
     </header>
   );

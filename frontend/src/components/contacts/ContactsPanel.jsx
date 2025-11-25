@@ -1,3 +1,5 @@
+import { formatPhoneNumber } from "../../utils/formatPhone";
+
 export default function ContactsPanel({
   contacts = [],
   selected,
@@ -22,8 +24,8 @@ export default function ContactsPanel({
           >
             <div className="avatar">{(c.display_name || c.whatsapp_number || "?")[0]}</div>
             <div className="contact-info">
-              <strong>{c.display_name || c.whatsapp_number}</strong>
-              <small>{c.whatsapp_number}</small>
+              <strong>{c.display_name || formatPhoneNumber(c.whatsapp_number)}</strong>
+              <small>{formatPhoneNumber(c.whatsapp_number)}</small>
             </div>
           </div>
         ))}
@@ -31,10 +33,15 @@ export default function ContactsPanel({
       <div className="contacts-details">
         {selected ? (
           <>
-            <h3>{selected.display_name || selected.whatsapp_number}</h3>
+            <h3>
+              {selected.display_name 
+                ? `${selected.display_name} - ${formatPhoneNumber(selected.whatsapp_number)}`
+                : formatPhoneNumber(selected.whatsapp_number)
+              }
+            </h3>
             <div className="info-row">
               <span>Numéro</span>
-              <strong>{selected.whatsapp_number}</strong>
+              <strong>{formatPhoneNumber(selected.whatsapp_number)}</strong>
             </div>
             <div className="info-row">
               <span>Créé le</span>

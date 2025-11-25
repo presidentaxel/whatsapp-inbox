@@ -233,6 +233,9 @@ async def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Op
         .update({"updated_at": timestamp_iso or datetime.now(timezone.utc).isoformat()})
         .eq("id", conversation_id)
     )
+    # Invalider le cache pour garantir la cohérence
+    from app.core.cache import invalidate_cache_pattern
+    await invalidate_cache_pattern(f"conversation:{conversation_id}")
 
 
 async def _increment_unread_count(conversation: Dict[str, Any]):
@@ -244,6 +247,9 @@ async def _increment_unread_count(conversation: Dict[str, Any]):
         )
     )
     conversation["unread_count"] = new_value
+    # Invalider le cache pour garantir la cohérence
+    from app.core.cache import invalidate_cache_pattern
+    await invalidate_cache_pattern(f"conversation:{conversation['id']}")
 
 
 async def _maybe_trigger_bot_reply(
@@ -316,6 +322,9 @@ async def _maybe_trigger_bot_reply(
         .update({"bot_last_reply_at": datetime.now(timezone.utc).isoformat()})
         .eq("id", conversation_id)
     )
+    # Invalider le cache pour garantir la cohérence
+    from app.core.cache import invalidate_cache_pattern
+    await invalidate_cache_pattern(f"conversation:{conversation_id}")
 
     if requires_escalation:
         await _escalate_to_human(conversation, message_text)

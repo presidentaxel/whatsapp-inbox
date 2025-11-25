@@ -207,7 +207,7 @@ export default function InboxPage() {
   return (
     <div className="app-shell">
       <div className="workspace">
-        <SidebarNav active={navMode} onSelect={setNavMode} allowedItems={allowedNavItems} />
+        <SidebarNav active={navMode} onSelect={setNavMode} allowedItems={allowedNavItems} onSignOut={signOut} />
 
         {navMode === "contacts" ? (
           canViewContacts ? (
@@ -265,9 +265,6 @@ export default function InboxPage() {
                 onChange={setActiveAccount}
                 label="Discussions"
               />
-              <button className="logout-btn" onClick={signOut}>
-                Déconnexion
-              </button>
 
               <div className="conversation-filters">
                 <button
