@@ -16,6 +16,12 @@ export DOMAIN=${DOMAIN:-example.com}
 export EMAIL=${EMAIL:-admin@example.com}
 docker compose -f docker-compose.prod.yml up -d --build
 
+echo "[deploy] Reloading Caddy configuration..."
+if ! docker compose -f docker-compose.prod.yml exec -T caddy caddy reload --config /etc/caddy/Caddyfile; then
+  echo "[deploy] Caddy reload failed, restarting container..."
+  docker compose -f docker-compose.prod.yml restart caddy
+fi
+
 echo "[deploy] Cleaning old images..."
 docker image prune -f >/dev/null || true
 

@@ -239,7 +239,7 @@ Ce fichier est nécessaire pour que Caddy puisse générer les certificats SSL e
 
 - `deploy/docker-compose.prod.yml` : backend, frontend et **Caddy** (reverse proxy HTTPS auto).
 - `deploy/Caddyfile` : reverse proxy + sécurité HTTP (HSTS, Referrer Policy, etc.).
-- `deploy/deploy.sh` : script idempotent (git pull + `docker compose up -d --build` + prune des images).
+- `deploy/deploy.sh` : script idempotent (git pull + `docker compose up -d --build` + reload automatique de Caddy + prune des images).
 - `monitoring/prometheus/prometheus.yml` : configuration Prometheus partagée dev/prod.
 - Grafana est déjà branché sur Prometheus et exposé via `https://{$DOMAIN}/grafana` (utilise les creds définis dans `docker-compose.prod.yml`).
 
