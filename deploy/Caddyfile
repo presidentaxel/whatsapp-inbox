@@ -15,16 +15,12 @@
   }
 
   # Grafana - must be before frontend catch-all
-  # Redirect /grafana to /grafana/
   @grafanaExact path /grafana
   handle @grafanaExact {
     redir /grafana/ permanent
   }
-  
-  # Proxy all /grafana/* requests to Grafana
-  @grafana path /grafana/*
-  handle @grafana {
-    uri strip_prefix /grafana
+
+  handle_path /grafana/* {
     reverse_proxy grafana:3000 {
       header_up X-Forwarded-Proto {scheme}
       header_up X-Forwarded-Host {host}
