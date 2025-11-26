@@ -1,0 +1,201 @@
+/* ============================================================================
+   Message Bubbles - Style WhatsApp Mobile
+   ============================================================================ */
+
+/* Override des styles desktop pour mobile */
+@media (max-width: 768px) {
+  /* Container des messages */
+  .mobile-chat__messages .bubble {
+    max-width: 85%;
+    padding: 0.375rem 0.5rem 0.5rem;
+    margin: 0.125rem 0;
+    border-radius: 8px;
+    position: relative;
+    word-wrap: break-word;
+    box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+  }
+
+  /* Messages envoyés (me) - Vert à droite */
+  .mobile-chat__messages .bubble.me {
+    background: #005c4b;
+    color: #e9edef;
+    align-self: flex-end;
+    margin-left: auto;
+    margin-right: 0.5rem;
+    border-radius: 8px 8px 0 8px;
+  }
+
+  /* Messages reçus (them) - Gris à gauche */
+  .mobile-chat__messages .bubble.them {
+    background: #202c33;
+    color: #e9edef;
+    align-self: flex-start;
+    margin-right: auto;
+    margin-left: 0.5rem;
+    border-radius: 8px 8px 8px 0;
+  }
+
+  /* Timestamp dans les bulles */
+  .mobile-chat__messages .bubble .bubble__timestamp,
+  .mobile-chat__messages .bubble small {
+    font-size: 0.688rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 0.25rem;
+    display: inline-block;
+    float: right;
+    margin-left: 0.5rem;
+  }
+
+  .mobile-chat__messages .bubble.me .bubble__timestamp,
+  .mobile-chat__messages .bubble.me small {
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  /* Contenu du message */
+  .mobile-chat__messages .bubble span,
+  .mobile-chat__messages .bubble .bubble__content {
+    display: block;
+    line-height: 1.4;
+    font-size: 0.938rem;
+    padding-right: 0.25rem;
+  }
+
+  /* Bulles média */
+  .mobile-chat__messages .bubble.bubble--media {
+    padding: 0;
+    overflow: hidden;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .mobile-chat__messages .bubble.bubble--media img,
+  .mobile-chat__messages .bubble.bubble--media video {
+    width: 100%;
+    max-width: 280px;
+    height: auto;
+    display: block;
+    border-radius: 8px;
+  }
+
+  /* Timestamp overlay pour médias */
+  .mobile-chat__messages .bubble--media .media-timestamp-overlay {
+    position: absolute;
+    bottom: 0.375rem;
+    right: 0.5rem;
+    background: rgba(0, 0, 0, 0.5);
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-size: 0.688rem;
+    color: white;
+  }
+
+  /* Bulles interactives (boutons/listes) */
+  .mobile-chat__messages .interactive-bubble {
+    max-width: 100%;
+    background: transparent;
+  }
+
+  .mobile-chat__messages .bubble.them .interactive-bubble {
+    background: #202c33;
+    border-radius: 8px;
+    padding: 0.5rem;
+  }
+
+  .mobile-chat__messages .bubble.me .interactive-bubble {
+    background: #005c4b;
+    border-radius: 8px;
+    padding: 0.5rem;
+  }
+
+  .mobile-chat__messages .interactive-bubble__header {
+    font-weight: 600;
+    margin-bottom: 0.375rem;
+    font-size: 0.938rem;
+  }
+
+  .mobile-chat__messages .interactive-bubble__body {
+    font-size: 0.938rem;
+    line-height: 1.4;
+    margin-bottom: 0.5rem;
+  }
+
+  .mobile-chat__messages .interactive-bubble__buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  .mobile-chat__messages .interactive-bubble__button {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    padding: 0.5rem;
+    text-align: center;
+    font-size: 0.875rem;
+  }
+
+  .mobile-chat__messages .interactive-bubble__footer {
+    font-size: 0.813rem;
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 0.375rem;
+  }
+
+  /* Bubble média info */
+  .mobile-chat__messages .bubble-media {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+  }
+
+  .mobile-chat__messages .bubble-media__icon {
+    font-size: 1.5rem;
+    opacity: 0.8;
+  }
+
+  .mobile-chat__messages .bubble-media__content strong {
+    display: block;
+    font-size: 0.938rem;
+    margin-bottom: 0.125rem;
+  }
+
+  .mobile-chat__messages .bubble-media__content p {
+    font-size: 0.813rem;
+    opacity: 0.8;
+    margin: 0;
+  }
+}
+
+/* Fix pour que le clavier ne cache pas l'input */
+@media (max-width: 768px) {
+  .mobile-chat {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .mobile-chat__messages {
+    /* Permet au scroll de fonctionner même avec le clavier */
+    max-height: calc(100vh - 120px);
+    min-height: 0;
+  }
+
+  /* Quand le clavier est ouvert, l'input reste visible */
+  .mobile-chat__input {
+    position: relative;
+    z-index: 100;
+  }
+}
+
+/* Support pour iOS viewport height avec clavier */
+@supports (height: 100dvh) {
+  @media (max-width: 768px) {
+    .mobile-chat {
+      height: 100dvh;
+    }
+  }
+}
+

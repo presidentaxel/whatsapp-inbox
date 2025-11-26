@@ -1,0 +1,103 @@
+/**
+ * Enregistrement du Service Worker pour la PWA
+ */
+
+export function registerServiceWorker() {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((registration) => {
+          console.log('✅ Service Worker enregistré:', registration.scope);
+          
+          // Vérifier les mises à jour toutes les heures
+          setInterval(() => {
+            registration.update();
+          }, 60 * 60 * 1000);
+        })
+        .catch((error) => {
+          console.error('❌ Erreur lors de l\'enregistrement du Service Worker:', error);
+        });
+    });
+
+    // Écouter les mises à jour du SW
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      console.log('🔄 Service Worker mis à jour');
+      // Optionnel : afficher une notification à l'utilisateur
+      if (confirm('Une nouvelle version est disponible. Recharger ?')) {
+        window.location.reload();
+      }
+    });
+  }
+}
+
+/**
+ * Demander la permission pour les notifications (optionnel)
+ */
+export async function requestNotificationPermission() {
+  if ('Notification' in window && 'serviceWorker' in navigator) {
+    const permission = await Notification.requestPermission();
+    
+    if (permission === 'granted') {
+      console.log('✅ Notifications autorisées');
+      return true;
+    } else {
+      console.log('❌ Notifications refusées');
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Vérifier si l'app est installée (PWA)
+ */
+export function isAppInstalled() {
+  // Détection PWA standalone mode
+  return window.matchMedia('(display-mode: standalone)').matches ||
+         window.navigator.standalone === true ||
+         document.referrer.includes('android-app://');
+}
+
+/**
+ * Gérer l'installation de la PWA
+ */
+let deferredPrompt = null;
+
+export function setupInstallPrompt() {
+  window.addEventListener('beforeinstallprompt', (e) => {
+    // Empêcher le prompt automatique
+    e.preventDefault();
+    deferredPrompt = e;
+    
+    console.log('💾 PWA peut être installée');
+    
+    // Vous pouvez maintenant afficher votre propre bouton d'installation
+    // et appeler showInstallPrompt() quand l'utilisateur clique dessus
+  });
+
+  // Détecter quand l'app est installée
+  window.addEventListener('appinstalled', () => {
+    console.log('✅ PWA installée avec succès');
+    deferredPrompt = null;
+  });
+}
+
+export async function showInstallPrompt() {
+  if (!deferredPrompt) {
+    console.log('❌ Prompt d\'installation non disponible');
+    return false;
+  }
+
+  // Afficher le prompt
+  deferredPrompt.prompt();
+  
+  // Attendre le choix de l'utilisateur
+  const { outcome } = await deferredPrompt.userChoice;
+  
+  console.log(`Installation: ${outcome}`);
+  deferredPrompt = null;
+  
+  return outcome === 'accepted';
+}
+

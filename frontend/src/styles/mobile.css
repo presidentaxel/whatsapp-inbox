@@ -1,0 +1,300 @@
+/* ============================================================================
+   Optimisations CSS pour Mobile (PWA Android/iOS)
+   ============================================================================ */
+
+/* Ajustements globaux mobile */
+@media (max-width: 768px) {
+  :root {
+    font-size: 14px; /* Réduire la taille de base sur mobile */
+  }
+
+  body {
+    /* Empêcher le bounce sur iOS */
+    overflow: hidden;
+    position: fixed;
+    width: 100%;
+    height: 100%;
+  }
+
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  /* App shell mobile */
+  .app {
+    height: 100vh;
+    height: 100dvh; /* Dynamic viewport height pour iOS */
+  }
+
+  /* Top bar plus compact sur mobile */
+  .top-bar {
+    height: 56px;
+    padding: 0 12px;
+  }
+
+  .top-bar__brand {
+    font-size: 1rem;
+  }
+
+  /* Sidebar navigation mobile */
+  .sidebar-nav {
+    width: 60px;
+  }
+
+  .sidebar-nav__btn {
+    padding: 12px;
+    font-size: 1.25rem;
+  }
+
+  .sidebar-nav__btn span {
+    display: none; /* Cacher le texte sur mobile */
+  }
+
+  /* Workspace principal */
+  .workspace-main {
+    overflow: hidden;
+  }
+
+  /* Conversations list mobile */
+  .sidebar {
+    width: 100%;
+    min-width: unset;
+  }
+
+  .conversation-list {
+    max-height: calc(100vh - 140px);
+    max-height: calc(100dvh - 140px);
+  }
+
+  /* Chat window mobile */
+  .chat-window {
+    width: 100%;
+  }
+
+  .chat-header {
+    padding: 12px;
+  }
+
+  .messages-container {
+    height: calc(100vh - 200px);
+    height: calc(100dvh - 200px);
+    padding: 12px 8px;
+  }
+
+  /* Message bubbles plus compacts */
+  .bubble {
+    max-width: 85%;
+    padding: 8px 12px;
+    font-size: 0.95rem;
+  }
+
+  /* Input area mobile */
+  .input-area {
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .input-area input {
+    font-size: 16px; /* Empêcher le zoom automatique sur iOS */
+  }
+
+  /* WhatsApp Business Panel mobile */
+  .whatsapp-business-panel {
+    padding: 0.5rem;
+    height: calc(100vh - 100px);
+    height: calc(100dvh - 100px);
+  }
+
+  .panel-header h2 {
+    font-size: 1.25rem;
+  }
+
+  .panel-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .panel-tabs button {
+    font-size: 0.85rem;
+    padding: 0.65rem 1rem;
+  }
+
+  .panel-content {
+    padding: 1rem;
+    max-height: calc(100vh - 220px);
+    max-height: calc(100dvh - 220px);
+  }
+
+  /* Templates en colonne unique sur mobile */
+  .templates-list {
+    grid-template-columns: 1fr;
+  }
+
+  /* Info grid en colonne unique */
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Form grid en colonne unique */
+  .form-group input,
+  .form-group textarea,
+  .form-group select {
+    font-size: 16px; /* Empêcher le zoom iOS */
+  }
+
+  /* Advanced message input mobile */
+  .input-area-advanced {
+    padding: 8px;
+  }
+
+  .advanced-options {
+    padding: 12px;
+  }
+
+  .buttons-preview,
+  .list-preview {
+    max-width: 100%;
+    margin: 0 auto;
+  }
+
+  /* Settings panel mobile */
+  .settings-panel {
+    padding: 1rem 0.5rem;
+  }
+
+  .settings-card {
+    padding: 1.25rem;
+  }
+
+  .account-grid,
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Contacts panel mobile */
+  .contacts-panel {
+    width: 100%;
+  }
+
+  /* Améliorer les zones cliquables pour le tactile */
+  button,
+  .conversation-item,
+  .account-selector__button,
+  .sidebar-nav__btn {
+    min-height: 44px; /* Taille min recommandée Apple */
+    touch-action: manipulation; /* Pas de double-tap zoom */
+  }
+
+  /* Empêcher la sélection de texte accidentelle */
+  .conversation-item,
+  .bubble,
+  .sidebar-nav__btn {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Permettre la sélection dans les messages */
+  .bubble span {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  /* Scroll plus fluide sur iOS */
+  .messages-container,
+  .conversation-list,
+  .panel-content {
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+  }
+
+  /* Safe area pour les encoches iPhone */
+  .top-bar {
+    padding-top: env(safe-area-inset-top, 0);
+  }
+
+  .input-area {
+    padding-bottom: calc(10px + env(safe-area-inset-bottom, 0));
+  }
+
+  /* Améliorer les transitions tactiles */
+  button:active,
+  .conversation-item:active {
+    opacity: 0.7;
+    transition: opacity 0.1s;
+  }
+}
+
+/* Très petits écrans (< 360px) */
+@media (max-width: 360px) {
+  :root {
+    font-size: 13px;
+  }
+
+  .bubble {
+    font-size: 0.9rem;
+  }
+
+  .panel-tabs button {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8rem;
+  }
+}
+
+/* Orientation paysage sur mobile */
+@media (max-width: 768px) and (orientation: landscape) {
+  .messages-container {
+    height: calc(100vh - 150px);
+    height: calc(100dvh - 150px);
+  }
+
+  .conversation-list {
+    max-height: calc(100vh - 100px);
+    max-height: calc(100dvh - 100px);
+  }
+}
+
+/* Mode sombre amélioré pour OLED */
+@media (prefers-color-scheme: dark) {
+  body {
+    background: #000;
+  }
+
+  .top-bar,
+  .sidebar-nav {
+    background: #000;
+  }
+}
+
+/* Réduire les animations sur mobile pour les performances */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Touch feedback visuel */
+@media (hover: none) and (pointer: coarse) {
+  button:active,
+  .conversation-item:active,
+  .template-card:active {
+    transform: scale(0.98);
+  }
+}
+
+/* PWA mode standalone (app installée) */
+@media (display-mode: standalone) {
+  .top-bar {
+    /* Ajouter plus d'espace en haut quand installé comme app */
+    padding-top: max(env(safe-area-inset-top), 12px);
+  }
+
+  /* Cacher certains éléments web inutiles en mode app */
+  .browser-only {
+    display: none !important;
+  }
+}
+

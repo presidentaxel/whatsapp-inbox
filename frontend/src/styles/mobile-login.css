@@ -1,0 +1,177 @@
+/* ============================================================================
+   Mobile Login Page - Style WhatsApp
+   ============================================================================ */
+
+.mobile-login {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: linear-gradient(180deg, #00a884 0%, #008069 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.5rem;
+}
+
+.mobile-login__header {
+  text-align: center;
+  margin-bottom: 3rem;
+}
+
+.mobile-login__logo {
+  margin-bottom: 1.5rem;
+  animation: fadeInDown 0.5s ease;
+}
+
+.mobile-login__title {
+  color: white;
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+  animation: fadeIn 0.6s ease 0.2s backwards;
+}
+
+.mobile-login__subtitle {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 0.95rem;
+  margin: 0;
+  animation: fadeIn 0.6s ease 0.4s backwards;
+}
+
+.mobile-login__form {
+  width: 100%;
+  max-width: 400px;
+  background: white;
+  border-radius: 12px;
+  padding: 2rem 1.5rem;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  animation: fadeInUp 0.5s ease 0.3s backwards;
+}
+
+.mobile-login__input-group {
+  margin-bottom: 1.25rem;
+}
+
+.mobile-login__input-group label {
+  display: block;
+  color: #667781;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.mobile-login__input-group input {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  border: 1px solid #d1d7db;
+  border-radius: 8px;
+  font-size: 16px; /* Empêche le zoom sur iOS */
+  color: #111b21;
+  transition: all 0.2s;
+}
+
+.mobile-login__input-group input:focus {
+  outline: none;
+  border-color: #00a884;
+  box-shadow: 0 0 0 3px rgba(0, 168, 132, 0.1);
+}
+
+.mobile-login__checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1.5rem 0;
+  cursor: pointer;
+}
+
+.mobile-login__checkbox input {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #00a884;
+}
+
+.mobile-login__checkbox span {
+  color: #667781;
+  font-size: 0.9rem;
+}
+
+.mobile-login__button {
+  width: 100%;
+  padding: 0.875rem;
+  background: #00a884;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mobile-login__button:hover {
+  background: #008069;
+}
+
+.mobile-login__button:active {
+  transform: scale(0.98);
+}
+
+.mobile-login__button:disabled {
+  background: #b3b3b3;
+  cursor: not-allowed;
+}
+
+.mobile-login__error {
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  color: #dc2626;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  margin: 1rem 0;
+}
+
+.mobile-login__footer {
+  margin-top: 2rem;
+  text-align: center;
+  animation: fadeIn 0.6s ease 0.8s backwards;
+}
+
+.mobile-login__footer p {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

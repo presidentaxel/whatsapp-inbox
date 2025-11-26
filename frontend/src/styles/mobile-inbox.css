@@ -1,0 +1,556 @@
+/* ============================================================================
+   Mobile Inbox - Style WhatsApp
+   ============================================================================ */
+
+.mobile-inbox {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #0b141a;
+  overflow: hidden;
+}
+
+.mobile-inbox__content {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ============================================================================
+   Navigation en bas (comme WhatsApp)
+   ============================================================================ */
+
+.mobile-inbox__nav {
+  display: flex;
+  background: #1f2c34;
+  border-top: 1px solid #2a3942;
+  padding-bottom: env(safe-area-inset-bottom);
+  height: calc(60px + env(safe-area-inset-bottom));
+}
+
+.mobile-inbox__nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  background: none;
+  border: none;
+  color: #8696a0;
+  cursor: pointer;
+  padding: 0.5rem;
+  transition: all 0.2s;
+  font-size: 0.75rem;
+  min-height: 60px;
+}
+
+.mobile-inbox__nav-btn svg {
+  font-size: 1.5rem;
+}
+
+.mobile-inbox__nav-btn.active {
+  color: #00a884;
+}
+
+.mobile-inbox__nav-btn:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* ============================================================================
+   Conversations List
+   ============================================================================ */
+
+.mobile-conversations {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0b141a;
+}
+
+.mobile-conversations__header {
+  background: #202c33;
+  padding: 1rem 1rem 0.75rem;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: relative;
+}
+
+.mobile-conversations__header h1 {
+  color: #e9edef;
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.mobile-conversations__actions {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.icon-btn,
+.icon-btn-round {
+  background: none;
+  border: none;
+  color: #aebac1;
+  font-size: 1.25rem;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 50% !important;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  flex-shrink: 0;
+}
+
+.icon-btn:active,
+.icon-btn-round:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mobile-conversations__menu {
+  position: absolute;
+  top: 100%;
+  right: 1rem;
+  background: #233138;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  z-index: 10;
+  min-width: 200px;
+  overflow: hidden;
+}
+
+.mobile-conversations__menu button {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  background: none;
+  border: none;
+  color: #e9edef;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.95rem;
+}
+
+.mobile-conversations__menu button:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mobile-conversations__search {
+  padding: 0.75rem 1rem;
+  background: #202c33;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: #111b21;
+  border-radius: 8px;
+  padding: 0.625rem 1rem;
+}
+
+.search-box svg {
+  color: #8696a0;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.search-box input {
+  flex: 1;
+  background: none;
+  border: none;
+  color: #e9edef;
+  font-size: 1rem;
+  outline: none;
+}
+
+.search-box input::placeholder {
+  color: #667781;
+}
+
+.mobile-conversations__account-selector {
+  padding: 0.5rem 1rem;
+  background: #202c33;
+  border-bottom: 1px solid #111b21;
+}
+
+.mobile-conversations__account-selector select {
+  width: 100%;
+  padding: 0.625rem;
+  background: #111b21;
+  border: 1px solid #2a3942;
+  border-radius: 6px;
+  color: #e9edef;
+  font-size: 0.95rem;
+}
+
+.mobile-conversations__list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-conversations__empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: #8696a0;
+}
+
+/* Item de conversation */
+.mobile-conv-item {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.75rem 1rem;
+  background: #0b141a;
+  border-bottom: 1px solid #111b21;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mobile-conv-item:active {
+  background: #111b21;
+}
+
+.mobile-conv-item__avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00a884 0%, #008069 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 1.25rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.mobile-conv-item__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.mobile-conv-item__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.25rem;
+}
+
+.mobile-conv-item__name {
+  color: #e9edef;
+  font-size: 1.05rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-conv-item__time {
+  color: #8696a0;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+}
+
+.mobile-conv-item__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mobile-conv-item__message {
+  color: #8696a0;
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.mobile-conv-item__badge {
+  background: #00a884;
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+   Chat Window (Plein écran)
+   ============================================================================ */
+
+.mobile-chat {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #0b141a;
+}
+
+.mobile-chat__header {
+  background: #202c33;
+  padding: 0.625rem 0.75rem;
+  padding-top: max(0.625rem, env(safe-area-inset-top));
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  box-shadow: 0 1px 0 #111b21;
+  z-index: 10;
+}
+
+.mobile-chat__back {
+  background: none;
+  border: none;
+  color: #aebac1;
+  font-size: 1.5rem;
+  padding: 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50% !important;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.mobile-chat__back:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mobile-chat__contact {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.mobile-chat__contact:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mobile-chat__avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00a884 0%, #008069 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 1.1rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.mobile-chat__info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mobile-chat__name {
+  display: block;
+  color: #e9edef;
+  font-size: 1.05rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Status "En ligne" masqué sur mobile */
+.mobile-chat__status {
+  display: none;
+}
+
+.mobile-chat__actions {
+  display: flex;
+  gap: 0.5rem;
+  position: relative;
+}
+
+.mobile-chat__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.5rem;
+  background: #233138;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  min-width: 240px;
+  overflow: hidden;
+}
+
+.mobile-chat__menu button {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  background: none;
+  border: none;
+  color: #e9edef;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.95rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.mobile-chat__menu button:last-child {
+  border-bottom: none;
+}
+
+.mobile-chat__menu button:active {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mobile-chat__menu button svg {
+  font-size: 1.25rem;
+  color: #8696a0;
+}
+
+.mobile-chat__messages {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.5rem 0.5rem;
+  padding-bottom: 0.5rem;
+  background: #0b141a;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mobile-chat__input {
+  background: #1f2c34;
+  padding: 0.375rem 0.5rem;
+  padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
+  border-top: 1px solid #2a3942;
+}
+
+/* ============================================================================
+   Autres panels (Contacts, WhatsApp, Gemini)
+   ============================================================================ */
+
+.mobile-panel-header {
+  background: #202c33;
+  padding: 1rem 1rem 0.75rem;
+  padding-top: max(1rem, env(safe-area-inset-top));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mobile-panel-header h1 {
+  color: #e9edef;
+  font-size: 1.35rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.mobile-panel-search {
+  padding: 0.75rem 1rem;
+  background: #202c33;
+}
+
+.mobile-panel-content {
+  padding: 1rem;
+}
+
+.mobile-panel-card {
+  background: #202c33;
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.mobile-panel-card h3 {
+  color: #e9edef;
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem 0;
+}
+
+.mobile-panel-card p {
+  color: #8696a0;
+  font-size: 0.9rem;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.mobile-panel-empty {
+  text-align: center;
+  padding: 3rem 1.5rem;
+  color: #8696a0;
+}
+
+/* Contacts list */
+.mobile-contacts__list {
+  padding: 0.5rem 0;
+}
+
+.mobile-contact-item {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid #111b21;
+}
+
+.mobile-contact-item__avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00a884 0%, #008069 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+
+.mobile-contact-item__info {
+  flex: 1;
+}
+
+.mobile-contact-item__name {
+  display: block;
+  color: #e9edef;
+  font-size: 1rem;
+  margin-bottom: 0.25rem;
+}
+
+.mobile-contact-item__phone {
+  display: block;
+  color: #8696a0;
+  font-size: 0.85rem;
+}
+
