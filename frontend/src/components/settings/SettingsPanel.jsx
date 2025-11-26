@@ -10,6 +10,7 @@ import {
   updateUserStatus,
 } from "../../api/adminApi";
 import { createAccount, deleteAccount } from "../../api/accountsApi";
+import NotificationSettings from "./NotificationSettings";
 
 const INITIAL_ACCOUNT_FORM = {
   name: "",
@@ -251,6 +252,10 @@ export default function SettingsPanel({
             <button className="danger" onClick={onSignOut}>
               Déconnexion
             </button>
+          </section>
+
+          <section className="settings-card">
+            <NotificationSettings />
           </section>
 
           <section className="settings-card">

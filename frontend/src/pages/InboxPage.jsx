@@ -16,6 +16,7 @@ import { useAuth } from "../context/AuthContext";
 import SettingsPanel from "../components/settings/SettingsPanel";
 import GeminiPanel from "../components/bot/GeminiPanel";
 import WhatsAppBusinessPanel from "../components/whatsapp/WhatsAppBusinessPanel";
+import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 
 
 export default function InboxPage() {
@@ -31,11 +32,16 @@ export default function InboxPage() {
   const [selectedContact, setSelectedContact] = useState(null);
   const [isWindowActive, setIsWindowActive] = useState(true);
   const canViewContacts = hasPermission?.("contacts.view");
+  
   useEffect(() => {
     const handleVisibility = () => setIsWindowActive(!document.hidden);
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
+
+  // Écouter tous les nouveaux messages pour afficher des notifications
+  // Fonctionne comme WhatsApp : notifications pour tous les messages entrants
+  useGlobalNotifications(accounts, selectedConversation?.id);
 
 
   const loadAccounts = useCallback(async () => {

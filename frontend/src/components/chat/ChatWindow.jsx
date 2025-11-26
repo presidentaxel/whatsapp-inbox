@@ -7,6 +7,7 @@ import MessageInput from "./MessageInput";
 import AdvancedMessageInput from "./AdvancedMessageInput";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
+import { notifyNewMessage } from "../../utils/notifications";
 
 export default function ChatWindow({
   conversation,
@@ -86,6 +87,12 @@ export default function ChatWindow({
         },
         (payload) => {
           const incoming = payload.new;
+          
+          // Afficher une notification si c'est un message entrant et que la fenêtre n'est pas active
+          if (!incoming.from_me && !isWindowActive) {
+            notifyNewMessage(incoming, conversation);
+          }
+          
           setMessages((prev) => {
             const exists = prev.some((msg) => msg.id === incoming.id);
             if (exists) {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle } from "react-icons/fi";
+import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings } from "react-icons/fi";
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
 import { getContacts } from "../api/contactsApi";
@@ -9,6 +9,8 @@ import MobileChatWindow from "../components/mobile/MobileChatWindow";
 import MobileContactsPanel from "../components/mobile/MobileContactsPanel";
 import MobileWhatsAppPanel from "../components/mobile/MobileWhatsAppPanel";
 import MobileGeminiPanel from "../components/mobile/MobileGeminiPanel";
+import MobileNotificationSettings from "../components/mobile/MobileNotificationSettings";
+import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import "../styles/mobile-inbox.css";
 
 export default function MobileInboxPage({ onLogout }) {
@@ -71,6 +73,10 @@ export default function MobileInboxPage({ onLogout }) {
       return () => clearInterval(interval);
     }
   }, [activeAccount, refreshConversations]);
+
+  // Écouter tous les nouveaux messages pour afficher des notifications
+  // Fonctionne comme WhatsApp : notifications pour tous les messages entrants
+  useGlobalNotifications(accounts, selectedConversation?.id);
 
   const handleSelectConversation = async (conv) => {
     setSelectedConversation(conv);
@@ -139,6 +145,11 @@ export default function MobileInboxPage({ onLogout }) {
           />
         );
       
+      case "settings":
+        return (
+          <MobileNotificationSettings />
+        );
+      
       default:
         return null;
     }
@@ -183,6 +194,14 @@ export default function MobileInboxPage({ onLogout }) {
         >
           <FiMessageCircle />
           <span>Assistant</span>
+        </button>
+
+        <button
+          className={`mobile-inbox__nav-btn ${activeTab === "settings" ? "active" : ""}`}
+          onClick={() => setActiveTab("settings")}
+        >
+          <FiSettings />
+          <span>Paramètres</span>
         </button>
       </nav>
     </div>

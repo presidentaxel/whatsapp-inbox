@@ -101,3 +101,76 @@ export async function showInstallPrompt() {
   return outcome === 'accepted';
 }
 
+/**
+ * Afficher une notification locale
+ * @param {string} title - Titre de la notification
+ * @param {object} options - Options de la notification
+ * @returns {Promise<void>}
+ */
+export async function showNotification(title, options = {}) {
+  // Demander la permission si nécessaire
+  if (Notification.permission === 'default') {
+    const granted = await requestNotificationPermission();
+    if (!granted) {
+      console.log('❌ Permission de notification refusée');
+      return;
+    }
+  }
+  
+  if (Notification.permission !== 'granted') {
+    console.log('❌ Permission de notification non accordée');
+    return;
+  }
+
+  // Vérifier si le service worker est disponible
+  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    const registration = await navigator.serviceWorker.ready;
+    
+    // Afficher la notification via le service worker
+    await registration.showNotification(title, {
+      icon: '/icon-192x192.png',
+      badge: '/icon-192x192.png',
+      vibrate: [200, 100, 200],
+      tag: 'whatsapp-notification',
+      requireInteraction: false,
+      ...options
+    });
+  } else {
+    // Fallback : notification simple sans service worker
+    new Notification(title, {
+      icon: '/icon-192x192.png',
+      ...options
+    });
+  }
+}
+
+/**
+ * Afficher une notification pour un nouveau message
+ * @param {string} contactName - Nom du contact
+ * @param {string} messagePreview - Aperçu du message
+ * @param {string} conversationId - ID de la conversation
+ */
+export async function showMessageNotification(contactName, messagePreview, conversationId) {
+  await showNotification(`${contactName}`, {
+    body: messagePreview,
+    tag: `whatsapp-msg-${conversationId}`,
+    data: { conversationId }, // Données personnalisées
+    badge: '/icon-192x192.png',
+    icon: '/icon-192x192.png',
+    vibrate: [200, 100, 200], // Vibration comme WhatsApp
+    requireInteraction: false, // Disparaît automatiquement
+    silent: false, // Son activé
+    timestamp: Date.now(),
+    actions: [
+      {
+        action: 'open',
+        title: '📱 Ouvrir'
+      },
+      {
+        action: 'close',
+        title: '✕'
+      }
+    ]
+  });
+}
+

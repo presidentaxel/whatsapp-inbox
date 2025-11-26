@@ -68,26 +68,91 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// Gestion des notifications push (optionnel pour plus tard)
+// Gestion des notifications push (pour les push serveur)
 self.addEventListener('push', (event) => {
+  let notificationData = {
+    title: 'WhatsApp LMDCVTC',
+    body: 'Nouveau message',
+    conversationId: null
+  };
+
+  // Parser les données push si disponibles
+  if (event.data) {
+    try {
+      const data = event.data.json();
+      notificationData = {
+        title: data.title || notificationData.title,
+        body: data.body || notificationData.body,
+        conversationId: data.conversationId || null,
+        icon: data.icon || '/icon-192x192.png',
+        badge: data.badge || '/icon-192x192.png'
+      };
+    } catch (e) {
+      // Si ce n'est pas du JSON, essayer comme texte
+      notificationData.body = event.data.text() || notificationData.body;
+    }
+  }
+
   const options = {
-    body: event.data ? event.data.text() : 'Nouveau message',
-    icon: '/icon-192x192.png',
-    badge: '/icon-192x192.png',
-    vibrate: [200, 100, 200],
-    tag: 'whatsapp-notification',
-    requireInteraction: false
+    body: notificationData.body,
+    icon: notificationData.icon || '/icon-192x192.png',
+    badge: notificationData.badge || '/icon-192x192.png',
+    vibrate: [200, 100, 200], // Vibration comme WhatsApp
+    tag: notificationData.conversationId 
+      ? `whatsapp-msg-${notificationData.conversationId}` 
+      : 'whatsapp-notification',
+    requireInteraction: false,
+    data: {
+      conversationId: notificationData.conversationId
+    }
   };
 
   event.waitUntil(
-    self.registration.showNotification('WhatsApp LMDCVTC', options)
+    self.registration.showNotification(notificationData.title, options)
   );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  
+  const conversationId = event.notification.data?.conversationId;
+  const action = event.action;
+  
+  // Si l'utilisateur a cliqué sur "Fermer", ne rien faire
+  if (action === 'close') {
+    return;
+  }
+  
   event.waitUntil(
-    clients.openWindow('/')
+    (async () => {
+      // Essayer de trouver une fenêtre/tab ouverte
+      const allClients = await clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true
+      });
+      
+      // Si une fenêtre est déjà ouverte, la focus et y naviguer
+      for (const client of allClients) {
+        if (client.url.includes(self.location.origin)) {
+          await client.focus();
+          
+          // Envoyer un message pour ouvrir la conversation
+          if (conversationId) {
+            client.postMessage({
+              type: 'OPEN_CONVERSATION',
+              conversationId
+            });
+          }
+          return;
+        }
+      }
+      
+      // Sinon, ouvrir une nouvelle fenêtre
+      const url = conversationId 
+        ? `/?conversation=${conversationId}` 
+        : '/';
+      await clients.openWindow(url);
+    })()
   );
 });
 
