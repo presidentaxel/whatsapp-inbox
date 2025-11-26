@@ -256,9 +256,15 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh }) {
 
       {/* Messages */}
       <div className="mobile-chat__messages">
-        {messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} />
-        ))}
+        {messages.length === 0 && (
+          <div style={{padding: '20px', textAlign: 'center', color: '#999'}}>
+            Aucun message
+          </div>
+        )}
+        {messages.map((msg) => {
+          console.log("🔵 Rendering message:", msg.id, msg.message_type, msg.direction);
+          return <MessageBubble key={msg.id} message={msg} />;
+        })}
         <div ref={messagesEndRef} />
       </div>
 
