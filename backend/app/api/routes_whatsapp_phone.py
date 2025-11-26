@@ -27,7 +27,7 @@ async def list_phone_numbers(
     
     Note: Nécessite le WABA ID qui doit être configuré dans l'account
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -64,7 +64,7 @@ async def get_phone_details(
     Récupère les détails du numéro de téléphone
     GET /{PHONE_NUMBER_ID}
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -98,7 +98,7 @@ async def register_phone(
     
     ATTENTION: Cette opération est sensible et nécessite des permissions admin
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -132,7 +132,7 @@ async def deregister_phone(
     
     ATTENTION: Cette opération est sensible et nécessite des permissions admin
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -164,7 +164,7 @@ async def request_verification_code(
     Demande l'envoi du code de vérification sur le numéro
     POST /{PHONE_NUMBER_ID}/request_code
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -198,7 +198,7 @@ async def verify_code(
     Valide le code de vérification reçu (complète la procédure de registration)
     POST /{PHONE_NUMBER_ID}/verify_code
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:

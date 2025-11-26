@@ -90,7 +90,7 @@ async def create_template(
         }
     ]
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -154,7 +154,7 @@ async def delete_template(
     Supprime un template de message
     DELETE /{WABA-ID}/message_templates
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:

@@ -4,6 +4,7 @@ import { AiFillStar, AiOutlineStar } from "react-icons/ai";
 import { getMessages, sendMessage } from "../../api/messagesApi";
 import MessageBubble from "./MessageBubble";
 import MessageInput from "./MessageInput";
+import AdvancedMessageInput from "./AdvancedMessageInput";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 
@@ -279,7 +280,11 @@ export default function ChatWindow({
         )}
       </div>
 
-      <MessageInput onSend={onSend} disabled={!canSend || !conversationId} />
+      <AdvancedMessageInput 
+        conversation={conversation}
+        onSend={onSend} 
+        disabled={!canSend || !conversationId}
+      />
     </div>
   );
 }

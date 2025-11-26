@@ -28,10 +28,12 @@ class Settings:
     WHATSAPP_PHONE_ID: str | None = os.getenv("WHATSAPP_PHONE_ID")
     WHATSAPP_VERIFY_TOKEN: str | None = os.getenv("WHATSAPP_VERIFY_TOKEN")
     WHATSAPP_PHONE_NUMBER: str | None = os.getenv("WHATSAPP_PHONE_NUMBER")
+    WHATSAPP_BUSINESS_ACCOUNT_ID: str | None = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID")  # WABA ID
     
     # Meta App (pour les fonctionnalités avancées de l'API)
     META_APP_ID: str | None = os.getenv("META_APP_ID")
     META_APP_SECRET: str | None = os.getenv("META_APP_SECRET")
+    META_BUSINESS_ID: str | None = os.getenv("META_BUSINESS_ID")  # Business Manager ID
     
     # Gemini Bot
     GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")

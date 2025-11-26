@@ -15,6 +15,7 @@ import ContactsPanel from "../components/contacts/ContactsPanel";
 import { useAuth } from "../context/AuthContext";
 import SettingsPanel from "../components/settings/SettingsPanel";
 import GeminiPanel from "../components/bot/GeminiPanel";
+import WhatsAppBusinessPanel from "../components/whatsapp/WhatsAppBusinessPanel";
 
 
 export default function InboxPage() {
@@ -186,6 +187,7 @@ export default function InboxPage() {
     if (canViewContacts) {
       items.push("contacts");
     }
+    items.push("whatsapp"); // Nouveau: WhatsApp Business
     if (canManageSettings) {
       items.push("assistant");
     }
@@ -246,6 +248,13 @@ export default function InboxPage() {
               canManageRoles={canManageRoles}
               canManageUsers={canManageUsers}
               onAccountsRefresh={loadAccounts}
+            />
+          </div>
+        ) : navMode === "whatsapp" ? (
+          <div className="workspace-main settings-mode">
+            <WhatsAppBusinessPanel
+              accountId={activeAccount}
+              accounts={accounts}
             />
           </div>
         ) : navMode === "assistant" ? (

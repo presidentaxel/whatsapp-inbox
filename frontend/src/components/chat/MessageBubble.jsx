@@ -7,6 +7,7 @@ import {
   FiMapPin,
   FiMessageSquare,
   FiPhone,
+  FiList,
 } from "react-icons/fi";
 import { api } from "../../api/axiosClient";
 
@@ -25,14 +26,16 @@ const TYPE_MAP = {
   call: { icon: <FiPhone />, label: "Appel WhatsApp" },
 };
 
-function MediaRenderer({ message, messageType }) {
+function MediaRenderer({ message, messageType, onLoadingChange }) {
   const [source, setSource] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     if (!message.media_id || !FETCHABLE_MEDIA.has(messageType)) {
       setSource(null);
       setLoading(false);
+      onLoadingChange?.(false, false);
       return;
     }
 
@@ -45,10 +48,14 @@ function MediaRenderer({ message, messageType }) {
         if (cancelled) return;
         objectUrl = URL.createObjectURL(res.data);
         setSource(objectUrl);
+        setError(false);
+        onLoadingChange?.(false, false);
       })
       .catch(() => {
         if (!cancelled) {
           setSource(null);
+          setError(true);
+          onLoadingChange?.(false, true);
         }
       })
       .finally(() => {
@@ -66,29 +73,29 @@ function MediaRenderer({ message, messageType }) {
   }, [message.id, message.media_id, messageType]);
 
   if (loading) {
-    return <span>Chargement…</span>;
+    return <span className="media-loading">Chargement…</span>;
   }
 
-  if (!source) {
-    return <span>{message.content_text || "Média non disponible"}</span>;
+  if (!source || error) {
+    return <span className="media-error">{message.content_text || "Média non disponible"}</span>;
   }
 
   if (messageType === "image" || messageType === "sticker") {
-    return <img src={source} alt={message.content_text || "Image reçue"} className="bubble-media__preview" />;
+    return <img src={source} alt="" className="bubble-media__image" />;
   }
 
   if (messageType === "video") {
-    return <video src={source} controls className="bubble-media__preview" />;
+    return <video src={source} controls className="bubble-media__video" />;
   }
 
   if (messageType === "audio" || messageType === "voice") {
-    return <audio src={source} controls />;
+    return <audio src={source} controls className="bubble-media__audio" />;
   }
 
   if (messageType === "document") {
     return (
-      <a href={source} target="_blank" rel="noreferrer">
-        Télécharger le document
+      <a href={source} download className="bubble-media__document" target="_blank" rel="noreferrer">
+        📄 Télécharger le document
       </a>
     );
   }
@@ -96,21 +103,94 @@ function MediaRenderer({ message, messageType }) {
   return <span>{message.content_text}</span>;
 }
 
+function RichMediaBubble({ message, messageType }) {
+  const [showIcon, setShowIcon] = useState(true);
+  const typeEntry = TYPE_MAP[messageType];
+
+  // Ne pas afficher le content_text s'il contient juste un placeholder
+  const isPlaceholder = message.content_text && 
+    (message.content_text.trim() === '[image]' || 
+     message.content_text.trim() === '[audio]' ||
+     message.content_text.trim() === '[video]' ||
+     message.content_text.trim() === '[document]');
+  
+  const caption = isPlaceholder ? null : message.content_text;
+
+  const handleLoadingChange = (loading, error) => {
+    // Cacher l'icône si l'image/vidéo est chargée sans erreur
+    if (messageType === 'image' || messageType === 'video' || messageType === 'sticker') {
+      setShowIcon(loading || error);
+    }
+  };
+
+    return (
+      <div className="bubble-media bubble-media--rich">
+      {showIcon && (
+        <div className="bubble-media__icon">{typeEntry?.icon}</div>
+      )}
+        <div className="bubble-media__content">
+        <MediaRenderer 
+          message={message} 
+          messageType={messageType}
+          onLoadingChange={handleLoadingChange}
+        />
+        {caption && <p className="bubble-media__caption">{caption}</p>}
+      </div>
+    </div>
+  );
+}
+
+function InteractiveBubble({ message }) {
+  const content = message.content_text || "";
+  
+  // Extraire les parties du message interactif
+  const lines = content.split("\n");
+  const bodyText = lines[0] || "";
+  const buttonInfo = lines.find(line => line.startsWith("[Boutons:") || line.startsWith("[Liste"));
+  
+  if (buttonInfo) {
+    // C'est un message avec boutons
+    const buttonsMatch = buttonInfo.match(/\[Boutons: (.*)\]/);
+    if (buttonsMatch) {
+      const buttonTitles = buttonsMatch[1].split(", ");
+      return (
+        <div className="interactive-bubble">
+          <div className="interactive-bubble__body">{bodyText}</div>
+          <div className="interactive-bubble__buttons">
+            {buttonTitles.map((title, i) => (
+              <div key={i} className="interactive-bubble__button">{title}</div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    
+    // C'est une liste
+    return (
+      <div className="interactive-bubble">
+        <div className="interactive-bubble__body">{bodyText}</div>
+        <div className="interactive-bubble__list-indicator">
+          <FiList /> Liste interactive
+        </div>
+      </div>
+    );
+  }
+  
+  // Fallback au texte simple
+  return <span>{content}</span>;
+}
+
 function renderBody(message) {
   const messageType = (message.message_type || "text").toLowerCase();
   const typeEntry = TYPE_MAP[messageType];
 
   if (FETCHABLE_MEDIA.has(messageType) && message.media_id) {
-    return (
-      <div className="bubble-media bubble-media--rich">
-        <div className="bubble-media__icon">{typeEntry?.icon}</div>
-        <div className="bubble-media__content">
-          <strong>{typeEntry?.label}</strong>
-          <MediaRenderer message={message} messageType={messageType} />
-          {message.content_text && <p>{message.content_text}</p>}
-        </div>
-      </div>
-    );
+    return <RichMediaBubble message={message} messageType={messageType} />;
+  }
+
+  // Messages interactifs
+  if (messageType === "interactive") {
+    return <InteractiveBubble message={message} />;
   }
 
   if (!typeEntry || messageType === "text") {
@@ -134,10 +214,13 @@ export default function MessageBubble({ message }) {
     ? new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
 
+  const messageType = (message.message_type || "text").toLowerCase();
+  const isMedia = FETCHABLE_MEDIA.has(messageType) && message.media_id;
+
   return (
-    <div className={`bubble ${mine ? "me" : "them"}`}>
+    <div className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""}`}>
       {renderBody(message)}
-      <small>{timestamp}</small>
+      <small className="bubble__timestamp">{timestamp}</small>
     </div>
   );
 }

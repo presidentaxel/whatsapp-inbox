@@ -29,7 +29,7 @@ async def debug_access_token(
     - scopes: Liste des permissions accordées
     - user_id: ID de l'utilisateur associé
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:

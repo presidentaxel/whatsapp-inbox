@@ -27,7 +27,7 @@ async def get_waba_details(
     - message_template_namespace: Namespace pour les templates
     - account_review_status: Statut de review du compte
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -66,7 +66,7 @@ async def list_owned_wabas(
     
     Note: Nécessite le Business ID qui doit être configuré dans l'account
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -105,7 +105,7 @@ async def list_client_wabas(
     
     Note: Nécessite le Business ID qui doit être configuré dans l'account
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -148,7 +148,7 @@ async def subscribe_webhooks(
     - Changements de profil
     - etc.
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -185,7 +185,7 @@ async def unsubscribe_webhooks(
     Se désabonne des événements WhatsApp pour ce WABA
     DELETE /{WABA-ID}/subscribed_apps
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -222,7 +222,7 @@ async def get_webhook_subscriptions(
     Récupère la liste des apps abonnées aux webhooks de ce WABA
     GET /{WABA-ID}/subscribed_apps
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:

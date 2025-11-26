@@ -712,6 +712,7 @@ body {
   gap: 4px;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
   font-size: 0.95rem;
+  position: relative;
 }
 
 .bubble.them {
@@ -726,6 +727,39 @@ body {
   align-self: flex-end;
 }
 
+/* Les bulles avec média ont moins de padding pour un look plus propre */
+.bubble--media {
+  padding: 4px;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Pour les messages avec média, le timestamp est caché par défaut */
+.bubble--media .bubble__timestamp {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 0.7rem;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+}
+
+.bubble--media:hover .bubble__timestamp {
+  opacity: 1;
+}
+
+/* Pour les messages normaux, le timestamp est toujours visible */
+.bubble:not(.bubble--media) .bubble__timestamp {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: right;
+}
+
+/* Pour compatibilité avec l'ancien sélecteur */
 .bubble small {
   font-size: 0.75rem;
   color: rgba(255, 255, 255, 0.7);
@@ -761,13 +795,161 @@ body {
   color: rgba(255, 255, 255, 0.85);
 }
 
-.bubble-media__preview {
-  max-width: 100%;
+/* Images dans les messages */
+.bubble-media__image {
+  max-width: 400px;
+  max-height: 400px;
+  width: 100%;
+  height: auto;
   border-radius: var(--radius-md);
+  display: block;
+  object-fit: contain;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  border: none;
+  outline: none;
+  background: transparent;
+}
+
+.bubble-media__image:hover {
+  opacity: 0.95;
+}
+
+/* Vidéos dans les messages */
+.bubble-media__video {
+  max-width: 400px;
+  max-height: 400px;
+  width: 100%;
+  border-radius: var(--radius-md);
+  display: block;
+}
+
+/* Audio dans les messages */
+.bubble-media__audio {
+  width: 100%;
+  max-width: 320px;
+}
+
+/* Documents dans les messages */
+.bubble-media__document {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-md);
+  color: #00a884;
+  text-decoration: none;
+  font-weight: 500;
+  transition: background 0.2s;
+}
+
+.bubble-media__document:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+/* Caption sous les médias */
+.bubble-media__caption {
+  margin: 8px 0 0 0;
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.9);
+  line-height: 1.4;
+}
+
+/* États de chargement */
+.media-loading {
+  color: rgba(255, 255, 255, 0.6);
+  font-style: italic;
+  font-size: 0.9rem;
+}
+
+.media-error {
+  color: #ff6b6b;
+  font-size: 0.9rem;
+}
+
+/* Container des médias riches (avec icône conditionnelle) */
+.bubble-media--rich {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.bubble-media--rich .bubble-media__content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Cacher l'icône quand l'image est chargée */
+.bubble-media--rich .bubble-media__icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 50%;
+  font-size: 1.1rem;
+}
+
+/* Responsive pour mobile */
+@media (max-width: 768px) {
+  .bubble-media__image,
+  .bubble-media__video {
+    max-width: 280px;
+    max-height: 280px;
+  }
+}
+
+/* Bulles interactives (boutons et listes) */
+.interactive-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.interactive-bubble__body {
+  font-size: 0.95rem;
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+.interactive-bubble__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   margin-top: 6px;
 }
 
-.input-area {
+.interactive-bubble__button {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.05);
+  text-align: center;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.9);
+  cursor: default;
+}
+
+.interactive-bubble__list-indicator {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  text-align: center;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* Style pour les input-area classiques (pas advanced) */
+.input-area:not(.input-area-advanced .input-area) {
   padding: 16px;
   background: rgba(17, 27, 33, 0.95);
   border-top: 1px solid rgba(255, 255, 255, 0.05);
@@ -776,7 +958,7 @@ body {
   border-radius: var(--radius-lg);
 }
 
-.input-area input {
+.input-area:not(.input-area-advanced .input-area) input {
   flex: 1;
   padding: 12px;
   border-radius: var(--radius-md);
@@ -786,7 +968,7 @@ body {
   color: #fff;
 }
 
-.input-area button {
+.input-area:not(.input-area-advanced .input-area) button {
   background: #25d366;
   border: none;
   color: #0b141a;
@@ -805,7 +987,7 @@ body {
   cursor: not-allowed;
 }
 
-.input-area button:hover {
+.input-area:not(.input-area-advanced .input-area) button:hover {
   background: #1eb458;
 }
 

@@ -446,6 +446,206 @@ async def send_message(payload: dict):
     return {"status": "sent", "message_id": message_id}
 
 
+async def send_interactive_message_with_storage(
+    conversation_id: str,
+    interactive_type: str,
+    body_text: str,
+    interactive_payload: dict,
+    header_text: Optional[str] = None,
+    footer_text: Optional[str] = None
+):
+    """
+    Envoie un message interactif (buttons/list) ET l'enregistre correctement dans la base
+    """
+    if not conversation_id or not body_text:
+        return {"error": "invalid_payload"}
+
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        return {"error": "conversation_not_found"}
+
+    to_number = conversation["client_number"]
+    account_id = conversation.get("account_id")
+
+    account = await get_account_by_id(account_id)
+    if not account:
+        return {"error": "account_not_found"}
+
+    phone_id = account.get("phone_number_id") or settings.WHATSAPP_PHONE_ID
+    token = account.get("access_token") or settings.WHATSAPP_TOKEN
+
+    if not phone_id or not token:
+        return {"error": "whatsapp_not_configured"}
+
+    # Construire le payload pour WhatsApp
+    interactive_obj = {
+        "type": interactive_type,
+        "body": {"text": body_text}
+    }
+    
+    if header_text:
+        interactive_obj["header"] = {"type": "text", "text": header_text}
+    if footer_text:
+        interactive_obj["footer"] = {"text": footer_text}
+    
+    # Ajouter action (buttons ou sections)
+    interactive_obj["action"] = interactive_payload
+
+    body = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "interactive",
+        "interactive": interactive_obj
+    }
+
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    
+    try:
+        # Utiliser le client avec retry
+        client = await get_http_client()
+        response = await client.post(
+            f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json=body
+        )
+        response.raise_for_status()
+
+        # Récupérer le message ID
+        response_json = response.json()
+        message_id = response_json.get("messages", [{}])[0].get("id")
+
+        # Construire un texte de prévisualisation
+        if interactive_type == "button":
+            button_titles = [btn.get("reply", {}).get("title", "") for btn in interactive_payload.get("buttons", [])]
+            preview_text = f"{body_text}\n[Boutons: {', '.join(button_titles)}]"
+        else:  # list
+            preview_text = f"{body_text}\n[Liste interactive]"
+
+        # Enregistrer le message dans la base
+        message_payload = {
+            "conversation_id": conversation_id,
+            "direction": "outbound",
+            "content_text": preview_text,
+            "timestamp": timestamp_iso,
+            "wa_message_id": message_id,
+            "message_type": "interactive",
+            "status": "sent",
+            "interactive_data": json.dumps({
+                "type": interactive_type,
+                "header": header_text,
+                "body": body_text,
+                "footer": footer_text,
+                "action": interactive_payload
+            })
+        }
+
+        await asyncio.gather(
+            supabase_execute(
+                supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+            ),
+            _update_conversation_timestamp(conversation_id, timestamp_iso)
+        )
+
+        return {"status": "sent", "message_id": message_id}
+    
+    except httpx.HTTPError as exc:
+        logger.error("WhatsApp interactive message error: %s", exc)
+        return {
+            "error": "whatsapp_api_error",
+            "details": str(exc),
+        }
+
+
+async def send_media_message_with_storage(
+    conversation_id: str,
+    media_type: str,
+    media_id: str,
+    caption: Optional[str] = None
+):
+    """
+    Envoie un message média ET l'enregistre correctement dans la base
+    """
+    if not conversation_id or not media_id:
+        return {"error": "invalid_payload"}
+
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        return {"error": "conversation_not_found"}
+
+    to_number = conversation["client_number"]
+    account_id = conversation.get("account_id")
+
+    account = await get_account_by_id(account_id)
+    if not account:
+        return {"error": "account_not_found"}
+
+    phone_id = account.get("phone_number_id") or settings.WHATSAPP_PHONE_ID
+    token = account.get("access_token") or settings.WHATSAPP_TOKEN
+
+    if not phone_id or not token:
+        return {"error": "whatsapp_not_configured"}
+
+    # Construire le payload pour WhatsApp
+    media_object = {"id": media_id}
+    if caption:
+        media_object["caption"] = caption
+
+    body = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": media_type,
+        media_type: media_object
+    }
+
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    
+    try:
+        # Utiliser le client avec retry
+        client = await get_http_client()
+        response = await client.post(
+            f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json=body
+        )
+    except httpx.HTTPError as exc:
+        logger.error("WhatsApp API error: %s", exc)
+        return {"error": "whatsapp_api_error", "details": str(exc)}
+
+    if response.is_error:
+        logger.error("WhatsApp send error: %s %s", response.status_code, response.text)
+        return {"error": "whatsapp_api_error", "status_code": response.status_code}
+
+    message_id = None
+    try:
+        response_json = response.json()
+        message_id = response_json.get("messages", [{}])[0].get("id")
+    except ValueError:
+        response_json = None
+
+    # Créer le texte à afficher
+    display_text = caption if caption else f"[{media_type}]"
+
+    # Enregistrer le message dans la base
+    message_payload = {
+        "conversation_id": conversation_id,
+        "direction": "outbound",
+        "content_text": display_text,
+        "timestamp": timestamp_iso,
+        "wa_message_id": message_id,
+        "message_type": media_type,
+        "status": "sent",
+        "media_id": media_id,
+        "media_mime_type": None,  # Sera mis à jour si disponible
+    }
+
+    await supabase_execute(
+        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+    )
+    await _update_conversation_timestamp(conversation_id, timestamp_iso)
+
+    return {"status": "sent", "message_id": message_id}
+
+
 def _extract_media_metadata(message: Dict[str, Any]) -> Dict[str, Optional[str]]:
     msg_type = message.get("type")
     if isinstance(msg_type, str):
@@ -555,9 +755,10 @@ async def fetch_message_media_content(
     # Utiliser le client pour médias (timeout plus long)
     client = await get_http_client_for_media()
     
+    # Récupérer les métadonnées du média
     meta_resp = await client.get(
         f"https://graph.facebook.com/v19.0/{media_id}",
-        params={"access_token": token},
+        headers={"Authorization": f"Bearer {token}"}
     )
     meta_resp.raise_for_status()
     meta_json = meta_resp.json()
@@ -571,7 +772,11 @@ async def fetch_message_media_content(
     if not download_url:
         raise ValueError("media_url_missing")
 
-    media_resp = await client.get(download_url, params={"access_token": token})
+    # Télécharger le contenu du média avec le token dans le header
+    media_resp = await client.get(
+        download_url, 
+        headers={"Authorization": f"Bearer {token}"}
+    )
     media_resp.raise_for_status()
     content = media_resp.content
 

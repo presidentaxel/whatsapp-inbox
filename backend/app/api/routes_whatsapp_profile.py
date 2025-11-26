@@ -76,7 +76,7 @@ async def update_business_profile(
     - FINANCE, GROCERY, GOVT, HOTEL, HEALTH, NONPROFIT, PROF_SERVICES,
     - RETAIL, TRAVEL, RESTAURANT, NOT_A_BIZ, OTHER
     """
-    current_user.require(PermissionCodes.ADMIN_ACCESS, account_id)
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:

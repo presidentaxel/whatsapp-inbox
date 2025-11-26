@@ -1,0 +1,642 @@
+/* Container principal */
+.input-area-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.input-area-advanced.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Zone des options avancées */
+.advanced-options {
+  background: rgba(17, 27, 33, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  animation: slideDown 0.2s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Header avec titre et bouton fermer */
+.advanced-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.advanced-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e9edef;
+  margin: 0;
+}
+
+.advanced-close {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #fff;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.advanced-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Contenu des options */
+.advanced-content {
+  margin-top: 16px;
+}
+
+/* Configuration interactive (boutons et listes) */
+.interactive-config {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 1024px) {
+  .interactive-config {
+    grid-template-columns: 1fr;
+    max-height: 50vh;
+  }
+}
+
+.interactive-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 8px;
+}
+
+/* Sections de formulaire */
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tooltip {
+  color: rgba(255, 255, 255, 0.5);
+  cursor: help;
+  display: inline-flex;
+  align-items: center;
+}
+
+.tooltip:hover {
+  color: #25d366;
+}
+
+.form-input {
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: #25d366;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.form-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.form-input--small {
+  flex: 0 0 120px;
+}
+
+.form-input--flex {
+  flex: 1;
+}
+
+/* Liste de boutons */
+.buttons-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.button-row__fields {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+}
+
+.btn-remove {
+  background: rgba(255, 107, 107, 0.2);
+  border: none;
+  color: #ff6b6b;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.btn-remove:hover {
+  background: rgba(255, 107, 107, 0.3);
+}
+
+.btn-add,
+.btn-add-small {
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-add:hover,
+.btn-add-small:hover {
+  border-color: #25d366;
+  color: #25d366;
+  background: rgba(37, 211, 102, 0.05);
+}
+
+.btn-add-small {
+  font-size: 0.85rem;
+  padding: 6px 10px;
+}
+
+/* Configuration des listes */
+.section-title {
+  font-weight: 600;
+}
+
+.row-config {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-left: 12px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-md);
+}
+
+/* Aperçu du message */
+.message-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(11, 20, 26, 0.8);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  position: sticky;
+  top: 0;
+}
+
+.message-preview__title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.message-preview__container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 320px;
+}
+
+.message-preview__bubble {
+  background: #005c4b;
+  border-radius: 8px 8px 0 0;
+  padding: 8px 10px;
+  color: #e9edef;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+}
+
+.message-preview__header {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.message-preview__body {
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: #e9edef;
+}
+
+.message-preview__body:empty::before {
+  content: "Votre texte principal...";
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+}
+
+.message-preview__header {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+  color: #e9edef;
+}
+
+.message-preview__footer {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 4px;
+}
+
+.message-preview__buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: #005c4b;
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+}
+
+.message-preview__button {
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: #53bdeb;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+  cursor: default;
+}
+
+.message-preview__button:first-child {
+  border-top: none;
+}
+
+.message-preview__button--placeholder {
+  color: rgba(83, 189, 235, 0.5);
+  font-style: italic;
+}
+
+.message-preview__list-button {
+  padding: 10px 12px;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  background: #005c4b;
+  border-radius: 0 0 8px 8px;
+  color: #53bdeb;
+  font-size: 0.9rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: default;
+  box-shadow: 0 1px 0.5px rgba(0, 0, 0, 0.13);
+}
+
+.message-preview__note {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.4;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  border-left: 3px solid rgba(83, 189, 235, 0.5);
+}
+
+/* Upload de média */
+.media-upload {
+  padding: 20px;
+  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.media-upload input[type="file"] {
+  width: 100%;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+  cursor: pointer;
+}
+
+.media-upload p {
+  margin-top: 12px;
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+}
+
+/* Zone de saisie principale */
+.input-area-advanced .input-area {
+  padding: 8px 12px !important;
+  background: #202c33 !important;
+  display: flex !important;
+  gap: 8px !important;
+  align-items: center !important;
+  border-top: none !important;
+  border-radius: 0 !important;
+  border: none !important;
+}
+
+/* Groupe de boutons à gauche */
+.input-area-advanced .left-buttons {
+  display: flex !important;
+  gap: 4px !important;
+  align-items: center !important;
+}
+
+/* Menu déroulant (bouton +) */
+.input-area-advanced .menu-container {
+  position: relative !important;
+}
+
+.input-area-advanced .btn-menu {
+  background: transparent !important;
+  border: none !important;
+  color: #8696a0 !important;
+  width: 40px !important;
+  height: 40px !important;
+  min-width: 40px !important;
+  min-height: 40px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.2s !important;
+  flex-shrink: 0 !important;
+  font-weight: 400 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.input-area-advanced .btn-menu:hover {
+  background: rgba(134, 150, 160, 0.15) !important;
+  color: #d1d7db !important;
+}
+
+.input-area-advanced .btn-menu svg {
+  width: 26px !important;
+  height: 26px !important;
+  color: inherit !important;
+}
+
+.input-area-advanced .btn-menu svg path {
+  fill: currentColor !important;
+}
+
+/* Menu déroulant */
+.input-area-advanced .dropdown-menu {
+  position: absolute;
+  bottom: 55px;
+  left: 0;
+  background: #2a3942;
+  border-radius: 10px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+  min-width: 260px;
+  padding: 8px 0;
+  z-index: 1000;
+  animation: slideUp 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.input-area-advanced .menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 20px;
+  background: transparent !important;
+  border: none;
+  color: #e9edef !important;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-align: left;
+  font-weight: 400;
+}
+
+.input-area-advanced .menu-item:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+.input-area-advanced .menu-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  flex-shrink: 0;
+}
+
+.input-area-advanced .menu-icon--document {
+  background: #5f66cd !important;
+  color: #fff !important;
+}
+
+.input-area-advanced .menu-icon--media {
+  background: #d3396d !important;
+  color: #fff !important;
+}
+
+.input-area-advanced .menu-icon--buttons {
+  background: #fe8c00 !important;
+  color: #fff !important;
+}
+
+.input-area-advanced .menu-icon--list {
+  background: #00897b !important;
+  color: #fff !important;
+}
+
+.input-area-advanced .menu-icon svg {
+  color: inherit !important;
+}
+
+/* Champ de saisie */
+.input-area-advanced .input-wrapper {
+  flex: 1;
+  background: #2a3942;
+  border-radius: 8px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.input-area-advanced .input-wrapper input {
+  flex: 1;
+  padding: 10px 0;
+  border: none;
+  outline: none;
+  background: transparent !important;
+  color: #e9edef !important;
+  font-size: 0.95rem;
+  min-width: 0;
+}
+
+.input-area-advanced .input-wrapper input::placeholder {
+  color: #667781;
+}
+
+/* Bouton emoji */
+.input-area-advanced .emoji-container {
+  position: relative !important;
+}
+
+.input-area-advanced .btn-emoji {
+  background: transparent !important;
+  border: none !important;
+  color: #8696a0 !important;
+  width: 40px !important;
+  height: 40px !important;
+  min-width: 40px !important;
+  min-height: 40px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: all 0.2s !important;
+  font-size: 1.5rem !important;
+  flex-shrink: 0 !important;
+  font-weight: 400 !important;
+  padding: 0 !important;
+  box-sizing: border-box !important;
+}
+
+.input-area-advanced .btn-emoji:hover {
+  background: rgba(134, 150, 160, 0.15) !important;
+  color: #d1d7db !important;
+}
+
+.input-area-advanced .btn-emoji svg {
+  color: inherit !important;
+}
+
+.emoji-picker-wrapper {
+  position: absolute;
+  bottom: 55px;
+  left: 0;
+  z-index: 1001;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.4), 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Style de l'emoji picker pour dark mode */
+.emoji-picker-wrapper aside.EmojiPickerReact {
+  --epr-bg-color: #2a3942;
+  --epr-category-label-bg-color: #2a3942;
+  --epr-picker-border-color: #3b4a54;
+  --epr-search-border-color: #3b4a54;
+  --epr-search-input-bg-color: #202c33;
+  --epr-text-color: #e9edef;
+  --epr-search-input-text-color: #e9edef;
+  --epr-category-icon-active-color: #00a884;
+  border: 1px solid #3b4a54;
+}
+
+/* Bouton d'envoi WhatsApp - Classe unique isolée */
+.btn-send-whatsapp {
+  background: #00a884 !important;
+  border: none !important;
+  color: #fff !important;
+  min-width: 48px !important;
+  height: 40px !important;
+  border-radius: 8px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  transition: background 0.2s !important;
+  font-size: 1.2rem !important;
+  flex-shrink: 0 !important;
+  font-weight: 400 !important;
+  padding: 0 12px !important;
+  box-sizing: border-box !important;
+}
+
+.btn-send-whatsapp:hover:not(:disabled) {
+  background: #06cf9c !important;
+}
+
+.btn-send-whatsapp:disabled {
+  background: rgba(134, 150, 160, 0.3) !important;
+  color: rgba(255, 255, 255, 0.5) !important;
+  cursor: not-allowed !important;
+}
+
+.btn-send-whatsapp svg {
+  color: #fff !important;
+  fill: currentColor !important;
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.btn-send-whatsapp svg path {
+  fill: currentColor !important;
+}
+
