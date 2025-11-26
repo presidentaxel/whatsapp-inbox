@@ -39,9 +39,10 @@ export default function InboxPage() {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
-  // Écouter tous les nouveaux messages pour afficher des notifications
-  // Fonctionne comme WhatsApp : notifications pour tous les messages entrants
-  useGlobalNotifications(accounts, selectedConversation?.id);
+  // Écouter TOUS les nouveaux messages pour afficher des notifications
+  // Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
+  // Peu importe le compte, la plateforme, etc.
+  useGlobalNotifications(selectedConversation?.id);
 
 
   const loadAccounts = useCallback(async () => {

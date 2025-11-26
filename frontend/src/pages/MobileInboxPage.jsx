@@ -74,9 +74,10 @@ export default function MobileInboxPage({ onLogout }) {
     }
   }, [activeAccount, refreshConversations]);
 
-  // Écouter tous les nouveaux messages pour afficher des notifications
-  // Fonctionne comme WhatsApp : notifications pour tous les messages entrants
-  useGlobalNotifications(accounts, selectedConversation?.id);
+  // Écouter TOUS les nouveaux messages pour afficher des notifications
+  // Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
+  // Peu importe le compte, la plateforme, etc.
+  useGlobalNotifications(selectedConversation?.id);
 
   const handleSelectConversation = async (conv) => {
     setSelectedConversation(conv);
