@@ -17,10 +17,10 @@ def get_timeout_config() -> httpx.Timeout:
     - pool: temps max pour obtenir une connexion du pool
     """
     return httpx.Timeout(
-        connect=3.0,  # 3s pour se connecter
-        read=10.0,    # 10s pour lire la réponse
-        write=5.0,    # 5s pour écrire
-        pool=5.0      # 5s pour obtenir une connexion du pool
+        connect=2.0,  # 2s pour se connecter (optimisé)
+        read=8.0,     # 8s pour lire la réponse (optimisé)
+        write=3.0,    # 3s pour écrire (optimisé)
+        pool=2.0      # 2s pour obtenir une connexion du pool
     )
 
 
@@ -52,7 +52,11 @@ async def get_http_client() -> httpx.AsyncClient:
             timeout=get_timeout_config(),
             limits=get_limits_config(),
             http2=True,  # Active HTTP/2 pour de meilleures performances
-            follow_redirects=True
+            follow_redirects=True,
+            headers={
+                "Accept-Encoding": "gzip, deflate",  # Compression
+                "Connection": "keep-alive",  # Réutilisation des connexions
+            }
         )
     return _http_client
 

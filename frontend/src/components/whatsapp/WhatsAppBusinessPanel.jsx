@@ -59,52 +59,74 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
     setError(null);
 
     try {
-      // Charger les infos du numéro
-      try {
-        const phoneRes = await getPhoneDetails(accountId);
-        setPhoneDetails(phoneRes.data);
-      } catch (err) {
-        console.log("Phone details not available:", err.response?.data?.detail);
+      // OPTIMISATION : Charger toutes les données en parallèle avec Promise.allSettled
+      // pour que les erreurs d'un appel ne bloquent pas les autres
+      const [phoneResult, profileResult, wabaResult, templatesResult] = await Promise.allSettled([
+        getPhoneDetails(accountId),
+        getBusinessProfile(accountId),
+        getWabaDetails(accountId),
+        listTemplates(accountId),
+      ]);
+
+      // Traiter les résultats
+      if (phoneResult.status === "fulfilled") {
+        setPhoneDetails(phoneResult.value.data);
+      } else {
+        console.log("Phone details not available:", phoneResult.reason?.response?.data?.detail);
       }
 
-      // Charger le profil business
-      try {
-        const profileRes = await getBusinessProfile(accountId);
-        if (profileRes.data?.data?.[0]) {
-          setBusinessProfile(profileRes.data.data[0]);
-          setProfileForm({
-            about: profileRes.data.data[0].about || "",
-            description: profileRes.data.data[0].description || "",
-            email: profileRes.data.data[0].email || "",
-            address: profileRes.data.data[0].address || "",
-            websites: (profileRes.data.data[0].websites || []).join(", "),
-            vertical: profileRes.data.data[0].vertical || ""
-          });
-        }
-      } catch (err) {
-        console.log("Business profile not available:", err.response?.data?.detail);
+      if (profileResult.status === "fulfilled" && profileResult.value.data?.data?.[0]) {
+        const profileData = profileResult.value.data.data[0];
+        setBusinessProfile(profileData);
+        setProfileForm({
+          about: profileData.about || "",
+          description: profileData.description || "",
+          email: profileData.email || "",
+          address: profileData.address || "",
+          websites: (profileData.websites || []).join(", "),
+          vertical: profileData.vertical || ""
+        });
+      } else {
+        console.log("Business profile not available:", profileResult.reason?.response?.data?.detail);
       }
 
-      // Charger les détails WABA
-      try {
-        const wabaRes = await getWabaDetails(accountId);
-        setWabaDetails(wabaRes.data);
-      } catch (err) {
-        console.log("WABA details not available:", err.response?.data?.detail);
+      if (wabaResult.status === "fulfilled") {
+        setWabaDetails(wabaResult.value.data);
+      } else {
+        console.log("WABA details not available:", wabaResult.reason?.response?.data?.detail);
       }
 
-      // Charger les templates
-      try {
-        const templatesRes = await listTemplates(accountId);
-        setTemplates(templatesRes.data?.data || []);
-      } catch (err) {
-        console.log("Templates not available:", err.response?.data?.detail);
+      if (templatesResult.status === "fulfilled") {
+        setTemplates(templatesResult.value.data?.data || []);
+      } else {
+        console.log("Templates not available:", templatesResult.reason?.response?.data?.detail);
       }
     } catch (err) {
       setError("Erreur lors du chargement des données");
       console.error(err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // OPTIMISATION : Fonction légère pour recharger uniquement le profil après mise à jour
+  const reloadProfile = async () => {
+    try {
+      const profileRes = await getBusinessProfile(accountId);
+      if (profileRes.data?.data?.[0]) {
+        const profileData = profileRes.data.data[0];
+        setBusinessProfile(profileData);
+        setProfileForm({
+          about: profileData.about || "",
+          description: profileData.description || "",
+          email: profileData.email || "",
+          address: profileData.address || "",
+          websites: (profileData.websites || []).join(", "),
+          vertical: profileData.vertical || ""
+        });
+      }
+    } catch (err) {
+      console.log("Error reloading profile:", err);
     }
   };
 
@@ -125,7 +147,9 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
       await updateBusinessProfile(accountId, data);
       alert("Profil mis à jour avec succès !");
       setEditingProfile(false);
-      loadData();
+      
+      // OPTIMISATION : Ne recharger que le profil au lieu de tout recharger
+      await reloadProfile();
     } catch (err) {
       alert("Erreur lors de la mise à jour du profil");
       console.error(err);
@@ -517,33 +541,77 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
 
             <div className="templates-list">
               {templates.length === 0 ? (
-                <p>Aucun template. Configurez waba_id pour voir vos templates ou créez-en un nouveau.</p>
+                <p className="empty-message">Aucun template. Configurez waba_id pour voir vos templates ou créez-en un nouveau.</p>
               ) : (
                 templates.map((tpl) => (
-                  <div key={tpl.name} className="template-card card">
-                    <div className="template-header">
-                      <div>
-                        <h4>{tpl.name}</h4>
-                        <span className={`badge ${(tpl.status || "").toLowerCase()}`}>
-                          {tpl.status}
-                        </span>
-                        <span className="badge">{tpl.category}</span>
-                        <span className="badge">{tpl.language}</span>
+                  <div key={tpl.name} className="template-card">
+                    <div className="template-card-header">
+                      <div className="template-info">
+                        <h4 className="template-name">{tpl.name}</h4>
+                        <div className="template-badges">
+                          <span className={`template-status-badge status-${(tpl.status || "").toLowerCase()}`}>
+                            {tpl.status}
+                          </span>
+                          <span className="template-category-badge">{tpl.category}</span>
+                          <span className="template-lang-badge">{tpl.language}</span>
+                        </div>
                       </div>
                       <button
                         onClick={() => handleDeleteTemplate(tpl.name)}
-                        className="btn-danger-small"
+                        className="btn-delete-template"
                         disabled={loading}
+                        title="Supprimer"
                       >
                         Supprimer
                       </button>
                     </div>
-                    <div className="template-body">
-                      {tpl.components?.map((comp, idx) => (
-                        <div key={idx}>
-                          <strong>{comp.type}:</strong> {comp.text || JSON.stringify(comp)}
-                        </div>
-                      ))}
+                    <div className="template-preview">
+                      <div className="template-preview-bubble">
+                        {tpl.components?.map((comp, idx) => {
+                          if (comp.type === "HEADER") {
+                            return (
+                              <div key={idx} className="template-preview-header">
+                                {comp.format === "IMAGE" ? (
+                                  <div className="template-preview-media">[Image]</div>
+                                ) : comp.format === "VIDEO" ? (
+                                  <div className="template-preview-media">[Vidéo]</div>
+                                ) : comp.format === "DOCUMENT" ? (
+                                  <div className="template-preview-media">[Document]</div>
+                                ) : (
+                                  <strong>{comp.text}</strong>
+                                )}
+                              </div>
+                            );
+                          }
+                          if (comp.type === "BODY") {
+                            return (
+                              <div key={idx} className="template-preview-body">
+                                {comp.text}
+                              </div>
+                            );
+                          }
+                          if (comp.type === "FOOTER") {
+                            return (
+                              <div key={idx} className="template-preview-footer">
+                                {comp.text}
+                              </div>
+                            );
+                          }
+                          if (comp.type === "BUTTONS") {
+                            return (
+                              <div key={idx} className="template-preview-buttons">
+                                {comp.buttons?.map((btn, btnIdx) => (
+                                  <div key={btnIdx} className="template-preview-button">
+                                    {btn.type === "QUICK_REPLY" ? "↩️ " : btn.type === "URL" ? "🔗 " : "📞 "}
+                                    {btn.text}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          }
+                          return null;
+                        })}
+                      </div>
                     </div>
                   </div>
                 ))
@@ -586,8 +654,8 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
               </div>
             )}
 
-            <div className="media-info" style={{ marginTop: "2rem", padding: "1rem", background: "#f5f5f5", borderRadius: "8px" }}>
-              <h4>💡 Comment utiliser ?</h4>
+            <div className="media-info">
+              <h4>Comment utiliser ?</h4>
               <ol>
                 <li>Uploadez votre fichier ci-dessus</li>
                 <li>Copiez le Media ID affiché</li>

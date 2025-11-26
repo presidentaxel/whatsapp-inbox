@@ -1,5 +1,5 @@
 :root {
-  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
   color: #e9edef;
   background-color: #0b141a;
   --radius-lg: 14px;
@@ -9,6 +9,7 @@
 
 * {
   box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif !important;
 }
 
 body {
@@ -16,6 +17,7 @@ body {
   background: #0b141a;
   min-height: 100vh;
   overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif;
 }
 
 .app {
@@ -1089,358 +1091,553 @@ body {
   background: linear-gradient(180deg, #2ef07a, #1a723a);
 }
 
+/* ============================================================================
+   Settings Panel Styles
+   ============================================================================ */
+
 .settings-panel {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 1.5rem;
   flex: 1;
 }
 
+/* Settings Tabs */
+.settings-tabs {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.settings-tab {
+  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: #8696a0;
+  padding: 0.75rem 1.25rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.settings-tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e9edef;
+}
+
+.settings-tab.active {
+  background: #00a884;
+  color: #fff;
+}
+
+/* Settings Cards */
 .settings-card {
-  background: rgba(255, 255, 255, 0.03);
+  background: #202c33;
   border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: var(--radius-lg);
-  padding: 24px;
+  border-radius: 12px;
+  padding: 2rem;
   color: #e9edef;
 }
 
 .settings-card h2 {
-  margin-top: 0;
-  margin-bottom: 12px;
-}
-
-.account-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-}
-
-.account-card {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: var(--radius-md);
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.account-card header {
-  margin-bottom: 8px;
-}
-
-.account-card span {
-  display: block;
-  color: rgba(255, 255, 255, 0.65);
-  font-size: 0.85rem;
-}
-
-.settings-tabs {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.settings-tab {
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.04);
+  margin: 0 0 0.5rem 0;
+  font-size: 1.5rem;
   color: #e9edef;
-  padding: 8px 14px;
-  border-radius: var(--radius-md);
-  cursor: pointer;
 }
 
-.settings-tab.active {
-  background: rgba(37, 211, 102, 0.2);
-  border-color: rgba(37, 211, 102, 0.4);
-  color: #25d366;
+.settings-card h3 {
+  margin: 1.5rem 0 1rem 0;
+  font-size: 1.2rem;
+  color: #e9edef;
+}
+
+.settings-card .muted {
+  color: #8696a0;
+  font-size: 0.9rem;
+  margin: 0 0 1.5rem 0;
 }
 
 .settings-card + .settings-card {
-  margin-top: 16px;
+  margin-top: 1.5rem;
+}
+
+/* Account Grid & Cards */
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.25rem;
+  margin: 1.5rem 0;
+}
+
+.account-card {
+  background: #111b21;
+  border-radius: 10px;
+  padding: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: all 0.2s;
+}
+
+.account-card:hover {
+  border-color: #00a884;
+  box-shadow: 0 4px 12px rgba(0, 168, 132, 0.15);
 }
 
 .account-card.compact {
-  padding: 12px;
+  padding: 1rem;
 }
 
-.account-form,
-.role-form {
-  margin-top: 16px;
+.account-card header {
+  margin-bottom: 1rem;
+}
+
+.account-card header strong {
+  display: block;
+  color: #e9edef;
+  font-size: 1.1rem;
+  margin-bottom: 0.25rem;
+}
+
+.account-card header span {
+  display: block;
+  color: #8696a0;
+  font-size: 0.9rem;
+}
+
+.account-card .account-meta {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.account-card .account-meta span {
+  color: #8696a0;
+  font-size: 0.85rem;
+  font-family: monospace;
+}
+
+/* Account Form */
+.account-form {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: #111b21;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.account-form h3 {
+  margin: 0 0 1.25rem 0;
+  color: #e9edef;
+  font-size: 1.1rem;
 }
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.25rem;
 }
 
-.form-grid input,
-.role-form input,
-.role-form textarea {
-  padding: 10px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
+.form-grid input {
+  padding: 0.875rem;
+  border-radius: 8px;
+  border: 1px solid #2a3942;
+  background: #202c33;
+  color: #e9edef;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+}
+
+.form-grid input:focus {
+  outline: none;
+  border-color: #00a884;
+  background: #111b21;
+}
+
+.form-grid input::placeholder {
+  color: #8696a0;
+}
+
+.account-form button[type="submit"] {
+  padding: 0.875rem 2rem;
+  background: #00a884;
   color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
+.account-form button[type="submit"]:hover {
+  background: #008c6c;
+}
+
+/* Role List & Cards */
 .role-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 1rem;
+  margin: 1.5rem 0;
 }
 
-.role-card,
-.user-card {
+.role-card {
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius-md);
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  padding: 1.5rem;
+  background: #111b21;
+  transition: all 0.2s;
 }
 
-.role-card header,
-.user-card header {
+.role-card:hover {
+  border-color: #00a884;
+}
+
+.role-card header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.role-card header > div {
+  flex: 1;
+}
+
+.role-card header strong {
+  display: block;
+  color: #e9edef;
+  font-size: 1.1rem;
+  margin-bottom: 0.25rem;
 }
 
 .role-slug {
   display: block;
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.85rem;
+  color: #8696a0;
+  font-family: monospace;
 }
 
+.role-card p {
+  color: #8696a0;
+  margin: 0 0 1rem 0;
+  line-height: 1.5;
+}
+
+/* Role Form */
+.role-form {
+  margin-top: 2rem;
+  padding: 1.5rem;
+  background: #111b21;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.role-form h3 {
+  margin: 0 0 1.25rem 0;
+  color: #e9edef;
+  font-size: 1.1rem;
+}
+
+.role-form input,
+.role-form textarea {
+  width: 100%;
+  padding: 0.875rem;
+  margin-bottom: 1rem;
+  border-radius: 8px;
+  border: 1px solid #2a3942;
+  background: #202c33;
+  color: #e9edef;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.role-form input:focus,
+.role-form textarea:focus {
+  outline: none;
+  border-color: #00a884;
+  background: #111b21;
+}
+
+.role-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.permission-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 1.5rem 0;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+}
+
+.permission-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #e9edef;
+  font-size: 0.9rem;
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.permission-grid label:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.permission-grid input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #00a884;
+}
+
+.role-form button[type="submit"] {
+  padding: 0.875rem 2rem;
+  background: #00a884;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.role-form button[type="submit"]:hover {
+  background: #008c6c;
+}
+
+/* User Cards */
+.user-card {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 1.5rem;
+  background: #111b21;
+  margin-bottom: 1.5rem;
+  transition: all 0.2s;
+}
+
+.user-card:hover {
+  border-color: #00a884;
+}
+
+.user-card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.user-card header > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-card header strong {
+  display: block;
+  color: #e9edef;
+  font-size: 1.1rem;
+  margin-bottom: 0.25rem;
+}
+
+.user-card header span {
+  display: block;
+  color: #8696a0;
+  font-size: 0.85rem;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-card header button {
+  padding: 0.625rem 1.25rem;
+  background: rgba(0, 168, 132, 0.1);
+  border: 1px solid rgba(0, 168, 132, 0.3);
+  border-radius: 6px;
+  color: #00a884;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.user-card header button:hover {
+  background: rgba(0, 168, 132, 0.2);
+}
+
+.user-section {
+  margin-top: 1.25rem;
+}
+
+.user-section h4 {
+  margin: 0 0 0.75rem 0;
+  color: #e9edef;
+  font-size: 1rem;
+}
+
+/* Chips */
 .chip-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
 }
 
 .chip {
-  background: rgba(37, 211, 102, 0.2);
-  color: #25d366;
-  padding: 4px 10px;
-  border-radius: 999px;
+  background: rgba(0, 168, 132, 0.15);
+  color: #00a884;
+  padding: 0.5rem 0.875rem;
+  border-radius: 6px;
   font-size: 0.85rem;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.chip small {
+  color: #8696a0;
+  font-size: 0.8rem;
+}
+
+.chip.removable {
+  padding-right: 0.5rem;
 }
 
 .chip.removable button {
   background: transparent;
   border: none;
-  color: inherit;
+  color: #00a884;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 1.1rem;
+  font-weight: bold;
+  padding: 0 0.25rem;
+  transition: all 0.2s;
+  line-height: 1;
 }
 
-.permission-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 6px;
+.chip.removable button:hover {
+  color: #ff4444;
+  transform: scale(1.2);
 }
 
-.permission-grid label {
-  font-size: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.user-section {
-  margin-top: 16px;
-}
-
+/* Inline Form */
 .inline-form {
-  margin-top: 10px;
   display: flex;
-  gap: 8px;
+  gap: 0.75rem;
   flex-wrap: wrap;
+  align-items: stretch;
 }
 
 .inline-form select,
 .inline-form button {
-  padding: 8px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  border: 1px solid #2a3942;
+  background: #202c33;
+  color: #e9edef;
+  transition: all 0.2s;
+}
+
+.inline-form select {
+  min-width: 150px;
+  flex: 1;
+}
+
+.inline-form select:focus {
+  outline: none;
+  border-color: #00a884;
 }
 
 .inline-form button {
-  background: #25d366;
-  color: #0b141a;
+  background: #00a884;
+  color: #fff;
   border: none;
   cursor: pointer;
+  font-weight: 600;
+  padding: 0.75rem 1.5rem;
+  white-space: nowrap;
 }
 
+.inline-form button:hover {
+  background: #008c6c;
+}
+
+/* App Select (Custom Dropdown) */
 .app-select {
   appearance: none;
-  background: rgba(17, 27, 33, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: #202c33;
+  border: 1px solid #2a3942;
   color: #e9edef;
-  padding: 8px 32px 8px 10px;
-  border-radius: var(--radius-md);
+  padding: 0.75rem 2.5rem 0.75rem 1rem;
+  border-radius: 8px;
   min-width: 160px;
-  background-image: linear-gradient(45deg, transparent 50%, #25d366 50%),
-    linear-gradient(135deg, #25d366 50%, transparent 50%),
-    linear-gradient(to right, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.1));
-  background-position: calc(100% - 16px) calc(50% - 3px), calc(100% - 11px) calc(50% - 3px),
-    calc(100% - 2.5rem) 0.4rem;
-  background-size: 6px 6px, 6px 6px, 1px 1.8rem;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2300a884' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
+  background-position: calc(100% - 0.75rem) center;
+  transition: all 0.2s;
+}
+
+.app-select:focus {
+  outline: none;
+  border-color: #00a884;
+  background-color: #111b21;
 }
 
 .app-select option {
-  background: #111b21;
+  background: #202c33;
   color: #e9edef;
 }
 
-.muted {
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.9rem;
-}
-
-.account-form,
-.role-form {
-  margin-top: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-}
-
-.form-grid input,
-.role-form input,
-.role-form textarea {
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
-}
-
-.role-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.role-card,
-.user-card {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 16px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.role-card header,
-.user-card header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-
-.role-slug {
-  display: block;
-  font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.6);
-}
-
-.chip-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.chip {
-  background: rgba(37, 211, 102, 0.2);
-  color: #25d366;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.85rem;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.chip.removable button {
-  background: transparent;
-  border: none;
-  color: inherit;
-  cursor: pointer;
-  font-size: 0.9rem;
-}
-
-.permission-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 6px;
-}
-
-.permission-grid label {
-  font-size: 0.9rem;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.user-section {
-  margin-top: 16px;
-}
-
-.inline-form {
-  margin-top: 10px;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.inline-form select,
-.inline-form button {
-  padding: 8px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
-}
-
-.inline-form button {
-  background: #25d366;
-  color: #0b141a;
-  border: none;
-  cursor: pointer;
-}
-
+/* Danger Buttons */
 .settings-card button.danger {
-  background: #f15a5a;
-  border: none;
-  color: #fff;
-  padding: 10px 16px;
-  border-radius: var(--radius-md);
+  background: rgba(255, 68, 68, 0.1);
+  border: 1px solid rgba(255, 68, 68, 0.3);
+  color: #ff4444;
+  padding: 0.625rem 1.25rem;
+  border-radius: 6px;
   cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.settings-card button.danger:hover {
+  background: rgba(255, 68, 68, 0.2);
 }
 
 .settings-card button.danger.subtle {
   background: transparent;
-  color: #f15a5a;
-  border: 1px solid rgba(241, 90, 90, 0.4);
+  border-color: rgba(255, 68, 68, 0.2);
 }
 
 .settings-card button.danger.subtle:hover {
-  background: rgba(241, 90, 90, 0.1);
+  background: rgba(255, 68, 68, 0.1);
+  border-color: rgba(255, 68, 68, 0.4);
+}
+
+/* Utilities */
+.muted {
+  color: #8696a0;
+  font-size: 0.9rem;
 }
 
 .panel-title {

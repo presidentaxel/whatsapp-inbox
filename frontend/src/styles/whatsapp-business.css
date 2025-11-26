@@ -3,10 +3,12 @@
    ============================================================================ */
 
 .whatsapp-business-panel {
-  padding: 2rem;
-  max-width: 1200px;
-  margin: 0 auto;
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
   color: #e9edef;
+  box-sizing: border-box;
 }
 
 .panel-header {
@@ -27,42 +29,43 @@
 .panel-tabs {
   display: flex;
   gap: 0.5rem;
-  margin-bottom: 2rem;
-  border-bottom: 2px solid #202c33;
+  margin-bottom: 1.5rem;
   overflow-x: auto;
+  padding-bottom: 1rem;
 }
 
 .panel-tabs button {
   padding: 0.75rem 1.5rem;
-  background: none;
+  background: rgba(255, 255, 255, 0.05);
   border: none;
   color: #8696a0;
   cursor: pointer;
-  font-size: 1rem;
+  font-size: 0.95rem;
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -2px;
+  border-radius: 8px;
   white-space: nowrap;
   transition: all 0.2s;
 }
 
 .panel-tabs button:hover {
   color: #e9edef;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .panel-tabs button.active {
-  color: #00a884;
-  border-bottom-color: #00a884;
+  color: #fff;
+  background: #00a884;
 }
 
 .panel-content {
   background: #111b21;
   border-radius: 12px;
-  padding: 2rem;
-  min-height: 400px;
+  padding: 1.5rem;
+  min-height: 600px;
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
 }
 
 .panel-empty {
@@ -86,6 +89,11 @@
 }
 
 /* Info Section */
+.info-section {
+  height: 100%;
+  overflow: visible;
+}
+
 .info-section h3 {
   margin: 0 0 1.5rem 0;
   color: #e9edef;
@@ -94,7 +102,7 @@
 
 .info-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 1.5rem;
 }
 
@@ -154,6 +162,11 @@
 }
 
 /* Profile Section */
+.profile-section {
+  height: 100%;
+  overflow: visible;
+}
+
 .profile-section h3 {
   margin: 0 0 1.5rem 0;
   color: #e9edef;
@@ -173,7 +186,7 @@
 
 .profile-form,
 .profile-view {
-  max-width: 800px;
+  max-width: 100%;
 }
 
 .form-group {
@@ -266,81 +279,229 @@
   background: #cc3333;
 }
 
-/* Templates Section */
+/* ============================================================================
+   Templates Section
+   ============================================================================ */
+.templates-section {
+  height: 100%;
+  overflow: visible;
+}
+
 .templates-section h3 {
   margin: 0 0 1.5rem 0;
   color: #e9edef;
 }
 
-.template-form,
+/* Templates List */
+.templates-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.templates-list .empty-message {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: #8696a0;
+  padding: 3rem;
+}
+
+/* Template Card */
 .template-card {
+  background: #202c33;
+  border-radius: 12px;
+  border: 1px solid #2a3942;
+  overflow: hidden;
+  transition: all 0.2s;
+  display: flex;
+  flex-direction: column;
+}
+
+.template-card:hover {
+  border-color: #00a884;
+  box-shadow: 0 4px 12px rgba(0, 168, 132, 0.15);
+}
+
+.template-card-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #2a3942;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.template-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.template-name {
+  margin: 0 0 0.5rem 0;
+  color: #e9edef;
+  font-size: 1rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.template-badges {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.template-status-badge,
+.template-category-badge,
+.template-lang-badge {
+  display: inline-block;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.template-status-badge {
+  background: #2a3942;
+  color: #8696a0;
+}
+
+.template-status-badge.status-approved {
+  background: rgba(0, 168, 132, 0.2);
+  color: #00a884;
+}
+
+.template-status-badge.status-pending {
+  background: rgba(255, 204, 0, 0.2);
+  color: #ffcc00;
+}
+
+.template-status-badge.status-rejected {
+  background: rgba(255, 68, 68, 0.2);
+  color: #ff4444;
+}
+
+.template-category-badge {
+  background: rgba(255, 255, 255, 0.05);
+  color: #8696a0;
+}
+
+.template-lang-badge {
+  background: rgba(255, 255, 255, 0.03);
+  color: #8696a0;
+}
+
+.btn-delete-template {
+  padding: 0.5rem 1rem;
+  background: rgba(255, 68, 68, 0.1);
+  border: 1px solid rgba(255, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #ff4444;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+
+.btn-delete-template:hover {
+  background: rgba(255, 68, 68, 0.2);
+  border-color: #ff4444;
+}
+
+.btn-delete-template:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Template Preview (WhatsApp-like bubble) */
+.template-preview {
+  padding: 1.25rem;
+  background: #0b141a;
+  display: flex;
+  justify-content: flex-start;
+  min-height: 150px;
+}
+
+.template-preview-bubble {
+  background: #005c4b;
+  border-radius: 8px;
+  padding: 0;
+  max-width: 85%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.template-preview-header {
+  padding: 0.75rem 1rem 0.5rem;
+  font-weight: 600;
+  color: #e9edef;
+  font-size: 0.95rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.template-preview-media {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2rem 1rem;
+  text-align: center;
+  color: #8696a0;
+  font-size: 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.template-preview-body {
+  padding: 0.75rem 1rem;
+  color: #e9edef;
+  line-height: 1.5;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.template-preview-footer {
+  padding: 0.5rem 1rem;
+  color: #8696a0;
+  font-size: 0.8rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.template-preview-buttons {
+  padding: 0.5rem 1rem 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.template-preview-button {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  padding: 0.5rem;
+  text-align: center;
+  color: #e9edef;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* Template Form */
+.template-form {
   background: #202c33;
   padding: 1.5rem;
   border-radius: 12px;
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid #2a3942;
 }
 
 .template-form h4 {
   margin: 0 0 1.5rem 0;
   color: #e9edef;
+  font-size: 1.1rem;
 }
 
-.template-card {
-  border: 1px solid #2a3942;
-}
-
-.template-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 1rem;
-}
-
-.template-header h4 {
-  margin: 0 0 0.5rem 0;
-  color: #e9edef;
-}
-
-.badge {
-  display: inline-block;
-  padding: 0.25rem 0.5rem;
-  background: #2a3942;
-  color: #8696a0;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  margin-right: 0.5rem;
-  margin-bottom: 0.25rem;
-}
-
-.badge.approved {
-  background: #00a884;
-  color: white;
-}
-
-.badge.rejected {
-  background: #ff4444;
-  color: white;
-}
-
-.badge.pending {
-  background: #ffaa00;
-  color: black;
-}
-
-.template-body {
-  color: #8696a0;
-  font-size: 0.875rem;
-  line-height: 1.6;
-}
-
-.template-body strong {
-  color: #e9edef;
-}
-
-.templates-list {
-  margin-top: 1rem;
-}
-
+/* Generic Card */
 .card {
   background: #202c33;
   border-radius: 12px;
@@ -350,6 +511,11 @@
 }
 
 /* Media Section */
+.media-section {
+  height: 100%;
+  overflow: visible;
+}
+
 .media-section h3 {
   margin: 0 0 1rem 0;
   color: #e9edef;
@@ -363,9 +529,10 @@
 .media-upload-zone {
   border: 2px dashed #2a3942;
   border-radius: 12px;
-  padding: 3rem;
+  padding: 2.5rem;
   text-align: center;
   margin-bottom: 2rem;
+  max-width: 100%;
 }
 
 .media-upload-zone input[type="file"] {
@@ -390,6 +557,10 @@
 .media-upload-zone label.uploading {
   color: #00a884;
   cursor: wait;
+}
+
+.uploaded-medias {
+  overflow: visible;
 }
 
 .uploaded-medias h4 {
@@ -424,24 +595,29 @@
 
 .media-info {
   margin-top: 2rem;
-  padding: 1rem;
-  background: #202c33;
-  border-radius: 8px;
+  padding: 1.5rem;
+  background: #202c33 !important;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .media-info h4 {
   margin: 0 0 1rem 0;
-  color: #e9edef;
+  color: #e9edef !important;
+  font-size: 1.1rem;
+  font-weight: 600;
 }
 
 .media-info ol {
   margin: 0;
   padding-left: 1.5rem;
-  color: #8696a0;
+  color: #e9edef !important;
+  line-height: 1.6;
 }
 
 .media-info li {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.75rem;
+  color: #e9edef !important;
 }
 
 /* ============================================================================
@@ -672,11 +848,12 @@
 /* Responsive */
 @media (max-width: 768px) {
   .whatsapp-business-panel {
-    padding: 1rem;
+    padding: 0.75rem;
   }
 
   .panel-content {
     padding: 1rem;
+    max-height: calc(100vh - 150px);
   }
 
   .info-grid {

@@ -1,6 +1,7 @@
 """
 Routes API pour la gestion du profil business WhatsApp
 """
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import get_current_user
@@ -88,22 +89,18 @@ async def update_business_profile(
     if not phone_number_id or not access_token:
         raise HTTPException(status_code=400, detail="account_not_configured")
     
-    # Construire le payload en excluant les valeurs None
-    profile_data = {}
-    if request.about is not None:
-        profile_data["about"] = request.about
-    if request.address is not None:
-        profile_data["address"] = request.address
-    if request.description is not None:
-        profile_data["description"] = request.description
-    if request.email is not None:
-        profile_data["email"] = request.email
-    if request.websites is not None:
-        profile_data["websites"] = request.websites
-    if request.vertical is not None:
-        profile_data["vertical"] = request.vertical
-    if request.profile_picture_handle is not None:
-        profile_data["profile_picture_handle"] = request.profile_picture_handle
+    # Construire le payload en excluant les valeurs None (optimisé avec dict comprehension)
+    profile_data = {
+        k: v for k, v in {
+            "about": request.about,
+            "address": request.address,
+            "description": request.description,
+            "email": request.email,
+            "websites": request.websites,
+            "vertical": request.vertical,
+            "profile_picture_handle": request.profile_picture_handle,
+        }.items() if v is not None
+    }
     
     if not profile_data:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -115,6 +112,10 @@ async def update_business_profile(
             profile_data=profile_data
         )
         return {"success": True, "data": result}
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"WhatsApp API error: {e.response.text}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="WhatsApp API timeout")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

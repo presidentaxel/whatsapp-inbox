@@ -516,15 +516,26 @@ async def update_business_profile(
     """
     client = await get_http_client()
     
+    # Optimisation : construire le payload minimal
     payload = {
         "messaging_product": "whatsapp",
         **profile_data
     }
     
+    # Headers optimisés pour la performance
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip, deflate",
+    }
+    
+    # Appel avec timeout spécifique pour cette opération
     response = await client.post(
         f"{GRAPH_API_BASE}/{phone_number_id}/whatsapp_business_profile",
-        headers={"Authorization": f"Bearer {access_token}"},
-        json=payload
+        headers=headers,
+        json=payload,
+        timeout=httpx.Timeout(connect=2.0, read=6.0, write=3.0, pool=2.0)  # Timeout réduit
     )
     response.raise_for_status()
     return response.json()
