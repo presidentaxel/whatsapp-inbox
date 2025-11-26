@@ -2,6 +2,28 @@
 
 Petite boîte de réception temps réel basée sur WhatsApp Cloud API + Supabase.
 
+## 🆕 Nouvelle Fonctionnalité : API WhatsApp Complète
+
+L'application implémente maintenant **toutes les fonctionnalités de l'API WhatsApp Business Cloud API** :
+
+✅ **Messages avancés** : texte, médias, templates, boutons interactifs, listes déroulantes  
+✅ **Gestion des médias** : upload, téléchargement, suppression  
+✅ **Numéros de téléphone** : enregistrement, vérification, détails  
+✅ **Profil business** : consultation et mise à jour  
+✅ **Templates de messages** : création, liste, suppression  
+✅ **Webhooks** : abonnement et gestion avancée  
+✅ **WABA Management** : gestion des comptes WhatsApp Business  
+✅ **Utilitaires** : debug de tokens, validation de numéros  
+
+📚 **Documentation complète :**
+- [Guide complet de l'API](./WHATSAPP_API_COMPLETE_GUIDE.md) - Documentation détaillée de tous les endpoints
+- [Démarrage rapide](./WHATSAPP_API_QUICK_START.md) - Configuration en 5 minutes
+
+🚀 **Pour activer ces fonctionnalités :**
+1. Appliquez la migration SQL : `supabase/migrations/011_whatsapp_extended_fields.sql`
+2. Ajoutez `META_APP_ID` et `META_APP_SECRET` à votre `.env`
+3. Explorez tous les endpoints dans Swagger UI : http://localhost:8000/docs
+
 ## Prérequis
 
 - Compte [Meta for Developers](https://developers.facebook.com/)

@@ -19,16 +19,26 @@ if not loaded_any:
     load_dotenv()
 
 class Settings:
+    # Supabase
     SUPABASE_URL: str | None = os.getenv("SUPABASE_URL")
     SUPABASE_KEY: str | None = os.getenv("SUPABASE_KEY")
+    
+    # WhatsApp (configuration de base)
     WHATSAPP_TOKEN: str | None = os.getenv("WHATSAPP_TOKEN")
     WHATSAPP_PHONE_ID: str | None = os.getenv("WHATSAPP_PHONE_ID")
     WHATSAPP_VERIFY_TOKEN: str | None = os.getenv("WHATSAPP_VERIFY_TOKEN")
     WHATSAPP_PHONE_NUMBER: str | None = os.getenv("WHATSAPP_PHONE_NUMBER")
+    
+    # Meta App (pour les fonctionnalités avancées de l'API)
+    META_APP_ID: str | None = os.getenv("META_APP_ID")
+    META_APP_SECRET: str | None = os.getenv("META_APP_SECRET")
+    
+    # Gemini Bot
     GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     HUMAN_BACKUP_NUMBER: str | None = os.getenv("HUMAN_BACKUP_NUMBER")
 
+    # Prometheus
     PROMETHEUS_ENABLED: bool = os.getenv("PROMETHEUS_ENABLED", "true").lower() == "true"
     PROMETHEUS_METRICS_PATH: str = os.getenv("PROMETHEUS_METRICS_PATH", "/metrics")
     PROMETHEUS_APP_LABEL: str = os.getenv("PROMETHEUS_APP_LABEL", "whatsapp_inbox_api")
