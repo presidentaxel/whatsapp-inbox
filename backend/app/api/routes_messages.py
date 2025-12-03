@@ -14,6 +14,7 @@ from app.services.message_service import (
     fetch_message_media_content,
     get_message_by_id,
     get_messages,
+    _download_and_store_media_async,
     remove_reaction,
     send_message,
     send_media_message_with_storage,
@@ -127,6 +128,52 @@ async def send_media_api_message(payload: dict, current_user: CurrentUser = Depe
         media_id=media_id,
         caption=caption
     )
+
+
+@router.post("/test-storage/{message_id}")
+async def test_storage_for_message(
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Endpoint de test pour forcer le téléchargement et stockage d'un média existant
+    Utile pour déboguer et stocker rétroactivement des médias
+    """
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+    
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    account = await get_account_by_id(conversation["account_id"])
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    
+    media_id = message.get("media_id")
+    if not media_id:
+        raise HTTPException(status_code=400, detail="message_has_no_media_id")
+    
+    message_type = message.get("message_type", "").lower()
+    if message_type not in ("image", "video", "audio", "document", "sticker"):
+        raise HTTPException(status_code=400, detail="message_is_not_a_media_type")
+    
+    # Importer la fonction depuis message_service
+    from app.services.message_service import _download_and_store_media_async
+    
+    # Forcer le téléchargement et stockage
+    await _download_and_store_media_async(
+        message_db_id=message_id,
+        media_id=media_id,
+        account=account,
+        mime_type=message.get("media_mime_type"),
+        filename=message.get("media_filename")
+    )
+    
+    return {"status": "processing", "message": "Media download and storage started in background"}
 
 
 @router.post("/send-interactive")

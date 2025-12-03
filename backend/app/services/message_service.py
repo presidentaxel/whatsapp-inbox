@@ -30,32 +30,136 @@ async def handle_incoming_message(data: dict):
     """
     Parse le webhook WhatsApp Cloud API et stocke les messages + statuts.
     """
-    print("Webhook received:", data)
+    try:
+        logger.info(f"📥 Webhook received: object={data.get('object')}, entries={len(data.get('entry', []))}")
+        
+        entries = data.get("entry", [])
+        if not entries:
+            logger.warning("⚠️ No entries in webhook payload")
+            return True
 
-    for entry in data.get("entry", []):
-        changes = entry.get("changes", [])
-        for change in changes:
-            value = change.get("value", {})
-            metadata = value.get("metadata", {})
-            account = await get_account_by_phone_number_id(metadata.get("phone_number_id"))
-            if not account:
-                print("Unknown account for payload; skipping", metadata)
-                continue
-
-            contacts_map = {c.get("wa_id"): c for c in value.get("contacts", []) if c.get("wa_id")}
+        for entry_idx, entry in enumerate(entries):
+            logger.info(f"📋 Processing entry {entry_idx + 1}/{len(entries)}")
+            changes = entry.get("changes", [])
             
-            # Debug: Afficher les informations de contact disponibles dans le webhook
-            if contacts_map:
-                logger.debug("📋 Contacts in webhook:")
-                for wa_id, contact_info in contacts_map.items():
-                    profile = contact_info.get("profile", {})
-                    logger.debug(f"  {wa_id}: name={profile.get('name')}, profile_data={json.dumps(profile)}")
+            if not changes:
+                logger.warning(f"⚠️ No changes in entry {entry_idx + 1}")
+                continue
+            
+            for change_idx, change in enumerate(changes):
+                try:
+                    value = change.get("value", {})
+                    if not value:
+                        logger.warning(f"⚠️ No value in change {change_idx + 1}")
+                        continue
+                    
+                    metadata = value.get("metadata", {})
+                    phone_number_id = metadata.get("phone_number_id")
+                    
+                    if not phone_number_id:
+                        # Log détaillé pour debug
+                        logger.error(
+                            f"❌ No phone_number_id in metadata! "
+                            f"metadata={json.dumps(metadata)}, "
+                            f"value_keys={list(value.keys())}, "
+                            f"change_field={change.get('field')}, "
+                            f"entry_id={entry.get('id')}"
+                        )
+                        
+                        # Essayer plusieurs stratégies pour trouver le phone_number_id
+                        # 1. Essayer entry.id (parfois c'est le WABA_ID, pas le phone_number_id)
+                        entry_id = entry.get("id")
+                        account = None
+                        
+                        if entry_id:
+                            logger.info(f"🔍 Strategy 1: Trying entry.id as phone_number_id: {entry_id}")
+                            account = await get_account_by_phone_number_id(entry_id)
+                            if account:
+                                logger.info(f"✅ Found account using entry.id: {account.get('id')}")
+                                phone_number_id = entry_id
+                        
+                        # 2. Si pas trouvé, essayer de chercher dans tous les comptes
+                        # et voir si un correspond (peut-être que le format a changé)
+                        if not account:
+                            logger.info(f"🔍 Strategy 2: Searching all accounts for matching pattern")
+                            from app.services.account_service import get_all_accounts
+                            all_accounts = await get_all_accounts()
+                            logger.info(f"   Checking {len(all_accounts)} accounts...")
+                            # Pour l'instant, on ne peut pas deviner, donc on continue
+                        
+                        if not account:
+                            logger.error(
+                                f"❌ Cannot find account - phone_number_id missing from webhook!\n"
+                                f"   Please check:\n"
+                                f"   1. Webhook structure in Meta Business\n"
+                                f"   2. If phone_number_id format has changed\n"
+                                f"   3. Use /webhook/whatsapp/debug endpoint to see full webhook"
+                            )
+                            continue
+                    else:
+                        logger.info(f"🔍 Looking for account with phone_number_id: {phone_number_id}")
+                        account = await get_account_by_phone_number_id(phone_number_id)
+                    
+                    if not account:
+                        # Log très détaillé pour comprendre le problème
+                        logger.error(
+                            f"❌ Unknown account for phone_number_id: {phone_number_id}\n"
+                            f"   metadata={json.dumps(metadata)}\n"
+                            f"   entry_id={entry.get('id')}\n"
+                            f"   change_field={change.get('field')}\n"
+                            f"   This phone_number_id is not in the database!"
+                        )
+                        # Lister tous les comptes disponibles pour debug
+                        from app.services.account_service import get_all_accounts
+                        all_accounts = await get_all_accounts()
+                        if all_accounts:
+                            logger.info(f"📋 Available accounts in database:")
+                            for acc in all_accounts:
+                                logger.info(f"   - {acc.get('name')}: phone_number_id={acc.get('phone_number_id')}")
+                        continue
+                    
+                    logger.info(f"✅ Account found: {account.get('id')} ({account.get('name', 'N/A')})")
 
-            for message in value.get("messages", []):
-                await _process_incoming_message(account["id"], message, contacts_map)
+                    contacts_map = {c.get("wa_id"): c for c in value.get("contacts", []) if c.get("wa_id")}
+                    
+                    # Debug: Afficher les informations de contact disponibles dans le webhook
+                    if contacts_map:
+                        logger.debug(f"📋 Contacts in webhook: {len(contacts_map)} contacts")
+                        for wa_id, contact_info in contacts_map.items():
+                            profile = contact_info.get("profile", {})
+                            logger.debug(f"  {wa_id}: name={profile.get('name')}, profile_data={json.dumps(profile)}")
 
-            for status in value.get("statuses", []):
-                await _process_status(status, account)
+                    messages = value.get("messages", [])
+                    logger.info(f"📨 Processing {len(messages)} messages")
+                    
+                    for msg_idx, message in enumerate(messages):
+                        try:
+                            logger.info(f"  Processing message {msg_idx + 1}/{len(messages)}: type={message.get('type')}, from={message.get('from')}")
+                            await _process_incoming_message(account["id"], message, contacts_map)
+                            logger.info(f"  ✅ Message {msg_idx + 1} processed successfully")
+                        except Exception as msg_error:
+                            logger.error(f"  ❌ Error processing message {msg_idx + 1}: {msg_error}", exc_info=True)
+                            # Continue avec les autres messages même si un échoue
+
+                    statuses = value.get("statuses", [])
+                    logger.info(f"📊 Processing {len(statuses)} statuses")
+                    
+                    for status_idx, status in enumerate(statuses):
+                        try:
+                            await _process_status(status, account)
+                            logger.debug(f"  ✅ Status {status_idx + 1} processed")
+                        except Exception as status_error:
+                            logger.error(f"  ❌ Error processing status {status_idx + 1}: {status_error}", exc_info=True)
+                            # Continue avec les autres statuts même si un échoue
+                            
+                except Exception as change_error:
+                    logger.error(f"❌ Error processing change {change_idx + 1}: {change_error}", exc_info=True)
+                    # Continue avec les autres changes même si un échoue
+                    
+    except Exception as e:
+        logger.error(f"❌ Critical error in handle_incoming_message: {e}", exc_info=True)
+        # Ne pas lever l'exception pour que WhatsApp ne réessaie pas indéfiniment
+        return True
 
     return True
 
@@ -63,156 +167,198 @@ async def handle_incoming_message(data: dict):
 async def _process_incoming_message(
     account_id: str, message: Dict[str, Any], contacts_map: Dict[str, Any]
 ):
-    wa_id = message.get("from")
-    if not wa_id:
-        return
-
-    contact_info = contacts_map.get(wa_id, {})
-    profile_name = (
-        contact_info.get("profile", {}).get("name")
-        if isinstance(contact_info.get("profile"), dict)
-        else None
-    )
-    
-    # Essayer de récupérer l'image de profil depuis les données du webhook
-    # Note: WhatsApp ne fournit généralement pas l'image directement dans le webhook
-    profile_picture_url = None
-    if isinstance(contact_info.get("profile"), dict):
-        profile_picture_url = contact_info.get("profile", {}).get("profile_picture_url")
-        if profile_picture_url:
-            logger.info(f"📸 Profile picture found in webhook for {wa_id}")
-
-    timestamp_iso = _timestamp_to_iso(message.get("timestamp"))
-    contact = await _upsert_contact(wa_id, profile_name, profile_picture_url)
-    conversation = await _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
-    
-    # Mettre à jour l'image de profil en arrière-plan si pas déjà disponible
-    # Note: WhatsApp ne fournit généralement pas l'image dans les webhooks,
-    # donc on essaie de la récupérer via l'API en arrière-plan
-    if not profile_picture_url:
-        logger.info(f"🔄 Queuing profile picture update for contact {contact['id']} ({wa_id})")
-        try:
-            # Utiliser create_task pour ne pas bloquer
-            task = asyncio.create_task(
-                queue_profile_picture_update(
-                    contact_id=contact["id"],
-                    whatsapp_number=wa_id,
-                    account_id=account_id,
-                    priority=True  # Priorité pour les nouveaux messages
-                )
-            )
-            # Ne pas attendre la tâche, laisser tourner en arrière-plan
-            # Ajouter un callback pour logger les erreurs sans bloquer
-            def log_result(t):
-                if t.exception() is None:
-                    logger.debug(f"✅ Profile picture update queued for {wa_id}")
-                else:
-                    logger.warning(f"❌ Profile picture update failed for {wa_id}: {t.exception()}")
-            task.add_done_callback(log_result)
-        except Exception as e:
-            # Ne pas faire échouer le traitement du message si la mise à jour de l'image échoue
-            logger.warning(f"❌ Failed to queue profile picture update for {wa_id}: {e}", exc_info=True)
-    msg_type_raw = message.get("type")
-    msg_type = msg_type_raw.lower() if isinstance(msg_type_raw, str) else msg_type_raw
-
-    # Les réactions sont traitées différemment - elles sont stockées dans message_reactions
-    if msg_type == "reaction":
-        reaction_data = message.get("reaction", {})
-        target_message_id = reaction_data.get("message_id")
-        emoji = reaction_data.get("emoji", "")
-        
-        if not target_message_id or not emoji:
-            logger.warning("Invalid reaction data: %s", reaction_data)
+    try:
+        wa_id = message.get("from")
+        if not wa_id:
+            logger.warning("⚠️ Message has no 'from' field, skipping")
             return
-        
-        # Trouver le message cible par son wa_message_id
-        target_message = await supabase_execute(
-            supabase.table("messages")
-            .select("id")
-            .eq("wa_message_id", target_message_id)
-            .limit(1)
+
+        contact_info = contacts_map.get(wa_id, {})
+        profile_name = (
+            contact_info.get("profile", {}).get("name")
+            if isinstance(contact_info.get("profile"), dict)
+            else None
         )
         
-        if not target_message.data:
-            logger.warning("Target message not found for reaction: %s", target_message_id)
-            return
+        # Essayer de récupérer l'image de profil depuis les données du webhook
+        # Note: WhatsApp ne fournit généralement pas l'image directement dans le webhook
+        profile_picture_url = None
+        if isinstance(contact_info.get("profile"), dict):
+            profile_picture_url = contact_info.get("profile", {}).get("profile_picture_url")
+            if profile_picture_url:
+                logger.info(f"📸 Profile picture found in webhook for {wa_id}")
+
+        timestamp_iso = _timestamp_to_iso(message.get("timestamp"))
+        contact = await _upsert_contact(wa_id, profile_name, profile_picture_url)
+        conversation = await _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
         
-        target_msg_id = target_message.data[0]["id"]
-        
-        # Si emoji est vide, c'est une suppression de réaction
-        if not emoji or emoji == "":
-            # Supprimer la réaction existante
-            await supabase_execute(
-                supabase.table("message_reactions")
-                .delete()
-                .eq("message_id", target_msg_id)
-                .eq("from_number", wa_id)
-            )
-        else:
-            # Ajouter ou mettre à jour la réaction
-            await supabase_execute(
-                supabase.table("message_reactions").upsert(
-                    {
-                        "message_id": target_msg_id,
-                        "wa_message_id": message.get("id"),
-                        "emoji": emoji,
-                        "from_number": wa_id,
-                    },
-                    on_conflict="message_id,from_number,emoji",
+        # Mettre à jour l'image de profil en arrière-plan si pas déjà disponible
+        # Note: WhatsApp ne fournit généralement pas l'image dans les webhooks,
+        # donc on essaie de la récupérer via l'API en arrière-plan
+        if not profile_picture_url:
+            logger.info(f"🔄 Queuing profile picture update for contact {contact['id']} ({wa_id})")
+            try:
+                # Utiliser create_task pour ne pas bloquer
+                task = asyncio.create_task(
+                    queue_profile_picture_update(
+                        contact_id=contact["id"],
+                        whatsapp_number=wa_id,
+                        account_id=account_id,
+                        priority=True  # Priorité pour les nouveaux messages
+                    )
                 )
+                # Ne pas attendre la tâche, laisser tourner en arrière-plan
+                # Ajouter un callback pour logger les erreurs sans bloquer
+                def log_result(t):
+                    if t.exception() is None:
+                        logger.debug(f"✅ Profile picture update queued for {wa_id}")
+                    else:
+                        logger.warning(f"❌ Profile picture update failed for {wa_id}: {t.exception()}")
+                task.add_done_callback(log_result)
+            except Exception as e:
+                # Ne pas faire échouer le traitement du message si la mise à jour de l'image échoue
+                logger.warning(f"❌ Failed to queue profile picture update for {wa_id}: {e}", exc_info=True)
+        msg_type_raw = message.get("type")
+        msg_type = msg_type_raw.lower() if isinstance(msg_type_raw, str) else msg_type_raw
+
+        # Les réactions sont traitées différemment - elles sont stockées dans message_reactions
+        if msg_type == "reaction":
+            reaction_data = message.get("reaction", {})
+            target_message_id = reaction_data.get("message_id")
+            emoji = reaction_data.get("emoji", "")
+            
+            if not target_message_id or not emoji:
+                logger.warning("Invalid reaction data: %s", reaction_data)
+                return
+            
+            # Trouver le message cible par son wa_message_id
+            target_message = await supabase_execute(
+                supabase.table("messages")
+                .select("id")
+                .eq("wa_message_id", target_message_id)
+                .limit(1)
             )
+            
+            if not target_message.data:
+                logger.warning("Target message not found for reaction: %s", target_message_id)
+                return
+            
+            target_msg_id = target_message.data[0]["id"]
+            
+            # Si emoji est vide, c'est une suppression de réaction
+            if not emoji or emoji == "":
+                # Supprimer la réaction existante
+                await supabase_execute(
+                    supabase.table("message_reactions")
+                    .delete()
+                    .eq("message_id", target_msg_id)
+                    .eq("from_number", wa_id)
+                )
+            else:
+                # Ajouter ou mettre à jour la réaction
+                await supabase_execute(
+                    supabase.table("message_reactions").upsert(
+                        {
+                            "message_id": target_msg_id,
+                            "wa_message_id": message.get("id"),
+                            "emoji": emoji,
+                            "from_number": wa_id,
+                        },
+                        on_conflict="message_id,from_number,emoji",
+                    )
+                )
+            
+            # Les réactions ne mettent pas à jour le timestamp de conversation ni le unread_count
+            # et ne déclenchent pas le bot
+            return
+
+        content_text = _extract_content_text(message)
+        media_meta = _extract_media_metadata(message)
+
+        # Insérer le message d'abord pour obtenir son ID
+        message_result = await supabase_execute(
+            supabase.table("messages").upsert(
+                {
+                    "conversation_id": conversation["id"],
+                    "direction": "inbound",
+                    "content_text": content_text,
+                    "timestamp": timestamp_iso,
+                    "wa_message_id": message.get("id"),
+                    "message_type": msg_type,
+                    "status": "received",
+                    "media_id": media_meta.get("media_id"),
+                    "media_mime_type": media_meta.get("media_mime_type"),
+                    "media_filename": media_meta.get("media_filename"),
+                },
+                on_conflict="wa_message_id",
+            ).select("id")
+        )
         
-        # Les réactions ne mettent pas à jour le timestamp de conversation ni le unread_count
-        # et ne déclenchent pas le bot
-        return
+        # Récupérer l'ID du message inséré
+        inserted_message = message_result.data[0] if message_result.data else None
+        message_db_id = inserted_message.get("id") if inserted_message else None
+        
+        # Si upsert n'a pas retourné l'ID (peut arriver avec on_conflict), chercher le message par wa_message_id
+        if not message_db_id and message.get("id"):
+            logger.warning(f"⚠️ Message ID not returned from upsert, searching by wa_message_id: {message.get('id')}")
+            existing_msg = await supabase_execute(
+                supabase.table("messages")
+                .select("id")
+                .eq("wa_message_id", message.get("id"))
+                .limit(1)
+            )
+            if existing_msg.data:
+                message_db_id = existing_msg.data[0].get("id")
+                logger.info(f"✅ Found existing message ID: {message_db_id}")
 
-    content_text = _extract_content_text(message)
-    media_meta = _extract_media_metadata(message)
-
-    # Insérer le message d'abord pour obtenir son ID
-    message_result = await supabase_execute(
-        supabase.table("messages").upsert(
-            {
-                "conversation_id": conversation["id"],
-                "direction": "inbound",
-                "content_text": content_text,
-                "timestamp": timestamp_iso,
-                "wa_message_id": message.get("id"),
-                "message_type": msg_type,
-                "status": "received",
-                "media_id": media_meta.get("media_id"),
-                "media_mime_type": media_meta.get("media_mime_type"),
-                "media_filename": media_meta.get("media_filename"),
-            },
-            on_conflict="wa_message_id",
-        ).select("id")
-    )
-    
-    # Récupérer l'ID du message inséré
-    inserted_message = message_result.data[0] if message_result.data else None
-    message_db_id = inserted_message.get("id") if inserted_message else None
-
-    # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
-    if message_db_id and media_meta.get("media_id") and msg_type in ("image", "video", "audio", "document", "sticker"):
-        logger.info(f"📥 Media detected: message_id={message_db_id}, media_id={media_meta.get('media_id')}, type={msg_type}")
-        # Récupérer l'account pour le token
-        account = await get_account_by_id(account_id)
-        if account:
-            logger.info(f"✅ Account found, starting async media download for message_id={message_db_id}")
-            asyncio.create_task(_download_and_store_media_async(
-                message_db_id=message_db_id,
-                media_id=media_meta.get("media_id"),
-                account=account,
-                mime_type=media_meta.get("media_mime_type"),
-                filename=media_meta.get("media_filename")
-            ))
+        # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
+        if message_db_id and media_meta.get("media_id") and msg_type in ("image", "video", "audio", "document", "sticker"):
+            logger.info(f"📥 Media detected: message_id={message_db_id}, media_id={media_meta.get('media_id')}, type={msg_type}")
+            # Récupérer l'account pour le token
+            account = await get_account_by_id(account_id)
+            if account:
+                logger.info(f"✅ Account found, starting async media download for message_id={message_db_id}")
+                
+                # Créer la tâche avec gestion d'erreur
+                task = asyncio.create_task(_download_and_store_media_async(
+                    message_db_id=message_db_id,
+                    media_id=media_meta.get("media_id"),
+                    account=account,
+                    mime_type=media_meta.get("media_mime_type"),
+                    filename=media_meta.get("media_filename")
+                ))
+                
+                # Ajouter un callback pour logger les erreurs
+                def log_task_result(t):
+                    try:
+                        if t.exception() is not None:
+                            logger.error(f"❌ Media download task failed for message_id={message_db_id}: {t.exception()}", exc_info=t.exception())
+                        else:
+                            logger.debug(f"✅ Media download task completed for message_id={message_db_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Error in task callback: {e}")
+                
+                task.add_done_callback(log_task_result)
+            else:
+                logger.warning(f"❌ Account not found for account_id={account_id}, cannot download media")
+        elif message_db_id and media_meta.get("media_id"):
+            logger.warning(f"⚠️ Media detected but type '{msg_type}' not in supported types for storage")
+        elif message_db_id:
+            logger.debug(f"ℹ️ Message {message_db_id} has no media_id")
         else:
-            logger.warning(f"❌ Account not found for account_id={account_id}, cannot download media")
+            logger.warning(f"⚠️ Could not determine message_db_id for media storage")
 
-    await _update_conversation_timestamp(conversation["id"], timestamp_iso)
-    await _increment_unread_count(conversation)
+        await _update_conversation_timestamp(conversation["id"], timestamp_iso)
+        await _increment_unread_count(conversation)
 
-    await _maybe_trigger_bot_reply(conversation["id"], content_text, contact, message.get("type"))
+        await _maybe_trigger_bot_reply(conversation["id"], content_text, contact, message.get("type"))
+        
+        logger.info(f"✅ Message processed successfully: conversation_id={conversation['id']}, type={msg_type}, from={wa_id}")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in _process_incoming_message (from={message.get('from', 'unknown')}, account_id={account_id}): {e}", exc_info=True)
+        # Ne pas lever l'exception pour ne pas bloquer le traitement des autres messages
+        # Mais on log l'erreur pour le débogage
 
 
 async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any]):
@@ -919,7 +1065,7 @@ async def send_media_message_with_storage(
     # Créer le texte à afficher
     display_text = caption if caption else f"[{media_type}]"
 
-    # Enregistrer le message dans la base
+    # Enregistrer le message dans la base d'abord pour obtenir son ID
     message_payload = {
         "conversation_id": conversation_id,
         "direction": "outbound",
@@ -932,9 +1078,52 @@ async def send_media_message_with_storage(
         "media_mime_type": None,  # Sera mis à jour si disponible
     }
 
-    await supabase_execute(
-        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+    message_result = await supabase_execute(
+        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id").select("id")
     )
+    
+    # Récupérer l'ID du message inséré
+    inserted_message = message_result.data[0] if message_result.data else None
+    message_db_id = inserted_message.get("id") if inserted_message else None
+    
+    # Si upsert n'a pas retourné l'ID, chercher par wa_message_id
+    if not message_db_id and message_id:
+        logger.warning(f"⚠️ Outbound message ID not returned from upsert, searching by wa_message_id: {message_id}")
+        existing_msg = await supabase_execute(
+            supabase.table("messages")
+            .select("id")
+            .eq("wa_message_id", message_id)
+            .limit(1)
+        )
+        if existing_msg.data:
+            message_db_id = existing_msg.data[0].get("id")
+            logger.info(f"✅ Found existing outbound message ID: {message_db_id}")
+    
+    # Télécharger et stocker le média dans Supabase Storage en arrière-plan
+    if message_db_id and media_id and media_type in ("image", "video", "audio", "document", "sticker"):
+        logger.info(f"📥 Outbound media detected: message_id={message_db_id}, media_id={media_id}, type={media_type}")
+        
+        # Créer la tâche avec gestion d'erreur
+        task = asyncio.create_task(_download_and_store_media_async(
+            message_db_id=message_db_id,
+            media_id=media_id,
+            account=account,
+            mime_type=None,  # Sera détecté depuis WhatsApp
+            filename=None
+        ))
+        
+        # Ajouter un callback pour logger les erreurs
+        def log_task_result(t):
+            try:
+                if t.exception() is not None:
+                    logger.error(f"❌ Outbound media download task failed for message_id={message_db_id}: {t.exception()}", exc_info=t.exception())
+                else:
+                    logger.debug(f"✅ Outbound media download task completed for message_id={message_db_id}")
+            except Exception as e:
+                logger.error(f"❌ Error in outbound task callback: {e}")
+        
+        task.add_done_callback(log_task_result)
+    
     await _update_conversation_timestamp(conversation_id, timestamp_iso)
 
     return {"status": "sent", "message_id": message_id}

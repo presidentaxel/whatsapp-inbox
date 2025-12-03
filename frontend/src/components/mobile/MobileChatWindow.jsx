@@ -62,6 +62,11 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
     getMessages(conversation.id)
       .then((res) => {
         const newMessages = res.data || [];
+        console.log(`📨 Refreshed messages for conversation ${conversation.id}: ${newMessages.length} messages`);
+        if (newMessages.length > 0) {
+          const latest = newMessages[newMessages.length - 1];
+          console.log(`   Latest message: ${latest.content_text?.substring(0, 50)}... (type: ${latest.message_type}, direction: ${latest.direction})`);
+        }
         setMessages(sortMessages(newMessages));
       })
       .catch(error => {

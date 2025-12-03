@@ -3,6 +3,7 @@ import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings, FiUserCh
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
 import { getContacts } from "../api/contactsApi";
+import { supabaseClient } from "../api/supabaseClient";
 import { clearAuthSession } from "../utils/secureStorage";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
 import MobileConversationsList from "../components/mobile/MobileConversationsList";
@@ -29,6 +30,19 @@ export default function MobileInboxPage({ onLogout }) {
   // Charger les comptes
   const loadAccounts = useCallback(async () => {
     try {
+      // Vérifier que la session est disponible avant d'appeler l'API
+      const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+      
+      if (sessionError) {
+        console.error("❌ Erreur session Supabase:", sessionError);
+        return;
+      }
+      
+      if (!session?.access_token) {
+        console.warn("⚠️ Pas de session ou token manquant, impossible de charger les comptes");
+        return;
+      }
+      
       const res = await getAccounts();
       const payload = Array.isArray(res?.data) ? res.data : res?.data?.data || [];
       setAccounts(payload);
@@ -47,7 +61,10 @@ export default function MobileInboxPage({ onLogout }) {
         }
       }
     } catch (error) {
-      console.error("Erreur chargement comptes:", error);
+      console.error("❌ Erreur chargement comptes:", error);
+      if (error.response?.status === 401) {
+        console.error("⚠️ 401 Unauthorized - La session a peut-être expiré. Vérifiez votre connexion.");
+      }
     }
   }, [activeAccount]);
 
@@ -55,10 +72,20 @@ export default function MobileInboxPage({ onLogout }) {
   const refreshConversations = useCallback(async (accountId) => {
     if (!accountId) return;
     try {
+      console.log(`🔄 Refreshing conversations for account: ${accountId}`);
       const res = await getConversations(accountId);
-      setConversations(res.data || []);
+      const newConversations = res.data || [];
+      console.log(`✅ Loaded ${newConversations.length} conversations`);
+      
+      // Log les conversations avec des messages non lus
+      const unread = newConversations.filter(c => c.unread_count > 0);
+      if (unread.length > 0) {
+        console.log(`📬 ${unread.length} conversation(s) avec messages non lus:`, unread.map(c => ({ id: c.id, name: c.contacts?.display_name || c.client_number, unread: c.unread_count })));
+      }
+      
+      setConversations(newConversations);
     } catch (error) {
-      console.error("Erreur chargement conversations:", error);
+      console.error("❌ Erreur chargement conversations:", error);
     }
   }, []);
 

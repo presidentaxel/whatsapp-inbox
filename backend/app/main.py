@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 # Routes existantes
 from app.api.routes_webhook import router as webhook_router
+from app.api.routes_webhook_setup import router as webhook_setup_router
 from app.api.routes_conversations import router as conversations_router
 from app.api.routes_messages import router as messages_router
 from app.api.routes_accounts import router as accounts_router
@@ -48,6 +49,7 @@ app.add_middleware(
 
 # Routes existantes
 app.include_router(webhook_router, prefix="/webhook")
+app.include_router(webhook_setup_router)
 app.include_router(auth_router, prefix="/auth")
 app.include_router(conversations_router, prefix="/conversations")
 app.include_router(messages_router, prefix="/messages")
