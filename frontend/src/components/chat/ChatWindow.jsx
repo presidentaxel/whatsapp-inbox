@@ -42,7 +42,11 @@ export default function ChatWindow({
       setMessages([]);
       return;
     }
-    getMessages(conversationId).then((res) => setMessages(sortMessages(res.data)));
+    getMessages(conversationId).then((res) => {
+      // Filtrer les réactions - elles ne doivent pas être affichées comme des messages normaux
+      const filtered = res.data.filter(msg => msg.message_type !== "reaction");
+      setMessages(sortMessages(filtered));
+    });
   }, [conversationId, sortMessages]);
 
   useEffect(() => {
@@ -88,6 +92,11 @@ export default function ChatWindow({
         (payload) => {
           const incoming = payload.new;
           
+          // Ignorer les réactions - elles ne doivent pas être affichées comme des messages normaux
+          if (incoming.message_type === "reaction") {
+            return;
+          }
+          
           // Afficher une notification si c'est un message entrant et que la fenêtre n'est pas active
           if (!incoming.from_me && !isWindowActive) {
             notifyNewMessage(incoming, conversation);
@@ -115,6 +124,18 @@ export default function ChatWindow({
           setMessages((prev) =>
             sortMessages(prev.map((msg) => (msg.id === updated.id ? updated : msg)))
           );
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "message_reactions",
+        },
+        () => {
+          // Rafraîchir les messages quand une réaction change
+          refreshMessages();
         }
       )
       .subscribe();
@@ -259,7 +280,12 @@ export default function ChatWindow({
       <div className="chat-body">
         <div className="messages">
           {filteredMessages.map((m) => (
-            <MessageBubble key={m.id} message={m} />
+            <MessageBubble 
+              key={m.id} 
+              message={m} 
+              conversation={conversation}
+              onReactionChange={refreshMessages}
+            />
           ))}
           <div ref={messagesEndRef} />
         </div>

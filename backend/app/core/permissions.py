@@ -232,7 +232,11 @@ def load_current_user(supabase_user: Any) -> CurrentUser:
         id=supabase_user.id,
         email=supabase_user.email,
         is_active=app_profile.get("is_active", True),
-        app_profile=app_profile,
+        app_profile={
+            **app_profile,
+            "display_name": app_profile.get("display_name"),
+            "profile_picture_url": app_profile.get("profile_picture_url"),
+        },
         permissions=permissions,
         supabase_user=supabase_user,
         role_assignments=role_assignments,

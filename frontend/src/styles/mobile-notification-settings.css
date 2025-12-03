@@ -1,0 +1,146 @@
+/* ============================================================================
+   Mobile Notification Settings
+   ============================================================================ */
+
+.mobile-notification-settings {
+  padding: 1rem 0;
+  color: #e9edef;
+}
+
+.mobile-notification-settings__section {
+  margin-bottom: 2rem;
+}
+
+.mobile-notification-settings__section-title {
+  color: #8696a0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  padding: 0 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.mobile-notification-settings__status-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid rgba(42, 57, 66, 0.3);
+}
+
+.mobile-notification-settings__status-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mobile-notification-settings__status-label {
+  color: #e9edef;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.mobile-notification-settings__status-value {
+  color: #8696a0;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mobile-notification-settings__status-icon {
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.mobile-notification-settings__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid rgba(42, 57, 66, 0.3);
+}
+
+.mobile-notification-settings__toggle-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.mobile-notification-settings__toggle-label {
+  color: #e9edef;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.mobile-notification-settings__toggle-description {
+  color: #8696a0;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.mobile-notification-settings__toggle-btn {
+  width: 50px;
+  height: 28px;
+  border-radius: 14px;
+  background: #2a3942;
+  border: none;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.mobile-notification-settings__toggle-btn.active {
+  background: #00a884;
+}
+
+.mobile-notification-settings__toggle-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s;
+}
+
+.mobile-notification-settings__toggle-btn.active .mobile-notification-settings__toggle-slider {
+  transform: translateX(22px);
+}
+
+.mobile-notification-settings__action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  color: #e9edef;
+  border-bottom: 1px solid rgba(42, 57, 66, 0.3);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mobile-notification-settings__action:active {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.mobile-notification-settings__action-btn {
+  background: transparent;
+  border: none;
+  color: #00a884;
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+
+.mobile-notification-settings__action-btn:active {
+  background: rgba(0, 168, 132, 0.1);
+}
+

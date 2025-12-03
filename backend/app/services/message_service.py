@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from app.services.account_service import (
     get_account_by_phone_number_id,
 )
 from app.services.conversation_service import get_conversation_by_id, set_conversation_bot_mode
+from app.services.profile_picture_service import queue_profile_picture_update
 
 logger = logging.getLogger("uvicorn.error").getChild("bot.message")
 logger.setLevel(logging.INFO)
@@ -41,6 +43,13 @@ async def handle_incoming_message(data: dict):
                 continue
 
             contacts_map = {c.get("wa_id"): c for c in value.get("contacts", []) if c.get("wa_id")}
+            
+            # Debug: Afficher les informations de contact disponibles dans le webhook
+            if contacts_map:
+                logger.debug("📋 Contacts in webhook:")
+                for wa_id, contact_info in contacts_map.items():
+                    profile = contact_info.get("profile", {})
+                    logger.debug(f"  {wa_id}: name={profile.get('name')}, profile_data={json.dumps(profile)}")
 
             for message in value.get("messages", []):
                 await _process_incoming_message(account["id"], message, contacts_map)
@@ -64,17 +73,104 @@ async def _process_incoming_message(
         if isinstance(contact_info.get("profile"), dict)
         else None
     )
+    
+    # Essayer de récupérer l'image de profil depuis les données du webhook
+    # Note: WhatsApp ne fournit généralement pas l'image directement dans le webhook
+    profile_picture_url = None
+    if isinstance(contact_info.get("profile"), dict):
+        profile_picture_url = contact_info.get("profile", {}).get("profile_picture_url")
+        if profile_picture_url:
+            logger.info(f"📸 Profile picture found in webhook for {wa_id}")
 
     timestamp_iso = _timestamp_to_iso(message.get("timestamp"))
-    contact = await _upsert_contact(wa_id, profile_name)
+    contact = await _upsert_contact(wa_id, profile_name, profile_picture_url)
     conversation = await _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
+    
+    # Mettre à jour l'image de profil en arrière-plan si pas déjà disponible
+    # Note: WhatsApp ne fournit généralement pas l'image dans les webhooks,
+    # donc on essaie de la récupérer via l'API en arrière-plan
+    if not profile_picture_url:
+        logger.info(f"🔄 Queuing profile picture update for contact {contact['id']} ({wa_id})")
+        try:
+            # Utiliser create_task pour ne pas bloquer
+            task = asyncio.create_task(
+                queue_profile_picture_update(
+                    contact_id=contact["id"],
+                    whatsapp_number=wa_id,
+                    account_id=account_id,
+                    priority=True  # Priorité pour les nouveaux messages
+                )
+            )
+            # Ne pas attendre la tâche, laisser tourner en arrière-plan
+            # Ajouter un callback pour logger les erreurs sans bloquer
+            def log_result(t):
+                if t.exception() is None:
+                    logger.debug(f"✅ Profile picture update queued for {wa_id}")
+                else:
+                    logger.warning(f"❌ Profile picture update failed for {wa_id}: {t.exception()}")
+            task.add_done_callback(log_result)
+        except Exception as e:
+            # Ne pas faire échouer le traitement du message si la mise à jour de l'image échoue
+            logger.warning(f"❌ Failed to queue profile picture update for {wa_id}: {e}", exc_info=True)
     msg_type_raw = message.get("type")
     msg_type = msg_type_raw.lower() if isinstance(msg_type_raw, str) else msg_type_raw
+
+    # Les réactions sont traitées différemment - elles sont stockées dans message_reactions
+    if msg_type == "reaction":
+        reaction_data = message.get("reaction", {})
+        target_message_id = reaction_data.get("message_id")
+        emoji = reaction_data.get("emoji", "")
+        
+        if not target_message_id or not emoji:
+            logger.warning("Invalid reaction data: %s", reaction_data)
+            return
+        
+        # Trouver le message cible par son wa_message_id
+        target_message = await supabase_execute(
+            supabase.table("messages")
+            .select("id")
+            .eq("wa_message_id", target_message_id)
+            .limit(1)
+        )
+        
+        if not target_message.data:
+            logger.warning("Target message not found for reaction: %s", target_message_id)
+            return
+        
+        target_msg_id = target_message.data[0]["id"]
+        
+        # Si emoji est vide, c'est une suppression de réaction
+        if not emoji or emoji == "":
+            # Supprimer la réaction existante
+            await supabase_execute(
+                supabase.table("message_reactions")
+                .delete()
+                .eq("message_id", target_msg_id)
+                .eq("from_number", wa_id)
+            )
+        else:
+            # Ajouter ou mettre à jour la réaction
+            await supabase_execute(
+                supabase.table("message_reactions").upsert(
+                    {
+                        "message_id": target_msg_id,
+                        "wa_message_id": message.get("id"),
+                        "emoji": emoji,
+                        "from_number": wa_id,
+                    },
+                    on_conflict="message_id,from_number,emoji",
+                )
+            )
+        
+        # Les réactions ne mettent pas à jour le timestamp de conversation ni le unread_count
+        # et ne déclenchent pas le bot
+        return
 
     content_text = _extract_content_text(message)
     media_meta = _extract_media_metadata(message)
 
-    await supabase_execute(
+    # Insérer le message d'abord pour obtenir son ID
+    message_result = await supabase_execute(
         supabase.table("messages").upsert(
             {
                 "conversation_id": conversation["id"],
@@ -89,8 +185,29 @@ async def _process_incoming_message(
                 "media_filename": media_meta.get("media_filename"),
             },
             on_conflict="wa_message_id",
-        )
+        ).select("id")
     )
+    
+    # Récupérer l'ID du message inséré
+    inserted_message = message_result.data[0] if message_result.data else None
+    message_db_id = inserted_message.get("id") if inserted_message else None
+
+    # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
+    if message_db_id and media_meta.get("media_id") and msg_type in ("image", "video", "audio", "document", "sticker"):
+        logger.info(f"📥 Media detected: message_id={message_db_id}, media_id={media_meta.get('media_id')}, type={msg_type}")
+        # Récupérer l'account pour le token
+        account = await get_account_by_id(account_id)
+        if account:
+            logger.info(f"✅ Account found, starting async media download for message_id={message_db_id}")
+            asyncio.create_task(_download_and_store_media_async(
+                message_db_id=message_db_id,
+                media_id=media_meta.get("media_id"),
+                account=account,
+                mime_type=media_meta.get("media_mime_type"),
+                filename=media_meta.get("media_filename")
+            ))
+        else:
+            logger.warning(f"❌ Account not found for account_id={account_id}, cannot download media")
 
     await _update_conversation_timestamp(conversation["id"], timestamp_iso)
     await _increment_unread_count(conversation)
@@ -138,7 +255,7 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
     if conversation.data:
         conv = conversation.data[0]
     else:
-        contact = await _upsert_contact(recipient_id, None)
+        contact = await _upsert_contact(recipient_id, None, None)
         conv = await _upsert_conversation(account["id"], contact["id"], recipient_id, timestamp_iso)
 
     await supabase_execute(
@@ -158,10 +275,19 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
     await _update_conversation_timestamp(conv["id"], timestamp_iso)
 
 
-async def _upsert_contact(wa_id: str, profile_name: Optional[str]):
+async def _upsert_contact(
+    wa_id: str, 
+    profile_name: Optional[str],
+    profile_picture_url: Optional[str] = None
+):
+    """
+    Crée ou met à jour un contact avec son nom et son image de profil
+    """
     payload = {"whatsapp_number": wa_id}
     if profile_name:
         payload["display_name"] = profile_name
+    if profile_picture_url:
+        payload["profile_picture_url"] = profile_picture_url
 
     res = await supabase_execute(
         supabase.table("contacts").upsert(payload, on_conflict="whatsapp_number")
@@ -212,6 +338,11 @@ def _extract_content_text(message: Dict[str, Any]) -> str:
     if msg_type == "document":
         caption = message.get("document", {}).get("caption")
         return caption or "[document]"
+
+    if msg_type == "reaction":
+        # Les réactions sont gérées séparément dans _process_incoming_message
+        # Ne pas retourner de contenu texte pour les réactions
+        return ""
 
     # fallback: conserver la totalité du payload
     return json.dumps(message)
@@ -347,7 +478,170 @@ async def get_messages(
     res = await supabase_execute(query)
     rows = res.data or []
     rows.reverse()
+    
+    # Récupérer les réactions pour chaque message
+    if rows:
+        message_ids = [msg["id"] for msg in rows]
+        reactions_res = await supabase_execute(
+            supabase.table("message_reactions")
+            .select("*")
+            .in_("message_id", message_ids)
+        )
+        reactions_by_message = {}
+        for reaction in reactions_res.data or []:
+            msg_id = reaction["message_id"]
+            if msg_id not in reactions_by_message:
+                reactions_by_message[msg_id] = []
+            reactions_by_message[msg_id].append(reaction)
+        
+        # Ajouter les réactions à chaque message
+        for msg in rows:
+            msg["reactions"] = reactions_by_message.get(msg["id"], [])
+    
     return rows
+
+
+async def add_reaction(message_id: str, emoji: str, from_number: str) -> Dict[str, Any]:
+    """
+    Ajoute une réaction à un message.
+    
+    Args:
+        message_id: ID du message dans la base de données
+        emoji: Emoji de la réaction
+        from_number: Numéro WhatsApp de la personne qui réagit
+    
+    Returns:
+        Dict avec le résultat de l'opération
+    """
+    # Vérifier que le message existe
+    message = await supabase_execute(
+        supabase.table("messages")
+        .select("id, wa_message_id, conversation_id")
+        .eq("id", message_id)
+        .limit(1)
+    )
+    
+    if not message.data:
+        return {"error": "message_not_found"}
+    
+    msg = message.data[0]
+    
+    # Ajouter la réaction
+    reaction = await supabase_execute(
+        supabase.table("message_reactions").upsert(
+            {
+                "message_id": message_id,
+                "emoji": emoji,
+                "from_number": from_number,
+            },
+            on_conflict="message_id,from_number,emoji",
+        )
+    )
+    
+    return {"success": True, "reaction": reaction.data[0] if reaction.data else None}
+
+
+async def remove_reaction(message_id: str, emoji: str, from_number: str) -> Dict[str, Any]:
+    """
+    Supprime une réaction d'un message.
+    
+    Args:
+        message_id: ID du message dans la base de données
+        emoji: Emoji de la réaction à supprimer
+        from_number: Numéro WhatsApp de la personne qui retire la réaction
+    
+    Returns:
+        Dict avec le résultat de l'opération
+    """
+    # Vérifier que le message existe
+    message = await supabase_execute(
+        supabase.table("messages")
+        .select("id")
+        .eq("id", message_id)
+        .limit(1)
+    )
+    
+    if not message.data:
+        return {"error": "message_not_found"}
+    
+    # Supprimer la réaction
+    await supabase_execute(
+        supabase.table("message_reactions")
+        .delete()
+        .eq("message_id", message_id)
+        .eq("emoji", emoji)
+        .eq("from_number", from_number)
+    )
+    
+    return {"success": True}
+
+
+async def send_reaction_to_whatsapp(
+    conversation_id: str,
+    target_wa_message_id: str,
+    emoji: str,
+) -> Dict[str, Any]:
+    """
+    Envoie une réaction via l'API WhatsApp.
+    
+    Args:
+        conversation_id: ID de la conversation
+        target_wa_message_id: ID WhatsApp du message cible
+        emoji: Emoji de la réaction (vide pour supprimer)
+    
+    Returns:
+        Dict avec le résultat de l'envoi
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        return {"error": "conversation_not_found"}
+    
+    account = await get_account_by_id(conversation["account_id"])
+    if not account:
+        return {"error": "account_not_found"}
+    
+    phone_id = account.get("phone_number_id") or settings.WHATSAPP_PHONE_ID
+    token = account.get("access_token") or settings.WHATSAPP_TOKEN
+    
+    if not phone_id or not token:
+        return {"error": "whatsapp_not_configured"}
+    
+    to_number = conversation["client_number"]
+    
+    body = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "reaction",
+        "reaction": {
+            "message_id": target_wa_message_id,
+            "emoji": emoji,
+        },
+    }
+    
+    try:
+        response = await _send_to_whatsapp_with_retry(phone_id, token, body)
+    except httpx.HTTPError as exc:
+        logger.error("WhatsApp reaction API error: %s", exc)
+        return {
+            "error": "whatsapp_api_error",
+            "details": str(exc),
+        }
+    
+    if response.is_error:
+        logger.error("WhatsApp reaction error: %s %s", response.status_code, response.text)
+        return {
+            "error": "whatsapp_api_error",
+            "status_code": response.status_code,
+            "details": response.text,
+        }
+    
+    response_json = response.json()
+    wa_message_id = response_json.get("messages", [{}])[0].get("id")
+    
+    return {
+        "success": True,
+        "wa_message_id": wa_message_id,
+    }
 
 
 @retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)
@@ -755,30 +1049,117 @@ async def fetch_message_media_content(
     # Utiliser le client pour médias (timeout plus long)
     client = await get_http_client_for_media()
     
-    # Récupérer les métadonnées du média
-    meta_resp = await client.get(
-        f"https://graph.facebook.com/v19.0/{media_id}",
-        headers={"Authorization": f"Bearer {token}"}
-    )
-    meta_resp.raise_for_status()
-    meta_json = meta_resp.json()
-    download_url = meta_json.get("url")
-    mime_type = (
-        meta_json.get("mime_type")
-        or message.get("media_mime_type")
-        or "application/octet-stream"
-    )
+    try:
+        # Récupérer les métadonnées du média
+        meta_resp = await client.get(
+            f"https://graph.facebook.com/v19.0/{media_id}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        meta_resp.raise_for_status()
+        meta_json = meta_resp.json()
+        download_url = meta_json.get("url")
+        mime_type = (
+            meta_json.get("mime_type")
+            or message.get("media_mime_type")
+            or "application/octet-stream"
+        )
 
-    if not download_url:
-        raise ValueError("media_url_missing")
+        if not download_url:
+            raise ValueError("media_url_missing")
 
-    # Télécharger le contenu du média avec le token dans le header
-    media_resp = await client.get(
-        download_url, 
-        headers={"Authorization": f"Bearer {token}"}
-    )
-    media_resp.raise_for_status()
-    content = media_resp.content
+        # Télécharger le contenu du média avec le token dans le header
+        media_resp = await client.get(
+            download_url, 
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        media_resp.raise_for_status()
+        content = media_resp.content
 
-    filename = message.get("media_filename") or meta_json.get("file_name")
-    return content, mime_type, filename
+        filename = message.get("media_filename") or meta_json.get("file_name")
+        return content, mime_type, filename
+    except httpx.HTTPStatusError as e:
+        # Gérer les erreurs HTTP de l'API WhatsApp
+        if e.response.status_code == 400:
+            # Média expiré ou invalide
+            raise ValueError("media_expired_or_invalid")
+        elif e.response.status_code == 401:
+            # Token invalide
+            raise ValueError("invalid_token")
+        elif e.response.status_code == 404:
+            # Média non trouvé
+            raise ValueError("media_not_found")
+        else:
+            # Autre erreur HTTP
+            raise ValueError(f"media_fetch_error_{e.response.status_code}")
+    except httpx.HTTPError as e:
+        # Erreur réseau ou autre
+        logger.error(f"HTTP error fetching media {media_id}: {e}")
+        raise ValueError("media_network_error")
+
+
+async def _download_and_store_media_async(
+    message_db_id: str,
+    media_id: str,
+    account: Dict[str, Any],
+    mime_type: Optional[str] = None,
+    filename: Optional[str] = None
+):
+    """
+    Télécharge un média depuis WhatsApp et le stocke dans Supabase Storage en arrière-plan.
+    Cette fonction est appelée de manière asynchrone pour ne pas bloquer le traitement du webhook.
+    """
+    logger.info(f"🚀 Starting media download and storage: message_id={message_db_id}, media_id={media_id}")
+    try:
+        from app.core.http_client import get_http_client_for_media
+        
+        token = account.get("access_token") or settings.WHATSAPP_TOKEN
+        if not token:
+            logger.warning(f"❌ Missing token for media download: message_id={message_db_id}")
+            return
+        
+        logger.info(f"📡 Fetching media metadata from WhatsApp: media_id={media_id}")
+        # Récupérer les métadonnées du média depuis WhatsApp
+        client = await get_http_client_for_media()
+        meta_resp = await client.get(
+            f"https://graph.facebook.com/v19.0/{media_id}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        meta_resp.raise_for_status()
+        meta_json = meta_resp.json()
+        download_url = meta_json.get("url")
+        
+        if not download_url:
+            logger.warning(f"❌ No download URL for media: message_id={message_db_id}, meta_json={meta_json}")
+            return
+        
+        logger.info(f"📥 Download URL obtained, downloading media: message_id={message_db_id}")
+        
+        # Détecter le mime_type
+        detected_mime_type = (
+            meta_json.get("mime_type")
+            or mime_type
+            or "application/octet-stream"
+        )
+        
+        logger.info(f"💾 Starting storage in Supabase: message_id={message_db_id}, mime_type={detected_mime_type}")
+        # Télécharger et stocker dans Supabase Storage
+        storage_url = await download_and_store_message_media(
+            message_id=message_db_id,
+            media_url=download_url,
+            content_type=detected_mime_type,
+            filename=filename or meta_json.get("file_name")
+        )
+        
+        if storage_url:
+            # Mettre à jour le message avec l'URL de stockage
+            await supabase_execute(
+                supabase.table("messages")
+                .update({"storage_url": storage_url})
+                .eq("id", message_db_id)
+            )
+            logger.info(f"✅ Media stored in Supabase Storage: message_id={message_db_id}, storage_url={storage_url}")
+        else:
+            logger.warning(f"❌ Failed to store media in Supabase Storage: message_id={message_db_id}")
+            
+    except Exception as e:
+        logger.error(f"❌ Error downloading and storing media: message_id={message_db_id}, error={e}", exc_info=True)

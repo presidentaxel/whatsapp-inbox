@@ -1,0 +1,23 @@
+-- ============================================
+-- Migration: Activation des politiques RLS
+-- Date: 2025-01-XX
+-- Description: Active Row Level Security sur toutes les tables
+--              avec des politiques basées sur le système RBAC existant
+-- ============================================
+--
+-- IMPORTANT: Cette migration ne casse pas le backend car il utilise service_role
+-- Le frontend sera protégé automatiquement
+-- ============================================
+--
+-- INSTRUCTIONS:
+-- Pour appliquer cette migration, exécutez le contenu du fichier:
+-- supabase/policies/rls_policies.sql
+--
+-- Dans Supabase Dashboard:
+-- 1. Allez dans SQL Editor
+-- 2. Ouvrez supabase/policies/rls_policies.sql
+-- 3. Copiez-collez tout le contenu
+-- 4. Exécutez la requête
+--
+-- ============================================
+

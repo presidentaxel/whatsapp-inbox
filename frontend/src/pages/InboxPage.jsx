@@ -17,6 +17,7 @@ import SettingsPanel from "../components/settings/SettingsPanel";
 import GeminiPanel from "../components/bot/GeminiPanel";
 import WhatsAppBusinessPanel from "../components/whatsapp/WhatsAppBusinessPanel";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
+import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
 
 
 export default function InboxPage() {
@@ -55,10 +56,21 @@ export default function InboxPage() {
           : [];
 
       setAccounts(payload);
+      
+      // Essayer de restaurer le compte sauvegardé
+      const savedAccountId = getActiveAccount();
+      const savedAccountExists = savedAccountId && payload.some((acc) => acc.id === savedAccountId);
+      
       setActiveAccount((prev) => {
+        // Si un compte est sauvegardé et existe toujours, l'utiliser
+        if (savedAccountExists) {
+          return savedAccountId;
+        }
+        // Sinon, garder le compte actuel s'il existe toujours
         if (prev && payload.some((acc) => acc.id === prev)) {
           return prev;
         }
+        // Sinon, prendre le premier compte disponible
         return payload[0]?.id ?? null;
       });
     } catch (error) {
@@ -84,6 +96,13 @@ export default function InboxPage() {
   useEffect(() => {
     loadAccounts();
   }, [loadAccounts]);
+
+  // Sauvegarder le compte actif quand il change
+  useEffect(() => {
+    if (activeAccount) {
+      saveActiveAccount(activeAccount);
+    }
+  }, [activeAccount]);
 
   useEffect(() => {
     if (!activeAccount) {

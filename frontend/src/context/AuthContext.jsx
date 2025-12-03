@@ -48,17 +48,35 @@ export function AuthProvider({ children }) {
     [profile]
   );
 
+  const refreshProfile = useCallback(() => {
+    if (!session) {
+      setProfile(null);
+      return Promise.resolve(null);
+    }
+    return api
+      .get("/auth/me")
+      .then((res) => {
+        setProfile(res.data);
+        return res.data;
+      })
+      .catch(() => {
+        setProfile(null);
+        return null;
+      });
+  }, [session]);
+
   const value = useMemo(
     () => ({
       session,
       loading,
       profile,
       hasPermission,
+      refreshProfile,
       signIn: (email, password) =>
         supabaseClient.auth.signInWithPassword({ email, password }),
       signOut: () => supabaseClient.auth.signOut(),
     }),
-    [session, loading, profile, hasPermission]
+    [session, loading, profile, hasPermission, refreshProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -14,4 +14,5 @@ export const setUserRoles = (userId, assignments) =>
   api.put(`/admin/users/${userId}/roles`, { assignments });
 export const setUserOverrides = (userId, overrides) =>
   api.put(`/admin/users/${userId}/overrides`, { overrides });
+export const deleteUser = (userId) => api.delete(`/admin/users/${userId}`);
 

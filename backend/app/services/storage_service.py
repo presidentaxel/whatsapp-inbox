@@ -1,0 +1,360 @@
+"""
+Service pour gérer le stockage d'images dans Supabase Storage
+"""
+import logging
+from typing import Optional
+from io import BytesIO
+from datetime import datetime, timedelta, timezone
+from starlette.concurrency import run_in_threadpool
+
+from app.core.db import supabase
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Nom du bucket pour les images de profil
+PROFILE_PICTURES_BUCKET = "profile-pictures"
+# Nom du bucket pour les médias de messages (images, vidéos, documents)
+MESSAGE_MEDIA_BUCKET = "message-media"
+
+
+async def upload_profile_picture(
+    contact_id: str,
+    image_data: bytes,
+    content_type: str = "image/jpeg"
+) -> Optional[str]:
+    """
+    Upload une image de profil dans Supabase Storage
+    
+    Args:
+        contact_id: ID du contact (utilisé comme nom de fichier)
+        image_data: Données binaires de l'image
+        content_type: Type MIME de l'image (défaut: image/jpeg)
+    
+    Returns:
+        URL publique de l'image ou None en cas d'erreur
+    """
+    try:
+        # Nom du fichier : contact_id.jpg
+        file_name = f"{contact_id}.jpg"
+        file_path = f"{file_name}"
+        
+        # Upload dans Supabase Storage
+        def _upload():
+            return supabase.storage.from_(PROFILE_PICTURES_BUCKET).upload(
+                path=file_path,
+                file=image_data,
+                file_options={
+                    "content-type": content_type,
+                    "upsert": "true"  # Remplacer si existe déjà
+                }
+            )
+        
+        result = await run_in_threadpool(_upload)
+        
+        if result:
+            # Récupérer l'URL publique
+            # L'URL publique est : {SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}
+            public_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/{PROFILE_PICTURES_BUCKET}/{file_path}"
+            
+            logger.info(f"✅ Profile picture uploaded to Supabase Storage: {public_url}")
+            return public_url
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error uploading profile picture to Supabase Storage: {e}", exc_info=True)
+        return None
+
+
+async def download_and_store_profile_picture(
+    contact_id: str,
+    image_url: str
+) -> Optional[str]:
+    """
+    Télécharge une image depuis une URL et la stocke dans Supabase Storage
+    
+    Args:
+        contact_id: ID du contact
+        image_url: URL de l'image à télécharger
+    
+    Returns:
+        URL publique Supabase de l'image ou None en cas d'erreur
+    """
+    try:
+        import httpx
+        
+        # Télécharger l'image
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(image_url)
+            response.raise_for_status()
+            
+            # Détecter le content-type
+            content_type = response.headers.get("content-type", "image/jpeg")
+            image_data = response.content
+            
+            # Upload dans Supabase Storage
+            return await upload_profile_picture(
+                contact_id=contact_id,
+                image_data=image_data,
+                content_type=content_type
+            )
+            
+    except Exception as e:
+        logger.error(f"❌ Error downloading and storing profile picture: {e}", exc_info=True)
+        return None
+
+
+async def delete_profile_picture(contact_id: str) -> bool:
+    """
+    Supprime une image de profil de Supabase Storage
+    
+    Args:
+        contact_id: ID du contact
+    
+    Returns:
+        True si supprimé avec succès, False sinon
+    """
+    try:
+        file_path = f"{contact_id}.jpg"
+        
+        def _delete():
+            return supabase.storage.from_(PROFILE_PICTURES_BUCKET).remove([file_path])
+        
+        result = await run_in_threadpool(_delete)
+        logger.info(f"✅ Profile picture deleted: {file_path}")
+        return True
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Error deleting profile picture: {e}")
+        return False
+
+
+# ============================================================================
+# MESSAGE MEDIA STORAGE
+# ============================================================================
+
+async def upload_message_media(
+    message_id: str,
+    media_data: bytes,
+    content_type: str,
+    filename: Optional[str] = None
+) -> Optional[str]:
+    """
+    Upload un média de message dans Supabase Storage
+    
+    Args:
+        message_id: ID du message (utilisé comme nom de fichier)
+        media_data: Données binaires du média
+        content_type: Type MIME du média
+        filename: Nom de fichier original (optionnel)
+    
+    Returns:
+        URL publique du média ou None en cas d'erreur
+    """
+    try:
+        # Déterminer l'extension selon le content-type
+        extension_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+            "video/mp4": ".mp4",
+            "video/quicktime": ".mov",
+            "audio/mpeg": ".mp3",
+            "audio/ogg": ".ogg",
+            "audio/wav": ".wav",
+            "application/pdf": ".pdf",
+            "application/msword": ".doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+        }
+        
+        extension = extension_map.get(content_type, "")
+        if filename:
+            # Extraire l'extension du nom de fichier si disponible
+            if "." in filename:
+                extension = "." + filename.rsplit(".", 1)[1]
+        
+        # Nom du fichier : message_id + extension
+        file_name = f"{message_id}{extension}"
+        file_path = file_name
+        
+        # Upload dans Supabase Storage
+        logger.info(f"📤 Uploading to bucket '{MESSAGE_MEDIA_BUCKET}': path={file_path}, size={len(media_data)} bytes")
+        
+        def _upload():
+            try:
+                result = supabase.storage.from_(MESSAGE_MEDIA_BUCKET).upload(
+                    path=file_path,
+                    file=media_data,
+                    file_options={
+                        "content-type": content_type,
+                        "upsert": "true"  # Remplacer si existe déjà
+                    }
+                )
+                logger.info(f"✅ Upload result: {result}")
+                return result
+            except Exception as upload_error:
+                logger.error(f"❌ Upload error in thread: {upload_error}", exc_info=True)
+                raise
+        
+        result = await run_in_threadpool(_upload)
+        
+        if result:
+            # Récupérer l'URL publique
+            public_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/{MESSAGE_MEDIA_BUCKET}/{file_path}"
+            
+            logger.info(f"✅ Message media uploaded to Supabase Storage: {public_url}")
+            return public_url
+        else:
+            logger.warning(f"⚠️ Upload returned None or empty result")
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error uploading message media to Supabase Storage: message_id={message_id}, error={e}", exc_info=True)
+        return None
+
+
+async def download_and_store_message_media(
+    message_id: str,
+    media_url: str,
+    content_type: str,
+    filename: Optional[str] = None
+) -> Optional[str]:
+    """
+    Télécharge un média depuis une URL (WhatsApp) et le stocke dans Supabase Storage
+    
+    Args:
+        message_id: ID du message
+        media_url: URL du média à télécharger (WhatsApp Graph API)
+        content_type: Type MIME du média
+        filename: Nom de fichier original (optionnel)
+    
+    Returns:
+        URL publique Supabase du média ou None en cas d'erreur
+    """
+    try:
+        import httpx
+        from app.core.http_client import get_http_client_for_media
+        
+        logger.info(f"📥 Downloading media from WhatsApp: message_id={message_id}, url_length={len(media_url)}")
+        
+        # Télécharger le média avec le client HTTP configuré
+        client = await get_http_client_for_media()
+        response = await client.get(media_url)
+        response.raise_for_status()
+        
+        # Utiliser le content-type fourni ou celui de la réponse
+        detected_content_type = response.headers.get("content-type", content_type)
+        media_data = response.content
+        
+        logger.info(f"✅ Media downloaded: message_id={message_id}, size={len(media_data)} bytes, content_type={detected_content_type}")
+        
+        # Upload dans Supabase Storage
+        logger.info(f"📤 Uploading to Supabase Storage: message_id={message_id}, bucket={MESSAGE_MEDIA_BUCKET}")
+        result = await upload_message_media(
+            message_id=message_id,
+            media_data=media_data,
+            content_type=detected_content_type,
+            filename=filename
+        )
+        
+        if result:
+            logger.info(f"✅ Media uploaded successfully: message_id={message_id}, storage_url={result}")
+        else:
+            logger.warning(f"❌ Media upload failed: message_id={message_id}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ Error downloading and storing message media: message_id={message_id}, error={e}", exc_info=True)
+        return None
+
+
+async def delete_message_media(message_id: str) -> bool:
+    """
+    Supprime un média de message de Supabase Storage
+    
+    Args:
+        message_id: ID du message
+    
+    Returns:
+        True si supprimé avec succès, False sinon
+    """
+    try:
+        # Chercher tous les fichiers avec ce message_id comme préfixe
+        def _list():
+            return supabase.storage.from_(MESSAGE_MEDIA_BUCKET).list()
+        
+        files = await run_in_threadpool(_list)
+        
+        # Trouver le fichier correspondant
+        file_to_delete = None
+        if files:
+            for file in files:
+                if file.get("name", "").startswith(message_id):
+                    file_to_delete = file.get("name")
+                    break
+        
+        if file_to_delete:
+            def _delete():
+                return supabase.storage.from_(MESSAGE_MEDIA_BUCKET).remove([file_to_delete])
+            
+            await run_in_threadpool(_delete)
+            logger.info(f"✅ Message media deleted: {file_to_delete}")
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Error deleting message media: {e}")
+        return False
+
+
+async def cleanup_old_media(days: int = 60) -> int:
+    """
+    Supprime les médias de plus de X jours de Supabase Storage
+    
+    Args:
+        days: Nombre de jours de rétention (défaut: 60)
+    
+    Returns:
+        Nombre de fichiers supprimés
+    """
+    try:
+        from app.core.db import supabase_execute
+        
+        # Calculer la date limite
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+        cutoff_iso = cutoff_date.isoformat()
+        
+        # Trouver tous les messages avec storage_url et timestamp < cutoff
+        query = (
+            supabase.table("messages")
+            .select("id, storage_url")
+            .not_.is_("storage_url", "null")
+            .lt("timestamp", cutoff_iso)
+        )
+        
+        result = await supabase_execute(query)
+        messages_to_clean = result.data or []
+        
+        deleted_count = 0
+        for msg in messages_to_clean:
+            if await delete_message_media(msg["id"]):
+                deleted_count += 1
+                # Mettre à jour le message pour retirer storage_url
+                await supabase_execute(
+                    supabase.table("messages")
+                    .update({"storage_url": None})
+                    .eq("id", msg["id"])
+                )
+        
+        logger.info(f"✅ Cleaned up {deleted_count} old media files")
+        return deleted_count
+        
+    except Exception as e:
+        logger.error(f"❌ Error cleaning up old media: {e}", exc_info=True)
+        return 0
+

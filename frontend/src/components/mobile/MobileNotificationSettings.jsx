@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
+import { FiCheck, FiX, FiAlertTriangle, FiPause, FiBell, FiAlertCircle } from 'react-icons/fi';
 import { 
   askForNotificationPermission, 
   areNotificationsEnabled, 
   showTestNotification 
 } from '../../utils/notifications';
+import '../../styles/mobile-notification-settings.css';
 
 /**
  * Composant mobile pour gérer les paramètres de notifications
@@ -53,7 +55,7 @@ export default function MobileNotificationSettings() {
       return {
         text: 'Non supportées',
         color: '#94a3b8',
-        icon: '⚠️'
+        icon: <FiAlertCircle />
       };
     }
 
@@ -62,19 +64,19 @@ export default function MobileNotificationSettings() {
         return {
           text: 'Activées',
           color: '#10b981',
-          icon: '✅'
+          icon: <FiCheck />
         };
       case 'denied':
         return {
           text: 'Bloquées',
           color: '#ef4444',
-          icon: '❌'
+          icon: <FiX />
         };
       default:
         return {
           text: 'Non configurées',
           color: '#f59e0b',
-          icon: '⏸️'
+          icon: <FiPause />
         };
     }
   };
@@ -82,165 +84,64 @@ export default function MobileNotificationSettings() {
   const status = getNotificationStatus();
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h2 style={styles.title}>🔔 Notifications</h2>
-        <p style={styles.subtitle}>
-          Recevez des notifications pour les nouveaux messages
-        </p>
-      </div>
-
-      <div style={styles.statusCard}>
-        <div style={styles.statusRow}>
-          <span style={styles.statusIcon}>{status.icon}</span>
-          <span style={{ ...styles.statusText, color: status.color }}>
-            {status.text}
-          </span>
+    <div className="mobile-notification-settings">
+      <div className="mobile-notification-settings__section">
+        <h2 className="mobile-notification-settings__section-title">État</h2>
+        <div className="mobile-notification-settings__status-item">
+          <div className="mobile-notification-settings__status-info">
+            <span className="mobile-notification-settings__status-label">Notifications</span>
+            <span className="mobile-notification-settings__status-value" style={{ color: status.color }}>
+              <span className="mobile-notification-settings__status-icon">{status.icon}</span>
+              {status.text}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div style={styles.buttonGroup}>
-        <button
-          onClick={handleToggleNotifications}
-          disabled={loading || Notification.permission === 'denied'}
-          style={{
-            ...styles.button,
-            ...styles.primaryButton,
-            ...(loading || Notification.permission === 'denied' ? styles.buttonDisabled : {})
-          }}
-        >
-          {loading ? '⏳ Chargement...' : notificationsEnabled ? '✅ Activées' : '🔔 Activer les notifications'}
-        </button>
-
-        {notificationsEnabled && (
+      <div className="mobile-notification-settings__section">
+        <h2 className="mobile-notification-settings__section-title">Paramètres</h2>
+        <div className="mobile-notification-settings__toggle">
+          <div className="mobile-notification-settings__toggle-info">
+            <span className="mobile-notification-settings__toggle-label">Activer les notifications</span>
+            <span className="mobile-notification-settings__toggle-description">
+              Recevez des notifications pour les nouveaux messages
+            </span>
+          </div>
           <button
-            onClick={handleTestNotification}
-            style={{ ...styles.button, ...styles.secondaryButton }}
+            className={`mobile-notification-settings__toggle-btn ${notificationsEnabled ? 'active' : ''}`}
+            onClick={handleToggleNotifications}
+            disabled={loading || Notification.permission === 'denied'}
           >
-            🧪 Tester une notification
+            <span className="mobile-notification-settings__toggle-slider"></span>
           </button>
-        )}
+        </div>
       </div>
 
-      {Notification.permission === 'denied' && (
-        <div style={styles.warningBox}>
-          <strong>⚠️ Notifications bloquées</strong>
-          <p style={styles.warningText}>
-            Pour les réactiver, allez dans les paramètres de votre navigateur.
-          </p>
+      {notificationsEnabled && (
+        <div className="mobile-notification-settings__section">
+          <h2 className="mobile-notification-settings__section-title">Actions</h2>
+          <div className="mobile-notification-settings__action" onClick={handleTestNotification}>
+            <span>Tester une notification</span>
+            <button className="mobile-notification-settings__action-btn">Tester</button>
+          </div>
         </div>
       )}
 
-      <div style={styles.infoBox}>
-        <h4 style={styles.infoTitle}>ℹ️ À propos</h4>
-        <ul style={styles.list}>
-          <li>✅ Fonctionne sur Android</li>
-          <li>⚠️ Support limité sur iOS</li>
-          <li>🔔 Notifications en temps réel</li>
-          <li>📱 Optimisé pour mobile</li>
-        </ul>
-      </div>
+      {Notification.permission === 'denied' && (
+        <div className="mobile-notification-settings__section">
+          <div className="mobile-notification-settings__status-item">
+            <div className="mobile-notification-settings__status-info">
+              <span className="mobile-notification-settings__status-label" style={{ color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <FiAlertTriangle /> Notifications bloquées
+              </span>
+              <span className="mobile-notification-settings__status-value">
+                Pour les réactiver, allez dans les paramètres de votre navigateur.
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
-const styles = {
-  container: {
-    padding: '20px',
-    paddingBottom: '100px', // Espace pour la nav en bas
-    minHeight: '100vh',
-    backgroundColor: '#0b141a',
-    color: '#e9edef'
-  },
-  header: {
-    marginBottom: '24px'
-  },
-  title: {
-    fontSize: '24px',
-    fontWeight: 'bold',
-    marginBottom: '8px',
-    color: '#e9edef'
-  },
-  subtitle: {
-    fontSize: '14px',
-    color: '#8696a0',
-    margin: 0
-  },
-  statusCard: {
-    backgroundColor: '#202c33',
-    borderRadius: '12px',
-    padding: '16px',
-    marginBottom: '20px'
-  },
-  statusRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px'
-  },
-  statusIcon: {
-    fontSize: '24px'
-  },
-  statusText: {
-    fontSize: '18px',
-    fontWeight: '600'
-  },
-  buttonGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-    marginBottom: '20px'
-  },
-  button: {
-    padding: '16px 24px',
-    fontSize: '16px',
-    fontWeight: '600',
-    border: 'none',
-    borderRadius: '12px',
-    cursor: 'pointer',
-    transition: 'all 0.2s',
-    width: '100%',
-    color: 'white'
-  },
-  primaryButton: {
-    backgroundColor: '#25d366'
-  },
-  secondaryButton: {
-    backgroundColor: '#00a884'
-  },
-  buttonDisabled: {
-    backgroundColor: '#2a3942',
-    cursor: 'not-allowed',
-    opacity: 0.6
-  },
-  warningBox: {
-    backgroundColor: '#2a3942',
-    border: '1px solid #f59e0b',
-    borderRadius: '12px',
-    padding: '16px',
-    marginBottom: '20px'
-  },
-  warningText: {
-    margin: '8px 0 0 0',
-    fontSize: '14px',
-    color: '#8696a0'
-  },
-  infoBox: {
-    backgroundColor: '#202c33',
-    borderRadius: '12px',
-    padding: '16px'
-  },
-  infoTitle: {
-    margin: '0 0 12px 0',
-    fontSize: '16px',
-    fontWeight: '600',
-    color: '#e9edef'
-  },
-  list: {
-    margin: '8px 0',
-    paddingLeft: '20px',
-    color: '#8696a0',
-    fontSize: '14px',
-    lineHeight: '1.8'
-  }
-};
 

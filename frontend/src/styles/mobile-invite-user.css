@@ -1,0 +1,174 @@
+.mobile-invite-user {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0b1014;
+  color: #e9edef;
+}
+
+.mobile-invite-user__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+.mobile-invite-user__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.mobile-invite-user__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.mobile-invite-user__field label {
+  color: #e9edef;
+  font-size: 0.95rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mobile-invite-user__field label svg {
+  font-size: 1rem;
+  color: #8696a0;
+}
+
+.mobile-invite-user__field input {
+  padding: 0.875rem 1rem;
+  background: #202c33;
+  border: 1px solid #2a3942;
+  border-radius: 8px;
+  color: #e9edef;
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.mobile-invite-user__field input:focus {
+  outline: none;
+  border-color: #00a884;
+}
+
+.mobile-invite-user__field input::placeholder {
+  color: #8696a0;
+}
+
+.mobile-invite-user__error {
+  padding: 0.875rem 1rem;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 8px;
+  color: #fca5a5;
+  font-size: 0.9rem;
+}
+
+.mobile-invite-user__success {
+  padding: 0.875rem 1rem;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  border-radius: 8px;
+  color: #6ee7b7;
+  font-size: 0.9rem;
+}
+
+.mobile-invite-user__submit {
+  padding: 1rem;
+  background: #00a884;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.mobile-invite-user__submit:hover:not(:disabled) {
+  background: #008069;
+}
+
+.mobile-invite-user__submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.mobile-invite-user__pending {
+  margin-top: 2rem;
+  padding-top: 2rem;
+  border-top: 1px solid #2a3942;
+}
+
+.mobile-invite-user__pending h2 {
+  color: #e9edef;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 1rem 0;
+}
+
+.mobile-invite-user__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-invite-user__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: #202c33;
+  border-radius: 8px;
+  gap: 1rem;
+}
+
+.mobile-invite-user__item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mobile-invite-user__item-email {
+  color: #e9edef;
+  font-size: 0.95rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.mobile-invite-user__item-date {
+  color: #8696a0;
+  font-size: 0.85rem;
+}
+
+.mobile-invite-user__resend-btn {
+  padding: 0.5rem;
+  background: transparent;
+  border: 1px solid #2a3942;
+  border-radius: 6px;
+  color: #00a884;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mobile-invite-user__resend-btn:hover:not(:disabled) {
+  background: rgba(0, 168, 132, 0.1);
+  border-color: #00a884;
+}
+
+.mobile-invite-user__resend-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+

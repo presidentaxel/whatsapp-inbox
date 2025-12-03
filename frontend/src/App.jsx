@@ -12,6 +12,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 // Mobile
 import MobileLoginPage from "./pages/MobileLoginPage";
 import MobileInboxPage from "./pages/MobileInboxPage";
+import RegisterPage from "./pages/RegisterPage";
 
 // Composant mobile (sans AuthProvider, gestion directe)
 function MobileApp() {
@@ -67,7 +68,11 @@ function MobileApp() {
     setSession(null);
   };
 
-  if (loading) {
+  // Vérifier si on est sur la page de register
+  const isRegisterPage = window.location.pathname === '/register' || 
+                         window.location.search.includes('type=invite');
+
+  if (loading && !isRegisterPage) {
     return (
       <div style={{
         height: '100vh',
@@ -82,6 +87,10 @@ function MobileApp() {
     );
   }
 
+  if (isRegisterPage) {
+    return <RegisterPage />;
+  }
+
   if (!session) {
     return <MobileLoginPage onLoginSuccess={handleLoginSuccess} />;
   }
@@ -93,8 +102,16 @@ function MobileApp() {
 function DesktopApp() {
   const { session, loading } = useAuth();
 
-  if (loading) {
+  // Vérifier si on est sur la page de register
+  const isRegisterPage = window.location.pathname === '/register' || 
+                         window.location.search.includes('type=invite');
+
+  if (loading && !isRegisterPage) {
     return <div className="loading-screen">Chargement...</div>;
+  }
+
+  if (isRegisterPage) {
+    return <RegisterPage />;
   }
 
   if (!session) {
