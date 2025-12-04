@@ -3,9 +3,9 @@ import { FiPlus, FiTrash2 } from "react-icons/fi";
 import { fetchBotProfile, saveBotProfile } from "../../api/botApi";
 
 const randomId = () =>
-  (typeof crypto !== "undefined" && crypto.randomUUID
+  typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
-    : `field_${Math.random().toString(36).slice(2, 10)}`);
+    : `field_${Math.random().toString(36).slice(2, 10)}`;
 
 const createOffer = () => ({ category: "", content: "", _id: randomId() });
 const createProcedure = () => ({ name: "", steps: "", _id: randomId() });
@@ -14,17 +14,19 @@ const createSpecialCase = () => ({ case: "", response: "", _id: randomId() });
 
 const emptyTemplate = {
   system_rules: {
-    language: "",
-    tone: "",
-    role: "assistant client / support",
-    mission: "Répondre clairement, professionnellement, sans inventer",
+    language: "Français",
+    tone: "Professionnel, clair, courtois, concis.",
+    role: "Assistant SAV WhatsApp pour l'entreprise.",
+    mission:
+      "Répondre aux clients uniquement à partir du playbook, sans inventer, en restant dans le périmètre de l'entreprise.",
     style:
-      "Commencer par la réponse directe puis ajouter les précisions utiles. Phrases courtes, listes à puces possibles, infos clés en gras.",
+      "Commencer par une phrase de réponse directe, puis ajouter quelques puces si nécessaire (étapes, conditions). Pas de gras ni de titres Markdown.",
     priority:
-      "1) Base de données / playbook 2) Liens autorisés 3) Historique conversationnel 4) Bon sens (sans inventer).",
+      "1) Playbook structuré (SYSTEM RULES, INFOS ENTREPRISE, OFFRES, CONDITIONS, CAS SPÉCIAUX, LIENS, ESCALADE, RÈGLES SPÉCIALES BOT) 2) Liens autorisés 3) Historique conversationnel 4) Bon sens (sans inventer).",
     response_policy:
-      'Si l’information n’est pas disponible → répondre “Je me renseigne auprès d’un collègue et je reviens vers vous au plus vite.” Ne jamais promettre tarifs/délais/disponibilités/réservations sans confirmation.',
-    security: "Aucune donnée sensible ou mot de passe. Respect légal & confidentialité.",
+      'Si une information est absente ou insuffisante dans le playbook, répondre uniquement : "Je me renseigne auprès d\'un collègue et je reviens vers vous au plus vite".',
+    security:
+      "Ne jamais demander ni accepter de mot de passe ou code de sécurité. Respect de la confidentialité et du RGPD.",
   },
   company: {
     name: "",
@@ -57,8 +59,58 @@ const emptyTemplate = {
     hours: "",
   },
   special_rules:
-    'Le bot reste concis. S’il manque une info → répondre “Je me renseigne auprès d’un collègue et je reviens vers vous au plus vite.” Ne jamais encourager un contact direct, proposer plutôt “Vous pouvez passer directement au bureau.”',
+    'Le bot reste concis et ne fait pas de small talk. Si une question nécessite une information absente du playbook, il répond uniquement : "Je me renseigne auprès d\'un collègue et je reviens vers vous au plus vite". Il n’encourage pas les appels ni les contacts directs ; il peut proposer : "Vous pouvez passer directement au bureau".',
 };
+
+const withInternalIds = (items, factory) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return [factory()];
+  }
+  return items.map((item) => ({
+    ...factory(),
+    ...item,
+    _id: item._id || randomId(),
+  }));
+};
+
+const ensureTemplateConfig = (incoming = {}) => ({
+  system_rules: {
+    ...emptyTemplate.system_rules,
+    ...(incoming.system_rules || {}),
+  },
+  company: {
+    ...emptyTemplate.company,
+    ...(incoming.company || {}),
+  },
+  offers: withInternalIds(incoming.offers, createOffer),
+  conditions: {
+    ...emptyTemplate.conditions,
+    ...(incoming.conditions || {}),
+  },
+  procedures: withInternalIds(incoming.procedures, createProcedure),
+  faq: withInternalIds(incoming.faq, createFaq),
+  special_cases: withInternalIds(incoming.special_cases, createSpecialCase),
+  links: {
+    ...emptyTemplate.links,
+    ...(incoming.links || {}),
+  },
+  escalation: {
+    ...emptyTemplate.escalation,
+    ...(incoming.escalation || {}),
+  },
+  special_rules:
+    typeof incoming.special_rules === "string" && incoming.special_rules.trim()
+      ? incoming.special_rules
+      : emptyTemplate.special_rules,
+});
+
+const stripTemplateIds = (template) => ({
+  ...template,
+  offers: template.offers.map(({ _id, ...rest }) => rest),
+  procedures: template.procedures.map(({ _id, ...rest }) => rest),
+  faq: template.faq.map(({ _id, ...rest }) => rest),
+  special_cases: template.special_cases.map(({ _id, ...rest }) => rest),
+});
 
 const createEmptyProfile = () => ({
   business_name: "",
@@ -70,49 +122,23 @@ const createEmptyProfile = () => ({
   template_config: ensureTemplateConfig({}),
 });
 
-const ensureTemplateConfig = (incoming = {}) => ({
-  system_rules: { ...emptyTemplate.system_rules, ...(incoming.system_rules || {}) },
-  company: { ...emptyTemplate.company, ...(incoming.company || {}) },
-  offers: withInternalIds(incoming.offers, createOffer),
-  conditions: { ...emptyTemplate.conditions, ...(incoming.conditions || {}) },
-  procedures: withInternalIds(incoming.procedures, createProcedure),
-  faq: withInternalIds(incoming.faq, createFaq),
-  special_cases: withInternalIds(incoming.special_cases, createSpecialCase),
-  links: { ...emptyTemplate.links, ...(incoming.links || {}) },
-  escalation: { ...emptyTemplate.escalation, ...(incoming.escalation || {}) },
-  special_rules: incoming.special_rules ?? emptyTemplate.special_rules,
-});
-
-function withInternalIds(items, factory) {
-  if (!Array.isArray(items) || !items.length) {
-    return [factory()];
-  }
-  return items.map((item) => ({
-    ...factory(),
-    ...item,
-    _id: item && item._id ? item._id : randomId(),
-  }));
-}
-
-const stripTemplateIds = (template) => ({
-  ...template,
-  offers: (template.offers || []).map(({ _id, ...rest }) => rest),
-  procedures: (template.procedures || []).map(({ _id, ...rest }) => rest),
-  faq: (template.faq || []).map(({ _id, ...rest }) => rest),
-  special_cases: (template.special_cases || []).map(({ _id, ...rest }) => rest),
-});
-
 const buildTemplatePreview = (template) => {
+  if (!template) return "";
+
   const lines = [];
+
   const sys = template.system_rules || {};
   if (Object.values(sys).some(Boolean)) {
     lines.push("## SYSTEM RULES");
-    Object.entries(sys).forEach(([key, value]) => {
-      if (value) {
-        const label = key.replace("_", " ");
-        lines.push(`${label} : ${value}`);
-      }
-    });
+    if (sys.role) lines.push(`Rôle : ${sys.role}`);
+    if (sys.mission) lines.push(`Mission : ${sys.mission}`);
+    if (sys.language) lines.push(`Langue par défaut : ${sys.language}`);
+    if (sys.tone) lines.push(`Ton attendu : ${sys.tone}`);
+    if (sys.style) lines.push(`Style de réponse : ${sys.style}`);
+    if (sys.priority) lines.push(`Priorité des sources : ${sys.priority}`);
+    if (sys.response_policy)
+      lines.push(`Politique de réponse : ${sys.response_policy}`);
+    if (sys.security) lines.push(`Règles de sécurité : ${sys.security}`);
   }
 
   const company = template.company || {};
@@ -120,10 +146,13 @@ const buildTemplatePreview = (template) => {
     lines.push("\n## INFOS ENTREPRISE");
     if (company.name) lines.push(`Nom entreprise : ${company.name}`);
     if (company.address) lines.push(`Adresse : ${company.address}`);
-    if (company.hours_block) lines.push(`Horaires : ${company.hours_block}`);
-    if (company.zone) lines.push(`Zone d’activité : ${company.zone}`);
-    if (company.rendezvous) lines.push(`Rendez-vous : ${company.rendezvous}`);
-    if (company.activity) lines.push(`Activité : ${company.activity}`);
+    if (company.hours_block)
+      lines.push(`Horaires détaillés : ${company.hours_block}`);
+    if (company.zone) lines.push(`Zone couverte : ${company.zone}`);
+    if (company.rendezvous)
+      lines.push(`Rendez-vous : ${company.rendezvous}`);
+    if (company.activity)
+      lines.push(`Activité principale : ${company.activity}`);
   }
 
   if (template.offers?.length) {
@@ -139,10 +168,14 @@ const buildTemplatePreview = (template) => {
   if (Object.values(conditions).some(Boolean)) {
     lines.push("\n## CONDITIONS & PROCÉDURES");
     if (conditions.zone) lines.push(`Zone : ${conditions.zone}`);
-    if (conditions.payment) lines.push(`Paiement / dépôt : ${conditions.payment}`);
-    if (conditions.engagement) lines.push(`Engagement : ${conditions.engagement}`);
-    if (conditions.restrictions) lines.push(`Restrictions : ${conditions.restrictions}`);
-    if (conditions.documents) lines.push(`Documents requis : ${conditions.documents}`);
+    if (conditions.payment)
+      lines.push(`Paiement / dépôt : ${conditions.payment}`);
+    if (conditions.engagement)
+      lines.push(`Engagement : ${conditions.engagement}`);
+    if (conditions.restrictions)
+      lines.push(`Restrictions : ${conditions.restrictions}`);
+    if (conditions.documents)
+      lines.push(`Documents requis : ${conditions.documents}`);
   }
 
   if (template.procedures?.length) {
@@ -184,7 +217,8 @@ const buildTemplatePreview = (template) => {
   const escalation = template.escalation || {};
   if (Object.values(escalation).some(Boolean)) {
     lines.push("\n## ESCALADE HUMAIN");
-    if (escalation.procedure) lines.push(`Procédure : ${escalation.procedure}`);
+    if (escalation.procedure)
+      lines.push(`Procédure : ${escalation.procedure}`);
     if (escalation.contact) lines.push(`Contact : ${escalation.contact}`);
     if (escalation.hours) lines.push(`Horaires : ${escalation.hours}`);
   }
@@ -485,12 +519,16 @@ export default function GeminiPanel({ accountId, accounts, onAccountChange }) {
               <div key={field.id} className="custom-field">
                 <input
                   value={field.label}
-                  onChange={(e) => updateCustomField(field.id, "label", e.target.value)}
+                  onChange={(e) =>
+                    updateCustomField(field.id, "label", e.target.value)
+                  }
                   placeholder="Label (ex. Numéro SAV)"
                 />
                 <input
                   value={field.value}
-                  onChange={(e) => updateCustomField(field.id, "value", e.target.value)}
+                  onChange={(e) =>
+                    updateCustomField(field.id, "value", e.target.value)
+                  }
                   placeholder="Valeur"
                 />
                 <button
@@ -538,7 +576,9 @@ function TemplateSections({
             Langue par défaut
             <input
               value={template.system_rules.language}
-              onChange={(e) => updateTemplateField("system_rules", "language", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("system_rules", "language", e.target.value)
+              }
               placeholder="Français"
             />
           </label>
@@ -546,8 +586,10 @@ function TemplateSections({
             Ton
             <input
               value={template.system_rules.tone}
-              onChange={(e) => updateTemplateField("system_rules", "tone", e.target.value)}
-              placeholder="Professionnel, chaleureux..."
+              onChange={(e) =>
+                updateTemplateField("system_rules", "tone", e.target.value)
+              }
+              placeholder="Professionnel, clair, courtois."
             />
           </label>
         </div>
@@ -555,7 +597,9 @@ function TemplateSections({
           Mission
           <textarea
             value={template.system_rules.mission}
-            onChange={(e) => updateTemplateField("system_rules", "mission", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("system_rules", "mission", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -563,7 +607,9 @@ function TemplateSections({
           Style
           <textarea
             value={template.system_rules.style}
-            onChange={(e) => updateTemplateField("system_rules", "style", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("system_rules", "style", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -571,7 +617,9 @@ function TemplateSections({
           Priorité des sources
           <textarea
             value={template.system_rules.priority}
-            onChange={(e) => updateTemplateField("system_rules", "priority", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("system_rules", "priority", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -589,7 +637,9 @@ function TemplateSections({
           Sécurité
           <textarea
             value={template.system_rules.security}
-            onChange={(e) => updateTemplateField("system_rules", "security", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("system_rules", "security", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -602,21 +652,28 @@ function TemplateSections({
             Nom entreprise
             <input
               value={template.company.name}
-              onChange={(e) => updateTemplateField("company", "name", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("company", "name", e.target.value)
+              }
             />
           </label>
           <label>
             Zone couverte / activité
             <input
               value={template.company.zone}
-              onChange={(e) => updateTemplateField("company", "zone", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("company", "zone", e.target.value)
+              }
+              placeholder="Ex : Île-de-France, location VTC + rattachement"
             />
           </label>
           <label>
             Rendez-vous
             <input
               value={template.company.rendezvous}
-              onChange={(e) => updateTemplateField("company", "rendezvous", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("company", "rendezvous", e.target.value)
+              }
               placeholder="Avec RDV / Sans RDV"
             />
           </label>
@@ -625,16 +682,20 @@ function TemplateSections({
           Horaires détaillés
           <textarea
             value={template.company.hours_block}
-            onChange={(e) => updateTemplateField("company", "hours_block", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("company", "hours_block", e.target.value)
+            }
             rows={2}
-            placeholder="Lun-Ven : 9h-18h..."
+            placeholder="Lun-Ven : 10h-18h. Sam-Dim : fermé."
           />
         </label>
         <label>
           Activité principale
           <textarea
             value={template.company.activity}
-            onChange={(e) => updateTemplateField("company", "activity", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("company", "activity", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -659,15 +720,22 @@ function TemplateSections({
                 <input
                   value={offer.category}
                   onChange={(e) =>
-                    updateTemplateListItem("offers", index, "category", e.target.value)
+                    updateTemplateListItem(
+                      "offers",
+                      index,
+                      "category",
+                      e.target.value
+                    )
                   }
-                  placeholder="Ex : Location courte durée"
+                  placeholder="Ex : Location sans engagement"
                 />
               </label>
               <button
                 type="button"
                 className="icon danger"
-                onClick={() => removeTemplateItem("offers", index, createOffer)}
+                onClick={() =>
+                  removeTemplateItem("offers", index, createOffer)
+                }
               >
                 <FiTrash2 />
               </button>
@@ -677,7 +745,12 @@ function TemplateSections({
               <textarea
                 value={offer.content}
                 onChange={(e) =>
-                  updateTemplateListItem("offers", index, "content", e.target.value)
+                  updateTemplateListItem(
+                    "offers",
+                    index,
+                    "content",
+                    e.target.value
+                  )
                 }
                 rows={3}
                 placeholder="Produit / Service | Prix | Conditions | Notes"
@@ -693,7 +766,9 @@ function TemplateSections({
           Zone / règles
           <textarea
             value={template.conditions.zone}
-            onChange={(e) => updateTemplateField("conditions", "zone", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("conditions", "zone", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -701,7 +776,9 @@ function TemplateSections({
           Paiement / dépôt
           <textarea
             value={template.conditions.payment}
-            onChange={(e) => updateTemplateField("conditions", "payment", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("conditions", "payment", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -752,31 +829,42 @@ function TemplateSections({
           <div className="bot-template-card" key={proc._id}>
             <div className="card-header">
               <label>
-                Nom
+                Nom de la procédure
                 <input
                   value={proc.name}
                   onChange={(e) =>
-                    updateTemplateListItem("procedures", index, "name", e.target.value)
+                    updateTemplateListItem(
+                      "procedures",
+                      index,
+                      "name",
+                      e.target.value
+                    )
                   }
                 />
               </label>
               <button
                 type="button"
                 className="icon danger"
-                onClick={() => removeTemplateItem("procedures", index, createProcedure)}
+                onClick={() =>
+                  removeTemplateItem("procedures", index, createProcedure)
+                }
               >
                 <FiTrash2 />
               </button>
             </div>
             <label>
-              Étapes
+              Étapes / script
               <textarea
                 value={proc.steps}
                 onChange={(e) =>
-                  updateTemplateListItem("procedures", index, "steps", e.target.value)
+                  updateTemplateListItem(
+                    "procedures",
+                    index,
+                    "steps",
+                    e.target.value
+                  )
                 }
                 rows={3}
-                placeholder="1) ... 2) ..."
               />
             </label>
           </div>
@@ -796,32 +884,46 @@ function TemplateSections({
         </div>
         {template.faq.map((item, index) => (
           <div className="bot-template-card" key={item._id}>
-            <label>
-              Question
-              <input
-                value={item.question}
-                onChange={(e) =>
-                  updateTemplateListItem("faq", index, "question", e.target.value)
+            <div className="card-header">
+              <label>
+                Question
+                <input
+                  value={item.question}
+                  onChange={(e) =>
+                    updateTemplateListItem(
+                      "faq",
+                      index,
+                      "question",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                className="icon danger"
+                onClick={() =>
+                  removeTemplateItem("faq", index, createFaq)
                 }
-              />
-            </label>
+              >
+                <FiTrash2 />
+              </button>
+            </div>
             <label>
               Réponse
               <textarea
                 value={item.answer}
                 onChange={(e) =>
-                  updateTemplateListItem("faq", index, "answer", e.target.value)
+                  updateTemplateListItem(
+                    "faq",
+                    index,
+                    "answer",
+                    e.target.value
+                  )
                 }
-                rows={2}
+                rows={3}
               />
             </label>
-            <button
-              type="button"
-              className="icon danger"
-              onClick={() => removeTemplateItem("faq", index, createFaq)}
-            >
-              <FiTrash2 />
-            </button>
           </div>
         ))}
       </section>
@@ -832,41 +934,59 @@ function TemplateSections({
           <button
             type="button"
             className="ghost"
-            onClick={() => addTemplateItem("special_cases", createSpecialCase)}
+            onClick={() =>
+              addTemplateItem("special_cases", createSpecialCase)
+            }
           >
             <FiPlus /> Ajouter un cas
           </button>
         </div>
         {template.special_cases.map((item, index) => (
           <div className="bot-template-card" key={item._id}>
-            <label>
-              Cas
-              <input
-                value={item.case}
-                onChange={(e) =>
-                  updateTemplateListItem("special_cases", index, "case", e.target.value)
+            <div className="card-header">
+              <label>
+                Condition (ex : hors IDF, week-end…)
+                <input
+                  value={item.case}
+                  onChange={(e) =>
+                    updateTemplateListItem(
+                      "special_cases",
+                      index,
+                      "case",
+                      e.target.value
+                    )
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                className="icon danger"
+                onClick={() =>
+                  removeTemplateItem(
+                    "special_cases",
+                    index,
+                    createSpecialCase
+                  )
                 }
-              />
-            </label>
+              >
+                <FiTrash2 />
+              </button>
+            </div>
             <label>
               Réponse type
               <textarea
                 value={item.response}
                 onChange={(e) =>
-                  updateTemplateListItem("special_cases", index, "response", e.target.value)
+                  updateTemplateListItem(
+                    "special_cases",
+                    index,
+                    "response",
+                    e.target.value
+                  )
                 }
-                rows={2}
+                rows={3}
               />
             </label>
-            <button
-              type="button"
-              className="icon danger"
-              onClick={() =>
-                removeTemplateItem("special_cases", index, createSpecialCase)
-              }
-            >
-              <FiTrash2 />
-            </button>
           </div>
         ))}
       </section>
@@ -878,28 +998,36 @@ function TemplateSections({
             Site
             <input
               value={template.links.site}
-              onChange={(e) => updateTemplateField("links", "site", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("links", "site", e.target.value)
+              }
             />
           </label>
           <label>
             Page produits
             <input
               value={template.links.products}
-              onChange={(e) => updateTemplateField("links", "products", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("links", "products", e.target.value)
+              }
             />
           </label>
           <label>
             Formulaire
             <input
               value={template.links.form}
-              onChange={(e) => updateTemplateField("links", "form", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("links", "form", e.target.value)
+              }
             />
           </label>
           <label>
             Autre lien
             <input
               value={template.links.other}
-              onChange={(e) => updateTemplateField("links", "other", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("links", "other", e.target.value)
+              }
             />
           </label>
         </div>
@@ -911,7 +1039,9 @@ function TemplateSections({
           Procédure
           <textarea
             value={template.escalation.procedure}
-            onChange={(e) => updateTemplateField("escalation", "procedure", e.target.value)}
+            onChange={(e) =>
+              updateTemplateField("escalation", "procedure", e.target.value)
+            }
             rows={2}
           />
         </label>
@@ -920,14 +1050,18 @@ function TemplateSections({
             Contact
             <input
               value={template.escalation.contact}
-              onChange={(e) => updateTemplateField("escalation", "contact", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("escalation", "contact", e.target.value)
+              }
             />
           </label>
           <label>
             Horaires du contact
             <input
               value={template.escalation.hours}
-              onChange={(e) => updateTemplateField("escalation", "hours", e.target.value)}
+              onChange={(e) =>
+                updateTemplateField("escalation", "hours", e.target.value)
+              }
             />
           </label>
         </div>
@@ -937,7 +1071,9 @@ function TemplateSections({
         <h4>10. Règles spéciales bot</h4>
         <textarea
           value={template.special_rules}
-          onChange={(e) => updateTemplateRoot("special_rules", e.target.value)}
+          onChange={(e) =>
+            updateTemplateRoot("special_rules", e.target.value)
+          }
           rows={4}
         />
       </section>

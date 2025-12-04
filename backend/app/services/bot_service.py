@@ -5,8 +5,7 @@ Version améliorée de bot_service avec:
 - Cache pour les bot profiles
 - Meilleure gestion des erreurs
 - Timeouts optimisés
-
-INSTRUCTIONS: Renommer ce fichier en bot_service.py pour l'activer
+- Prompt système structuré + PLAYBOOK délimité
 """
 from __future__ import annotations
 
@@ -61,7 +60,7 @@ def _normalize_profile(row: Dict[str, Any], account_id: str) -> Dict[str, Any]:
 async def get_bot_profile(account_id: str) -> Dict[str, Any]:
     """
     Récupère le bot profile avec cache (5 min TTL).
-    
+
     Les profils changent rarement, le cache évite des appels DB inutiles.
     """
     res = await supabase_execute(
@@ -116,10 +115,10 @@ async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[s
             on_conflict="account_id",
         )
     )
-    
+
     # Invalider le cache
     await invalidate_cache_pattern(f"bot_profile:{account_id}")
-    
+
     return await get_bot_profile(account_id)
 
 
@@ -127,36 +126,36 @@ async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[s
 async def _call_gemini_api(
     endpoint: str,
     payload: dict,
-    conversation_id: str
+    conversation_id: str,
 ) -> dict:
     """
     Appelle l'API Gemini avec retry sur les erreurs réseau.
-    
+
     Raises:
         httpx.HTTPStatusError: Si l'API retourne une erreur HTTP
         httpx.TimeoutException: Si le timeout est dépassé
         httpx.NetworkError: Si problème réseau
     """
     client = await get_http_client()
-    
-    # Timeout spécifique pour Gemini: plus court que l'original
+
+    # Timeout spécifique pour Gemini
     timeout = httpx.Timeout(
         connect=3.0,
         read=15.0,  # 15s au lieu de 45s
         write=5.0,
-        pool=5.0
+        pool=5.0,
     )
-    
+
     try:
         response = await client.post(
             endpoint,
             params={"key": settings.GEMINI_API_KEY},
             json=payload,
-            timeout=timeout
+            timeout=timeout,
         )
         response.raise_for_status()
         return response.json()
-    except httpx.TimeoutException as exc:
+    except httpx.TimeoutException:
         logger.error("Gemini timeout for conversation %s after 15s", conversation_id)
         raise
     except httpx.HTTPStatusError as exc:
@@ -166,7 +165,7 @@ async def _call_gemini_api(
             "Gemini API error for conversation %s (status=%s): %s",
             conversation_id,
             status_code,
-            body[:200]
+            body[:200],
         )
         raise
 
@@ -183,7 +182,7 @@ async def generate_bot_reply(
     - Retry automatique sur les erreurs réseau
     - Timeout réduit (15s au lieu de 45s)
     - Cache du bot profile
-    
+
     Returns:
         La réponse générée, ou None en cas d'erreur
     """
@@ -199,7 +198,7 @@ async def generate_bot_reply(
     # Récupérer le profil (avec cache)
     profile = await get_bot_profile(account_id)
     knowledge_text = _build_knowledge_text(profile, contact_name)
-    
+
     logger.info(
         "Gemini context for conversation %s: account=%s, message_len=%d, knowledge_len=%d",
         conversation_id,
@@ -207,7 +206,11 @@ async def generate_bot_reply(
         len(latest_user_message),
         len(knowledge_text),
     )
-    logger.debug("Gemini knowledge payload for %s:\n%s", conversation_id, _trim_for_log(knowledge_text))
+    logger.debug(
+        "Gemini knowledge payload for %s:\n%s",
+        conversation_id,
+        _trim_for_log(knowledge_text),
+    )
 
     # Récupérer l'historique
     history_rows = (
@@ -221,7 +224,7 @@ async def generate_bot_reply(
     ).data
     history_rows.reverse()
 
-    conversation_parts = []
+    conversation_parts: List[Dict[str, Any]] = []
     for row in history_rows:
         content = (row.get("content_text") or "").strip()
         if not content:
@@ -230,32 +233,62 @@ async def generate_bot_reply(
         conversation_parts.append({"role": role, "parts": [{"text": content}]})
 
     if not conversation_parts or conversation_parts[-1]["role"] != "user":
-        conversation_parts.append(
-            {"role": "user", "parts": [{"text": latest_user_message}]}
-        )
-    
+        conversation_parts.append({"role": "user", "parts": [{"text": latest_user_message}]})
+
     logger.debug(
         "Gemini conversation payload for %s:\n%s",
         conversation_id,
         _format_conversation_preview(conversation_parts),
     )
 
+    # Prompt système structuré
     instruction = (
-        "Tu es un assistant WhatsApp francophone pour l'entreprise décrite ci-dessous. "
-        "Réponds uniquement en texte. "
-        "Si un utilisateur envoie une image, vidéo, audio ou tout contenu non textuel, réponds : "
-        "\"Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ?\" "
-        "N'invente jamais de données. "
-        "Si une information manque dans le contexte, indique simplement que tu dois la vérifier et pose des questions pour avancer. "
-        "N'interromps pas la conversation tant que tu peux guider l'utilisateur ou collecter des détails utiles. "
-        "Ne promets jamais de tarifs, délais, disponibilités ou réservations sans confirmation explicite dans le contexte."
+        "Tu es un assistant SAV WhatsApp francophone pour une entreprise décrite dans un playbook structuré.\n"
+        "\n"
+        "Rôle et langue :\n"
+        "- Tu réponds uniquement en français.\n"
+        "- Tu joues le rôle d'un assistant service client / support pour l'entreprise décrite.\n"
+        "\n"
+        "Sources et vérité :\n"
+        "- Tes réponses doivent s'appuyer exclusivement sur les informations présentes dans le PLAYBOOK ci-dessous.\n"
+        "- Le PLAYBOOK est structuré en sections (par exemple : '## SYSTEM RULES', '## INFOS ENTREPRISE', "
+        "'## OFFRES / SERVICES', '## CONDITIONS & PROCÉDURES', '## CAS SPÉCIAUX', '## LIENS UTILES', "
+        "'## ESCALADE HUMAIN', '## RÈGLES SPÉCIALES BOT').\n"
+        "- Tu appliques en priorité les règles indiquées dans '## SYSTEM RULES' et '## RÈGLES SPÉCIALES BOT'.\n"
+        "- Tu n'inventes jamais de données, même si la question est proche de sujets couverts.\n"
+        "\n"
+        "Gestion des informations manquantes :\n"
+        "- Si la question de l'utilisateur nécessite une information absente ou insuffisante dans le PLAYBOOK, "
+        "tu ne réponds pas à la question et tu réponds uniquement : "
+        "\"Je me renseigne auprès d'un collègue et je reviens vers vous au plus vite\".\n"
+        "- Tu ne dis jamais que tu ne sais pas ou que l'information n'existe pas.\n"
+        "\n"
+        "Contenus non textuels :\n"
+        "- Si l'utilisateur envoie une image, une vidéo, un audio ou tout contenu non textuel, tu réponds : "
+        "\"Je ne peux pas lire ce type de contenu, pouvez-vous me l'écrire ?\".\n"
+        "\n"
+        "Contraintes métier :\n"
+        "- Tu ne promets jamais de tarifs, de délais, de disponibilités ou de réservations qui ne sont pas "
+        "explicitement décrits dans le PLAYBOOK.\n"
+        "- Tu n'encourages pas un appel direct ou un contact hors WhatsApp ; tu peux proposer : "
+        "\"Vous pouvez passer directement au bureau\" lorsque c'est pertinent.\n"
+        "- Si l'entreprise ne prend pas de réservations par WhatsApp, tu le rappelles clairement.\n"
+        "\n"
+        "Style de réponse :\n"
+        "- Commence toujours par une phrase de réponse directe et claire.\n"
+        "- Ensuite, ajoute seulement si c'est utile quelques puces avec les informations clés ou les étapes à suivre.\n"
+        "- Tu restes professionnel, courtois et concis.\n"
+        "- Tu n'utilises pas de mise en forme Markdown avec des doubles astérisques, ni de titres Markdown ; "
+        "uniquement du texte simple et des listes avec des tirets si nécessaire.\n"
     )
 
     payload = {
         "system_instruction": {
             "role": "system",
             "parts": [
-                {"text": f"{instruction}\n\nContexte entreprise:\n{knowledge_text}".strip()}
+                {
+                    "text": f"{instruction}\n\nContexte entreprise (PLAYBOOK):\n{knowledge_text}".strip()
+                }
             ],
         },
         "contents": conversation_parts,
@@ -266,36 +299,26 @@ async def generate_bot_reply(
     }
 
     endpoint = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{settings.GEMINI_MODEL}:generateContent"
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
     )
 
     try:
-        # Utiliser le circuit breaker
-        data = await gemini_circuit_breaker.call_async(
-            _call_gemini_api,
-            endpoint,
-            payload,
-            conversation_id
-        )
+        async with gemini_circuit_breaker:
+            data = await _call_gemini_api(endpoint, payload, conversation_id)
     except CircuitBreakerOpenError:
-        # Le circuit est ouvert, Gemini est considéré down
-        logger.error("Circuit breaker OPEN for Gemini, skipping call for conversation %s", conversation_id)
+        logger.warning(
+            "Gemini circuit breaker open, skipping generation for conversation %s",
+            conversation_id,
+        )
         return None
-    except httpx.TimeoutException:
-        logger.error("Gemini timeout for conversation %s", conversation_id)
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.error("Gemini call failed for %s: %s", conversation_id, str(exc))
         return None
-    except httpx.HTTPStatusError as exc:
-        status_code = exc.response.status_code
-        if status_code >= 500:
-            logger.error("Gemini server error for conversation %s", conversation_id)
-        else:
-            logger.warning("Gemini client error for conversation %s (status=%s)", conversation_id, status_code)
-        return None
-    except Exception as exc:
-        logger.error("Unexpected error calling Gemini for conversation %s: %s", conversation_id, exc)
+    except Exception as exc:  # sécurité
+        logger.exception("Unexpected error while calling Gemini for %s: %s", conversation_id, exc)
         return None
 
-    # Parser la réponse
     candidates: List[Dict[str, Any]] = data.get("candidates") or []
     for candidate in candidates:
         parts = candidate.get("content", {}).get("parts") or []
@@ -308,13 +331,22 @@ async def generate_bot_reply(
                     len(text),
                 )
                 return text
-    
+
     logger.info("Gemini returned no usable candidates for conversation %s", conversation_id)
     return None
 
 
 def _build_knowledge_text(profile: Dict[str, Any], contact_name: Optional[str]) -> str:
-    lines = []
+    """
+    Construit le PLAYBOOK à partir du template + des champs libres.
+
+    Le texte est encapsulé dans un bloc délimité:
+    ```PLAYBOOK
+    ...
+    ```
+    """
+    lines: List[str] = []
+
     template_text = _render_template_sections(profile.get("template_config") or {})
     if template_text:
         lines.append(template_text)
@@ -329,14 +361,18 @@ def _build_knowledge_text(profile: Dict[str, Any], contact_name: Optional[str]) 
         lines.append(f"Horaires: {profile['hours']}")
     if profile.get("knowledge_base"):
         lines.append(f"Informations additionnelles: {profile['knowledge_base']}")
+
     for field in profile.get("custom_fields", []):
         label = field.get("label")
         value = field.get("value")
         if label and value:
             lines.append(f"{label}: {value}")
+
     if contact_name:
         lines.append(f"Prenom/nom du contact: {contact_name}")
-    return "\n".join(lines) or "Aucune information fournie."
+
+    core = "\n".join(lines).strip() or "Aucune information fournie."
+    return f"```PLAYBOOK\n{core}\n```"
 
 
 def _trim_for_log(text: str, limit: int = 500) -> str:
@@ -405,7 +441,10 @@ def _sanitize_template_config(data: Any) -> Dict[str, Any]:
     sanitized["offers"] = _clean_items(data.get("offers"), ["category", "content"])
     sanitized["procedures"] = _clean_items(data.get("procedures"), ["name", "steps"])
     sanitized["faq"] = _clean_items(data.get("faq"), ["question", "answer"])
-    sanitized["special_cases"] = _clean_items(data.get("special_cases"), ["case", "response"])
+    sanitized["special_cases"] = _clean_items(
+        data.get("special_cases"),
+        ["case", "response"],
+    )
 
     sanitized["conditions"] = {
         "zone": _clean_str(data.get("conditions", {}).get("zone")),
@@ -438,6 +477,7 @@ def _render_template_sections(template: Dict[str, Any]) -> str:
         return ""
 
     lines: List[str] = []
+
     sys = template.get("system_rules") or {}
     if any(sys.values()):
         lines.append("## SYSTEM RULES")
@@ -558,5 +598,4 @@ def _render_template_sections(template: Dict[str, Any]) -> str:
         lines.append("\n## RÈGLES SPÉCIALES BOT")
         lines.append(template["special_rules"])
 
-    return "\n".join(filter(None, lines)).strip()
-
+    return "\n".join(filter(None, lines)).trim()
