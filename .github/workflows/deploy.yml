@@ -1,0 +1,96 @@
+name: Deploy to OVH Server
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    # Déploie sur n'importe quel changement (vous pouvez restreindre si besoin)
+    # paths:
+    #   - 'backend/**'
+    #   - 'frontend/**'
+    #   - 'deploy/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to OVH Server
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.OVH_HOST }}
+          username: ${{ secrets.OVH_USERNAME }}
+          key: ${{ secrets.OVH_SSH_KEY }}
+          port: ${{ secrets.OVH_SSH_PORT || 22 }}
+          script: |
+            set -e
+            
+            echo "🚀 Déploiement en cours..."
+            
+            # Trouver le projet
+            PROJECT_DIR=$(find ~ /opt /home /var/www -type d -name "whatsapp-inbox" 2>/dev/null | head -1)
+            if [ -z "$PROJECT_DIR" ]; then
+              COMPOSE_FILE=$(find / -name "docker-compose.prod.yml" 2>/dev/null | head -1)
+              if [ -n "$COMPOSE_FILE" ]; then
+                PROJECT_DIR=$(dirname "$COMPOSE_FILE")
+              else
+                echo "❌ Projet non trouvé"
+                exit 1
+              fi
+            fi
+            
+            cd "$PROJECT_DIR"
+            echo "📁 Répertoire: $(pwd)"
+            
+            # Pull les dernières modifications
+            echo "📥 Pull depuis GitHub..."
+            git fetch origin
+            CURRENT_BRANCH=$(git branch --show-current || echo "main")
+            git reset --hard "origin/$CURRENT_BRANCH" || git reset --hard origin/main || git reset --hard origin/master
+            
+            # Aller dans deploy
+            cd deploy 2>/dev/null || cd .
+            
+            # S'assurer que BACKEND_URL est défini
+            if [ -f .env ]; then
+              if ! grep -q "^BACKEND_URL=" .env; then
+                echo "BACKEND_URL=backend:8000" >> .env
+              fi
+            else
+              echo "BACKEND_URL=backend:8000" > .env
+            fi
+            
+            # Rebuild et redémarrer les services
+            echo "🔨 Rebuild des images..."
+            docker compose -f docker-compose.prod.yml build --no-cache backend frontend || true
+            
+            echo "🔄 Redémarrage des services..."
+            docker compose -f docker-compose.prod.yml up -d --force-recreate
+            
+            # Attendre que les services soient prêts
+            echo "⏳ Attente du démarrage..."
+            sleep 10
+            
+            # Vérifier la santé
+            echo "🏥 Vérification de la santé..."
+            for i in {1..30}; do
+              if docker compose -f docker-compose.prod.yml exec -T backend curl -f http://localhost:8000/health > /dev/null 2>&1; then
+                echo "✅ Backend est prêt"
+                break
+              fi
+              if [ $i -eq 30 ]; then
+                echo "⚠️  Backend n'est pas prêt après 30 tentatives"
+              fi
+              sleep 2
+            done
+            
+            # Afficher les logs récents
+            echo "📋 Logs récents:"
+            docker compose -f docker-compose.prod.yml logs --tail=20 backend | tail -10 || true
+            
+            echo "✅ Déploiement terminé!"
+
