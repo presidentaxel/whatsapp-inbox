@@ -59,7 +59,9 @@ app.include_router(contacts_router, prefix="/contacts")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(bot_router, prefix="/bot")
 app.include_router(health_router)
-app.include_router(diagnostics_router, prefix="/api")  # Sous /api pour éviter l'interception du frontend
+# Diagnostics accessible directement (pas sous /api car nginx intercepte)
+# Utiliser un préfixe spécial qui n'est pas intercepté
+app.include_router(diagnostics_router, prefix="/_diagnostics")
 app.include_router(app_router, prefix="/app")
 app.include_router(invitations_router, prefix="/invitations")
 app.include_router(users_router, prefix="/admin/users")

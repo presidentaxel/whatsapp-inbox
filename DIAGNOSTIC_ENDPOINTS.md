@@ -1,13 +1,13 @@
 # Endpoints de Diagnostic - Alternative aux logs Render
 
-Puisque vous n'avez pas accès aux logs Render, j'ai créé des endpoints de diagnostic accessibles via l'API pour voir l'état du système et les erreurs.
+Puisque vous n'avez pas accès aux logs Render, j'ai créé des endpoints de diagnostic accessibles directement (sans passer par le frontend).
 
 ## 📍 Endpoints disponibles
 
-**IMPORTANT :** Utilisez le préfixe `/api` pour accéder aux endpoints de diagnostic, sinon le frontend les intercepte.
+**IMPORTANT :** Utilisez le préfixe `/_diagnostics` pour accéder aux endpoints de diagnostic.
 
 ### 1. Diagnostic complet
-**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/full`
+**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/full`
 
 Retourne un diagnostic complet du système :
 - État des messages (entrants/sortants)
@@ -17,11 +17,11 @@ Retourne un diagnostic complet du système :
 
 **Exemple :**
 ```bash
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/full
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/full
 ```
 
 ### 2. État des webhooks
-**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/webhook-status`
+**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/webhook-status`
 
 Voir l'état des webhooks et des messages récents :
 - Nombre de messages entrants/sortants
@@ -31,11 +31,11 @@ Voir l'état des webhooks et des messages récents :
 
 **Exemple :**
 ```bash
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/webhook-status
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/webhook-status
 ```
 
 ### 3. Erreurs récentes
-**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/recent-errors`
+**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/recent-errors`
 
 Voir les dernières erreurs enregistrées (stockées en mémoire) :
 - Type d'erreur
@@ -45,27 +45,27 @@ Voir les dernières erreurs enregistrées (stockées en mémoire) :
 
 **Exemple :**
 ```bash
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/recent-errors
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/recent-errors
 ```
 
 ### 4. Test de webhook
-**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/test-webhook`
+**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/test-webhook`
 
 Retourne un exemple de payload pour tester un webhook, avec la commande curl prête à l'emploi.
 
 **Exemple :**
 ```bash
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/test-webhook
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/test-webhook
 ```
 
 ### 5. Connexion base de données
-**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/database-connection`
+**GET** `https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/database-connection`
 
 Teste la connexion à la base de données.
 
 **Exemple :**
 ```bash
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/database-connection
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/database-connection
 ```
 
 ## 🔍 Comment utiliser
@@ -74,22 +74,22 @@ curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/database-connect
 
 Ouvrez simplement l'URL dans votre navigateur :
 ```
-https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/full
+https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/full
 ```
 
-**Note :** Utilisez `/api/diagnostics/...` et non `/diagnostics/...` pour éviter que le frontend intercepte la requête.
+**Note :** Utilisez `/_diagnostics/...` avec le préfixe `_diagnostics` (avec underscore) pour éviter que le frontend intercepte la requête.
 
 ### Via curl (terminal)
 
 ```bash
 # Diagnostic complet
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/full | jq
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/full | jq
 
 # État des webhooks
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/webhook-status | jq
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/webhook-status | jq
 
 # Erreurs récentes
-curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/recent-errors | jq
+curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/recent-errors | jq
 ```
 
 ### Via un script Python
@@ -98,7 +98,7 @@ curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/recent-errors | 
 import httpx
 import json
 
-response = httpx.get("https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/full")
+response = httpx.get("https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/full")
 data = response.json()
 print(json.dumps(data, indent=2))
 ```
@@ -130,32 +130,35 @@ print(json.dumps(data, indent=2))
 
 1. **Vérifier l'état général :**
    ```bash
-   curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/full
+   curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/full
    ```
 
 2. **Voir les erreurs récentes :**
    ```bash
-   curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/recent-errors
+   curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/recent-errors
    ```
 
 3. **Vérifier les messages :**
    ```bash
-   curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/webhook-status
+   curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/webhook-status
    ```
 
 4. **Tester un webhook :**
    ```bash
    # Récupérer l'exemple de payload
-   curl https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/test-webhook
+   curl https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/test-webhook
    
    # Utiliser la commande curl fournie pour tester
    ```
 
-## ⚠️ Important : Utiliser `/api/` 
+## ⚠️ Important : Utiliser `/_diagnostics/` 
 
-Tous les endpoints de diagnostic doivent être appelés avec le préfixe `/api/` :
-- ✅ `/api/diagnostics/full`
+Tous les endpoints de diagnostic doivent être appelés avec le préfixe `/_diagnostics/` :
+- ✅ `/_diagnostics/full`
+- ❌ `/api/diagnostics/full` (sera intercepté par le frontend)
 - ❌ `/diagnostics/full` (sera intercepté par le frontend)
+
+Le préfixe `_diagnostics` (avec underscore) est choisi pour éviter les conflits avec les routes du frontend.
 
 ## ⚠️ Limitations
 
@@ -168,11 +171,11 @@ Tous les endpoints de diagnostic doivent être appelés avec le préfixe `/api/`
 Une fois que vous avez pushé ces modifications :
 
 1. Attendez que Render déploie
-2. Testez les endpoints de diagnostic avec `/api/` :
+2. Testez les endpoints de diagnostic avec `/_diagnostics/` :
    ```
-   https://whatsapp.lamaisonduchauffeurvtc.fr/api/diagnostics/full
+   https://whatsapp.lamaisonduchauffeurvtc.fr/_diagnostics/full
    ```
 3. Envoyez un webhook de test depuis Meta
-4. Vérifiez immédiatement `/api/diagnostics/recent-errors` pour voir l'erreur exacte
+4. Vérifiez immédiatement `/_diagnostics/recent-errors` pour voir l'erreur exacte
 
 Cela vous permettra de voir exactement où et pourquoi les webhooks échouent sans avoir accès aux logs Render !
