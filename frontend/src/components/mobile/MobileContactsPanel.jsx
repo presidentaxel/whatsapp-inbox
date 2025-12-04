@@ -1,9 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FiSearch, FiUserPlus } from "react-icons/fi";
 import { formatPhoneNumber } from "../../utils/formatPhone";
+import MobileContactForm from "./MobileContactForm";
+import MobileContactDetail from "./MobileContactDetail";
 
-export default function MobileContactsPanel({ contacts, onRefresh }) {
+export default function MobileContactsPanel({ contacts, activeAccount, onRefresh, initialContact }) {
   const [searchTerm, setSearchTerm] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [selectedContact, setSelectedContact] = useState(initialContact || null);
 
   const filteredContacts = contacts.filter(contact => {
     if (!searchTerm) return true;
@@ -13,11 +17,71 @@ export default function MobileContactsPanel({ contacts, onRefresh }) {
     return name.includes(term) || phone.includes(term);
   });
 
+  const handleContactCreated = () => {
+    setShowForm(false);
+    if (onRefresh) {
+      onRefresh();
+    }
+  };
+
+  const handleContactUpdated = () => {
+    setSelectedContact(null);
+    if (onRefresh) {
+      onRefresh();
+    }
+  };
+
+  const handleContactDeleted = () => {
+    setSelectedContact(null);
+    if (onRefresh) {
+      onRefresh();
+    }
+  };
+
+  // Si un contact initial est fourni, l'afficher
+  useEffect(() => {
+    if (initialContact) {
+      setSelectedContact(initialContact);
+    }
+  }, [initialContact]);
+
+  // Si un contact initial est fourni, l'afficher
+  useEffect(() => {
+    if (initialContact) {
+      setSelectedContact(initialContact);
+    }
+  }, [initialContact]);
+
+  if (showForm) {
+    return (
+      <MobileContactForm
+        onBack={() => setShowForm(false)}
+        onCreated={handleContactCreated}
+      />
+    );
+  }
+
+  if (selectedContact) {
+    return (
+      <MobileContactDetail
+        contact={selectedContact}
+        activeAccount={activeAccount}
+        onBack={() => setSelectedContact(null)}
+        onUpdate={handleContactUpdated}
+        onDelete={handleContactDeleted}
+      />
+    );
+  }
+
   return (
     <div className="mobile-contacts">
       <header className="mobile-panel-header">
         <h1>Contacts</h1>
-        <button className="icon-btn" title="Nouveau contact">
+        <button 
+          className="icon-btn" 
+          title="Nouveau contact"
+          onClick={() => setShowForm(true)}
+        >
           <FiUserPlus />
         </button>
       </header>
@@ -41,7 +105,11 @@ export default function MobileContactsPanel({ contacts, onRefresh }) {
           </div>
         ) : (
           filteredContacts.map((contact) => (
-            <div key={contact.id} className="mobile-contact-item">
+            <div 
+              key={contact.id} 
+              className="mobile-contact-item"
+              onClick={() => setSelectedContact(contact)}
+            >
               <div className="mobile-contact-item__avatar">
                 {(contact.display_name || "?").charAt(0).toUpperCase()}
               </div>

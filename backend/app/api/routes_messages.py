@@ -1,17 +1,25 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.core.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services.account_service import get_account_by_id
 from app.services.conversation_service import get_conversation_by_id
 from app.services.message_service import (
+    add_reaction,
     fetch_message_media_content,
     get_message_by_id,
     get_messages,
+    _download_and_store_media_async,
+    remove_reaction,
     send_message,
     send_media_message_with_storage,
     send_interactive_message_with_storage,
+    send_reaction_to_whatsapp,
 )
 
 router = APIRouter()
@@ -51,10 +59,22 @@ async def fetch_message_media(
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
 
+    # Vérifier d'abord si le média est stocké dans Supabase Storage
+    storage_url = message.get("storage_url")
+    if storage_url:
+        # Rediriger vers l'URL Supabase Storage (plus fiable que de servir le blob)
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=storage_url, status_code=302)
+    
+    # Sinon, essayer de récupérer depuis WhatsApp
     try:
         content, mime_type, filename = await fetch_message_media_content(message, account)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        error_detail = str(exc)
+        # Si le média est expiré ou invalide, retourner 410 Gone au lieu de 400
+        if error_detail in ("media_expired_or_invalid", "media_not_found"):
+            raise HTTPException(status_code=410, detail=error_detail)
+        raise HTTPException(status_code=400, detail=error_detail)
 
     headers = {}
     if filename:
@@ -108,6 +128,52 @@ async def send_media_api_message(payload: dict, current_user: CurrentUser = Depe
         media_id=media_id,
         caption=caption
     )
+
+
+@router.post("/test-storage/{message_id}")
+async def test_storage_for_message(
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Endpoint de test pour forcer le téléchargement et stockage d'un média existant
+    Utile pour déboguer et stocker rétroactivement des médias
+    """
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+    
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    account = await get_account_by_id(conversation["account_id"])
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    
+    media_id = message.get("media_id")
+    if not media_id:
+        raise HTTPException(status_code=400, detail="message_has_no_media_id")
+    
+    message_type = message.get("message_type", "").lower()
+    if message_type not in ("image", "video", "audio", "document", "sticker"):
+        raise HTTPException(status_code=400, detail="message_is_not_a_media_type")
+    
+    # Importer la fonction depuis message_service
+    from app.services.message_service import _download_and_store_media_async
+    
+    # Forcer le téléchargement et stockage
+    await _download_and_store_media_async(
+        message_db_id=message_id,
+        media_id=media_id,
+        account=account,
+        mime_type=message.get("media_mime_type"),
+        filename=message.get("media_filename")
+    )
+    
+    return {"status": "processing", "message": "Media download and storage started in background"}
 
 
 @router.post("/send-interactive")
@@ -184,3 +250,119 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         header_text=header_text,
         footer_text=footer_text
     )
+
+
+@router.post("/reactions/add")
+async def add_message_reaction(
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Ajoute une réaction à un message.
+    
+    Payload:
+    {
+      "message_id": "uuid",
+      "emoji": "👍",
+      "from_number": "33783788348"  # Optionnel, utilise le numéro de l'account si non fourni
+    }
+    """
+    message_id = payload.get("message_id")
+    emoji = payload.get("emoji")
+    
+    if not message_id or not emoji:
+        raise HTTPException(status_code=400, detail="message_id and emoji are required")
+    
+    # Récupérer le message pour vérifier les permissions
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+    
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    # Utiliser le numéro de l'account comme from_number si non fourni
+    account = await get_account_by_id(conversation["account_id"])
+    from_number = payload.get("from_number") or account.get("phone_number") or account.get("phone_number_id")
+    
+    if not from_number:
+        raise HTTPException(status_code=400, detail="from_number is required")
+    
+    # Ajouter la réaction en base
+    result = await add_reaction(message_id, emoji, from_number)
+    
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    
+    # Envoyer la réaction via WhatsApp si le message a un wa_message_id
+    if message.get("wa_message_id"):
+        wa_result = await send_reaction_to_whatsapp(
+            conversation["id"],
+            message["wa_message_id"],
+            emoji,
+        )
+        if wa_result.get("error"):
+            logger.warning("Failed to send reaction to WhatsApp: %s", wa_result)
+    
+    return result
+
+
+@router.post("/reactions/remove")
+async def remove_message_reaction(
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Supprime une réaction d'un message.
+    
+    Payload:
+    {
+      "message_id": "uuid",
+      "emoji": "👍",
+      "from_number": "33783788348"  # Optionnel
+    }
+    """
+    message_id = payload.get("message_id")
+    emoji = payload.get("emoji")
+    
+    if not message_id or not emoji:
+        raise HTTPException(status_code=400, detail="message_id and emoji are required")
+    
+    # Récupérer le message pour vérifier les permissions
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+    
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    # Utiliser le numéro de l'account comme from_number si non fourni
+    account = await get_account_by_id(conversation["account_id"])
+    from_number = payload.get("from_number") or account.get("phone_number") or account.get("phone_number_id")
+    
+    if not from_number:
+        raise HTTPException(status_code=400, detail="from_number is required")
+    
+    # Supprimer la réaction en base
+    result = await remove_reaction(message_id, emoji, from_number)
+    
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    
+    # Envoyer la suppression de réaction via WhatsApp (emoji vide)
+    if message.get("wa_message_id"):
+        wa_result = await send_reaction_to_whatsapp(
+            conversation["id"],
+            message["wa_message_id"],
+            "",  # Emoji vide = suppression
+        )
+        if wa_result.get("error"):
+            logger.warning("Failed to remove reaction on WhatsApp: %s", wa_result)
+    
+    return result

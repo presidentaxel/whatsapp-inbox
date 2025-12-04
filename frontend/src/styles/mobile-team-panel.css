@@ -1,0 +1,319 @@
+/* ============================================================================
+   Mobile Team Panel
+   ============================================================================ */
+
+.mobile-team-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0b1014;
+  color: #e9edef;
+}
+
+.mobile-team-panel__loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8696a0;
+}
+
+.mobile-team-panel__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+}
+
+.mobile-team-panel__stats {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.mobile-team-panel__stat {
+  flex: 1;
+  background: #202c33;
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mobile-team-panel__stat-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #00a884;
+}
+
+.mobile-team-panel__stat-label {
+  font-size: 0.875rem;
+  color: #8696a0;
+}
+
+.mobile-team-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.mobile-team-panel__item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  background: #202c33;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mobile-team-panel__item:active {
+  background: #233138;
+}
+
+.mobile-team-panel__item-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00a884 0%, #008069 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 1.25rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.mobile-team-panel__item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.mobile-team-panel__item-name {
+  color: #e9edef;
+  font-size: 1rem;
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+}
+
+.mobile-team-panel__item-email {
+  color: #8696a0;
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+}
+
+.mobile-team-panel__item-roles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.mobile-team-panel__role-badge {
+  background: rgba(0, 168, 132, 0.2);
+  color: #00a884;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.mobile-team-panel__item-status {
+  flex-shrink: 0;
+}
+
+.mobile-team-panel__status-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #8696a0;
+}
+
+.mobile-team-panel__status-indicator.active {
+  background: #00a884;
+}
+
+.mobile-team-panel__status-indicator.inactive {
+  background: #ef4444;
+}
+
+/* Detail View */
+.mobile-team-panel__detail {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+}
+
+.mobile-team-panel__detail-avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #00a884 0%, #008069 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 2rem;
+  font-weight: 600;
+  margin: 0 auto 1.5rem;
+}
+
+.mobile-team-panel__detail-info {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.mobile-team-panel__detail-info h2 {
+  color: #e9edef;
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem 0;
+}
+
+.mobile-team-panel__detail-info p {
+  color: #8696a0;
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.mobile-team-panel__detail-section {
+  margin-bottom: 2rem;
+}
+
+.mobile-team-panel__detail-section h3 {
+  color: #e9edef;
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 1rem 0;
+}
+
+.mobile-team-panel__toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: #202c33;
+  border-radius: 12px;
+}
+
+.mobile-team-panel__toggle-btn {
+  width: 50px;
+  height: 28px;
+  border-radius: 14px;
+  background: #2a3942;
+  border: none;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.mobile-team-panel__toggle-btn.active {
+  background: #00a884;
+}
+
+.mobile-team-panel__toggle-slider {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s;
+}
+
+.mobile-team-panel__toggle-btn.active .mobile-team-panel__toggle-slider {
+  transform: translateX(22px);
+}
+
+.mobile-team-panel__roles-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.mobile-team-panel__role-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: #202c33;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.mobile-team-panel__role-item:active {
+  background: #233138;
+}
+
+.mobile-team-panel__role-item.active {
+  background: rgba(0, 168, 132, 0.1);
+  border: 1px solid rgba(0, 168, 132, 0.3);
+}
+
+.mobile-team-panel__role-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: #e9edef;
+  font-size: 1rem;
+}
+
+.mobile-team-panel__role-info svg {
+  color: #00a884;
+  font-size: 1.25rem;
+}
+
+.mobile-team-panel__role-item.active .mobile-team-panel__role-info {
+  color: #00a884;
+  font-weight: 500;
+}
+
+.mobile-team-panel__role-item svg:last-child {
+  color: #00a884;
+  font-size: 1.25rem;
+}
+
+.mobile-team-panel__save-btn {
+  width: 100%;
+  padding: 1rem;
+  background: #00a884;
+  color: white;
+  border: none;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.mobile-team-panel__save-btn:active {
+  background: #008069;
+}
+
+.mobile-team-panel__delete-btn {
+  width: 100%;
+  padding: 1rem;
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.mobile-team-panel__delete-btn:active {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+

@@ -24,18 +24,45 @@ async def _fetch_supabase_user(token: str) -> SimpleNamespace:
         "Authorization": f"Bearer {token}",
     }
     
-    # Utiliser le client HTTP partagé avec timeout réduit
+    # Utiliser le client HTTP partagé avec timeout et retry
     client = await get_http_client()
-    timeout = httpx.Timeout(connect=3.0, read=5.0, write=3.0, pool=3.0)
+    timeout = httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0)
     
-    try:
-        response = await client.get(url, headers=headers, timeout=timeout)
-        response.raise_for_status()
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="supabase_timeout")
-    except httpx.HTTPStatusError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
-    except httpx.HTTPError:
+    # Retry en cas d'erreur réseau
+    max_retries = 2
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.get(url, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            break  # Succès, sortir de la boucle
+        except httpx.TimeoutException as e:
+            last_error = e
+            if attempt < max_retries:
+                logger.warning(f"Supabase auth timeout (attempt {attempt + 1}/{max_retries + 1}), retrying...")
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="supabase_timeout")
+        except httpx.ReadError as e:
+            last_error = e
+            if attempt < max_retries:
+                logger.warning(f"Supabase auth read error (attempt {attempt + 1}/{max_retries + 1}), retrying...")
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="supabase_network_error")
+        except httpx.HTTPStatusError as e:
+            # Erreur HTTP (401, 403, etc.) - ne pas retry
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_token")
+        except httpx.HTTPError as e:
+            last_error = e
+            if attempt < max_retries:
+                logger.warning(f"Supabase auth HTTP error (attempt {attempt + 1}/{max_retries + 1}), retrying...")
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="supabase_unreachable")
+    
+    if last_error:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="supabase_unreachable")
 
     payload = response.json()

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
+from app.core.cache import invalidate_cache_pattern
 from app.services.account_service import get_account_by_id
 from app.services import whatsapp_api_service
 from app.schemas.whatsapp import UpdateBusinessProfileRequest
@@ -111,6 +112,8 @@ async def update_business_profile(
             access_token=access_token,
             profile_data=profile_data
         )
+        # Invalider le cache pour forcer le rechargement du profil
+        await invalidate_cache_pattern(f"whatsapp_business_profile:{phone_number_id}")
         return {"success": True, "data": result}
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=f"WhatsApp API error: {e.response.text}")

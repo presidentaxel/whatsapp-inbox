@@ -1,0 +1,97 @@
+.register-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 2rem;
+}
+
+.register-card {
+  background: white;
+  border-radius: 12px;
+  padding: 2.5rem;
+  max-width: 450px;
+  width: 100%;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+.register-card h1 {
+  margin: 0 0 0.5rem 0;
+  color: #1a202c;
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+.register-card > p {
+  color: #718096;
+  margin: 0 0 2rem 0;
+  font-size: 0.95rem;
+}
+
+.register-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.register-card label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  color: #2d3748;
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.register-card input {
+  padding: 0.75rem 1rem;
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.register-card input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.register-card input.disabled-input {
+  background: #f7fafc;
+  color: #718096;
+  cursor: not-allowed;
+}
+
+.register-card .error {
+  color: #e53e3e;
+  font-size: 0.9rem;
+  margin: 0;
+  padding: 0.75rem;
+  background: #fed7d7;
+  border-radius: 6px;
+  border: 1px solid #fc8181;
+}
+
+.register-card button {
+  padding: 0.875rem 1.5rem;
+  background: #667eea;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-top: 0.5rem;
+}
+
+.register-card button:hover:not(:disabled) {
+  background: #5568d3;
+}
+
+.register-card button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+

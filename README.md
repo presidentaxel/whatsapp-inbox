@@ -106,7 +106,13 @@ VITE_DEV_PROXY=true
 | `access_token`     | Token d’accès au Graph API                     |
 | `verify_token`     | Token utilisé lors du handshake webhook        |
 
-Le backend synchronise automatiquement un compte “par défaut” à partir des variables d’environnement ci-dessus. Pour ajouter d’autres comptes, insère de nouvelles lignes dans `whatsapp_accounts` (via Supabase SQL ou l’UI) avec leurs tokens respectifs. L’interface affiche ensuite un sélecteur pour passer d’un compte à l’autre.
+Le backend synchronise automatiquement un compte "par défaut" à partir des variables d'environnement ci-dessus. Pour ajouter d'autres comptes, insère de nouvelles lignes dans `whatsapp_accounts` (via Supabase SQL ou l'UI) avec leurs tokens respectifs. L'interface affiche ensuite un sélecteur pour passer d'un compte à l'autre.
+
+### Images de profil
+
+Le système récupère automatiquement les images de profil des contacts via WhatsApp Graph API. Les images sont stockées dans Supabase Storage et mises à jour automatiquement toutes les heures.
+
+**Note** : WhatsApp Graph API a des limitations pour récupérer les images de profil. Certaines images peuvent ne pas être disponibles selon les permissions et la configuration de votre compte WhatsApp Business.
 
 ## Lancer l'app
 

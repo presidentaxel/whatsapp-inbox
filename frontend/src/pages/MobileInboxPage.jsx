@@ -1,15 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings } from "react-icons/fi";
+import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings, FiUserCheck } from "react-icons/fi";
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
 import { getContacts } from "../api/contactsApi";
+import { supabaseClient } from "../api/supabaseClient";
 import { clearAuthSession } from "../utils/secureStorage";
+import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
 import MobileConversationsList from "../components/mobile/MobileConversationsList";
 import MobileChatWindow from "../components/mobile/MobileChatWindow";
 import MobileContactsPanel from "../components/mobile/MobileContactsPanel";
 import MobileWhatsAppPanel from "../components/mobile/MobileWhatsAppPanel";
 import MobileGeminiPanel from "../components/mobile/MobileGeminiPanel";
 import MobileNotificationSettings from "../components/mobile/MobileNotificationSettings";
+import MobileSettings from "../components/mobile/MobileSettings";
+import MobileConnectedDevices from "../components/mobile/MobileConnectedDevices";
+import MobileTeamPanel from "../components/mobile/MobileTeamPanel";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import "../styles/mobile-inbox.css";
 
@@ -20,18 +25,46 @@ export default function MobileInboxPage({ onLogout }) {
   const [conversations, setConversations] = useState([]);
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [contacts, setContacts] = useState([]);
+  const [selectedContactFromChat, setSelectedContactFromChat] = useState(null);
 
   // Charger les comptes
   const loadAccounts = useCallback(async () => {
     try {
+      // Vérifier que la session est disponible avant d'appeler l'API
+      const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+      
+      if (sessionError) {
+        console.error("❌ Erreur session Supabase:", sessionError);
+        return;
+      }
+      
+      if (!session?.access_token) {
+        console.warn("⚠️ Pas de session ou token manquant, impossible de charger les comptes");
+        return;
+      }
+      
       const res = await getAccounts();
       const payload = Array.isArray(res?.data) ? res.data : res?.data?.data || [];
       setAccounts(payload);
+      
+      // Essayer de restaurer le compte sauvegardé
+      const savedAccountId = getActiveAccount();
+      const savedAccountExists = savedAccountId && payload.some((acc) => acc.id === savedAccountId);
+      
       if (payload.length > 0 && !activeAccount) {
-        setActiveAccount(payload[0].id);
+        // Si un compte est sauvegardé et existe toujours, l'utiliser
+        if (savedAccountExists) {
+          setActiveAccount(savedAccountId);
+        } else {
+          // Sinon, prendre le premier compte disponible
+          setActiveAccount(payload[0].id);
+        }
       }
     } catch (error) {
-      console.error("Erreur chargement comptes:", error);
+      console.error("❌ Erreur chargement comptes:", error);
+      if (error.response?.status === 401) {
+        console.error("⚠️ 401 Unauthorized - La session a peut-être expiré. Vérifiez votre connexion.");
+      }
     }
   }, [activeAccount]);
 
@@ -39,10 +72,20 @@ export default function MobileInboxPage({ onLogout }) {
   const refreshConversations = useCallback(async (accountId) => {
     if (!accountId) return;
     try {
+      console.log(`🔄 Refreshing conversations for account: ${accountId}`);
       const res = await getConversations(accountId);
-      setConversations(res.data || []);
+      const newConversations = res.data || [];
+      console.log(`✅ Loaded ${newConversations.length} conversations`);
+      
+      // Log les conversations avec des messages non lus
+      const unread = newConversations.filter(c => c.unread_count > 0);
+      if (unread.length > 0) {
+        console.log(`📬 ${unread.length} conversation(s) avec messages non lus:`, unread.map(c => ({ id: c.id, name: c.contacts?.display_name || c.client_number, unread: c.unread_count })));
+      }
+      
+      setConversations(newConversations);
     } catch (error) {
-      console.error("Erreur chargement conversations:", error);
+      console.error("❌ Erreur chargement conversations:", error);
     }
   }, []);
 
@@ -60,6 +103,13 @@ export default function MobileInboxPage({ onLogout }) {
     loadAccounts();
     loadContacts();
   }, [loadAccounts, loadContacts]);
+
+  // Sauvegarder le compte actif quand il change
+  useEffect(() => {
+    if (activeAccount) {
+      saveActiveAccount(activeAccount);
+    }
+  }, [activeAccount]);
 
   useEffect(() => {
     if (activeAccount) {
@@ -96,6 +146,54 @@ export default function MobileInboxPage({ onLogout }) {
     onLogout();
   };
 
+  const handleConnectedDevices = () => {
+    // Afficher les informations du compte actif comme "appareils connectés"
+    setActiveTab("connected-devices");
+  };
+
+  const handleImportant = () => {
+    // Cette fonction peut être utilisée pour naviguer vers une vue "Important"
+    // Pour l'instant, on peut juste afficher un message
+    // Le filtre "favorites" est déjà géré dans MobileConversationsList
+    // On pourrait aussi naviguer vers une vue dédiée aux favoris
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      // Marquer toutes les conversations non lues comme lues pour le compte actif uniquement
+      // Les conversations sont déjà filtrées par compte dans le backend, mais on double-vérifie
+      const unreadConversations = conversations.filter(
+        c => c.unread_count > 0 && (!c.account_id || c.account_id === activeAccount)
+      );
+      if (unreadConversations.length === 0) {
+        return;
+      }
+      await Promise.all(
+        unreadConversations.map(conv => markConversationRead(conv.id))
+      );
+      // Rafraîchir les conversations
+      await refreshConversations(activeAccount);
+    } catch (error) {
+      console.error("Erreur lors du marquage de toutes les conversations comme lues:", error);
+    }
+  };
+
+  const handleSettings = () => {
+    setActiveTab("settings");
+  };
+
+  const handleShowContact = (contact) => {
+    setSelectedContactFromChat(contact);
+    setActiveTab("contacts");
+  };
+
+  const handleToggleBotMode = async (conversationId, enabled) => {
+    // Mettre à jour la conversation dans la liste
+    setConversations(prev => prev.map(conv => 
+      conv.id === conversationId ? { ...conv, bot_enabled: enabled } : conv
+    ));
+  };
+
   // Si une conversation est sélectionnée, afficher le chat en plein écran
   if (selectedConversation) {
     return (
@@ -103,6 +201,8 @@ export default function MobileInboxPage({ onLogout }) {
         conversation={selectedConversation}
         onBack={handleBackToList}
         onRefresh={() => refreshConversations(activeAccount)}
+        onShowContact={handleShowContact}
+        onToggleBotMode={handleToggleBotMode}
       />
     );
   }
@@ -118,7 +218,10 @@ export default function MobileInboxPage({ onLogout }) {
             activeAccount={activeAccount}
             onSelectAccount={setActiveAccount}
             onSelectConversation={handleSelectConversation}
-            onLogout={handleLogout}
+            onConnectedDevices={handleConnectedDevices}
+            onImportant={handleImportant}
+            onMarkAllRead={handleMarkAllRead}
+            onSettings={handleSettings}
           />
         );
       
@@ -126,7 +229,9 @@ export default function MobileInboxPage({ onLogout }) {
         return (
           <MobileContactsPanel
             contacts={contacts}
+            activeAccount={activeAccount}
             onRefresh={loadContacts}
+            initialContact={selectedContactFromChat}
           />
         );
       
@@ -148,7 +253,23 @@ export default function MobileInboxPage({ onLogout }) {
       
       case "settings":
         return (
-          <MobileNotificationSettings />
+          <MobileSettings onBack={() => setActiveTab("conversations")} />
+        );
+      
+      case "connected-devices":
+        return (
+          <MobileConnectedDevices
+            accounts={accounts}
+            activeAccount={activeAccount}
+            onBack={() => setActiveTab("conversations")}
+          />
+        );
+      
+      case "team":
+        return (
+          <MobileTeamPanel
+            onBack={() => setActiveTab("conversations")}
+          />
         );
       
       default:
@@ -171,6 +292,13 @@ export default function MobileInboxPage({ onLogout }) {
         >
           <FiMessageSquare />
           <span>Discussions</span>
+          {(() => {
+            // Les conversations sont déjà filtrées par compte actif dans le backend
+            const unreadCount = conversations.filter(c => c.unread_count > 0).length;
+            return unreadCount > 0 ? (
+              <span className="mobile-inbox__nav-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
+            ) : null;
+          })()}
         </button>
 
         <button
@@ -182,14 +310,6 @@ export default function MobileInboxPage({ onLogout }) {
         </button>
 
         <button
-          className={`mobile-inbox__nav-btn ${activeTab === "whatsapp" ? "active" : ""}`}
-          onClick={() => setActiveTab("whatsapp")}
-        >
-          <FiTool />
-          <span>WhatsApp</span>
-        </button>
-
-        <button
           className={`mobile-inbox__nav-btn ${activeTab === "gemini" ? "active" : ""}`}
           onClick={() => setActiveTab("gemini")}
         >
@@ -198,11 +318,11 @@ export default function MobileInboxPage({ onLogout }) {
         </button>
 
         <button
-          className={`mobile-inbox__nav-btn ${activeTab === "settings" ? "active" : ""}`}
-          onClick={() => setActiveTab("settings")}
+          className={`mobile-inbox__nav-btn ${activeTab === "team" ? "active" : ""}`}
+          onClick={() => setActiveTab("team")}
         >
-          <FiSettings />
-          <span>Paramètres</span>
+          <FiUserCheck />
+          <span>Équipe</span>
         </button>
       </nav>
     </div>

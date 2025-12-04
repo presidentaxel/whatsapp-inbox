@@ -1,9 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Routes existantes
 from app.api.routes_webhook import router as webhook_router
+from app.api.routes_webhook_setup import router as webhook_setup_router
 from app.api.routes_conversations import router as conversations_router
 from app.api.routes_messages import router as messages_router
 from app.api.routes_accounts import router as accounts_router
@@ -12,6 +16,9 @@ from app.api.routes_auth import router as auth_router
 from app.api.routes_admin import router as admin_router
 from app.api.routes_bot import router as bot_router
 from app.api.routes_health import router as health_router
+from app.api.routes_app import router as app_router
+from app.api.routes_invitations import router as invitations_router
+from app.api.routes_users import router as users_router
 
 # Nouvelles routes WhatsApp API complète
 from app.api.routes_whatsapp_messages import router as whatsapp_messages_router
@@ -24,6 +31,7 @@ from app.api.routes_whatsapp_utils import router as whatsapp_utils_router
 
 from app.core.config import settings
 from app.core.http_client import close_http_client
+from app.services.profile_picture_service import periodic_profile_picture_update
 
 app = FastAPI(
     title="WhatsApp Inbox API",
@@ -41,6 +49,7 @@ app.add_middleware(
 
 # Routes existantes
 app.include_router(webhook_router, prefix="/webhook")
+app.include_router(webhook_setup_router)
 app.include_router(auth_router, prefix="/auth")
 app.include_router(conversations_router, prefix="/conversations")
 app.include_router(messages_router, prefix="/messages")
@@ -49,6 +58,9 @@ app.include_router(contacts_router, prefix="/contacts")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(bot_router, prefix="/bot")
 app.include_router(health_router)
+app.include_router(app_router, prefix="/app")
+app.include_router(invitations_router, prefix="/invitations")
+app.include_router(users_router, prefix="/admin/users")
 
 # Nouvelles routes WhatsApp API complète
 app.include_router(whatsapp_messages_router, prefix="/api")
@@ -71,6 +83,15 @@ if settings.PROMETHEUS_ENABLED:
         include_in_schema=False,
         endpoint=settings.PROMETHEUS_METRICS_PATH,
     )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Démarrage de l'application - lance les tâches périodiques."""
+    import asyncio
+    # Démarrer la tâche périodique de mise à jour des images de profil
+    asyncio.create_task(periodic_profile_picture_update())
+    logger.info("✅ Profile picture periodic update task started")
 
 
 @app.on_event("shutdown")

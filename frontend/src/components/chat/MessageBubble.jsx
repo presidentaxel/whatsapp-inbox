@@ -10,6 +10,7 @@ import {
   FiList,
 } from "react-icons/fi";
 import { api } from "../../api/axiosClient";
+import MessageReactions from "./MessageReactions";
 
 const FETCHABLE_MEDIA = new Set(["audio", "voice", "image", "video", "document", "sticker"]);
 
@@ -27,35 +28,31 @@ const TYPE_MAP = {
 };
 
 function MediaRenderer({ message, messageType, onLoadingChange }) {
-  console.log("🚀 MediaRenderer CALLED:", {message: message?.id, messageType});
-  
-  const [source, setSource] = useState(null);
-  console.log("✅ useState source OK");
-  
-  const [loading, setLoading] = useState(true);
-  console.log("✅ useState loading OK");
-  
+  const [source, setSource] = useState(message._localPreview || message.storage_url || null);
+  const [loading, setLoading] = useState(!message._localPreview && !message.storage_url);
   const [error, setError] = useState(false);
-  console.log("✅ useState error OK");
-  
-  console.log("🔧 About to define useEffect...");
-  console.log("🔧 Dependencies:", {
-    messageId: message.id,
-    mediaId: message.media_id,
-    messageType: messageType
-  });
 
   useEffect(() => {
-    console.log("🎬 useEffect triggered! Starting media fetch...");
-    console.log("🎬 MediaRenderer effect:", {
-      messageId: message.id,
-      mediaId: message.media_id,
-      messageType,
-      isFetchable: FETCHABLE_MEDIA.has(messageType)
-    });
+    // Si on a un aperçu local, l'utiliser directement
+    if (message._localPreview) {
+      setSource(message._localPreview);
+      setLoading(false);
+      setError(false);
+      onLoadingChange?.(false, false);
+      return;
+    }
 
-    if (!message.media_id || !FETCHABLE_MEDIA.has(messageType)) {
-      console.log("⏭️ Skipping media (no media_id or not fetchable)");
+    // Si on a une URL de stockage Supabase, l'utiliser directement
+    if (message.storage_url) {
+      setSource(message.storage_url);
+      setLoading(false);
+      setError(false);
+      onLoadingChange?.(false, false);
+      return;
+    }
+
+    // Si on n'a ni media_id ni storage_url, on ne peut pas charger le média
+    if ((!message.media_id && !message.storage_url) || !FETCHABLE_MEDIA.has(messageType)) {
       setSource(null);
       setLoading(false);
       onLoadingChange?.(false, false);
@@ -65,24 +62,17 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
     let cancelled = false;
     let objectUrl = null;
 
-    console.log(`📥 Fetching media: /messages/media/${message.id}`);
-
     api
       .get(`/messages/media/${message.id}`, { responseType: "blob" })
       .then((res) => {
         if (cancelled) return;
-        console.log("✅ Media fetched, size:", res.data.size);
         objectUrl = URL.createObjectURL(res.data);
-        console.log("✅ Blob URL created:", objectUrl);
         setSource(objectUrl);
-        console.log("✅ setSource called with:", objectUrl);
         setError(false);
         onLoadingChange?.(false, false);
-        console.log("✅ Media load complete, should re-render now");
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error("❌ Media fetch error:", err);
           setSource(null);
           setError(true);
           onLoadingChange?.(false, true);
@@ -100,37 +90,29 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [message.id, message.media_id, messageType]);
-
-  console.log("🎯 Rendering MediaRenderer JSX, loading:", loading, "source:", !!source, "error:", error);
+  }, [message.id, message.media_id, messageType, message._localPreview, message.storage_url]);
 
   if (loading) {
-    console.log("⏳ Returning loading state");
     return <span className="media-loading">Chargement…</span>;
   }
 
   if (!source || error) {
-    console.log("❌ Returning error state");
     return <span className="media-error">{message.content_text || "Média non disponible"}</span>;
   }
 
   if (messageType === "image" || messageType === "sticker") {
-    console.log("🖼️ Returning image element, src:", source ? source.substring(0, 50) : 'NULL');
-    return <img src={source} alt="" className="bubble-media__image" onLoad={() => console.log("✅ Image loaded!")} onError={(e) => console.error("❌ Image error:", e)} />;
+    return <img src={source} alt="" className="bubble-media__image" />;
   }
 
   if (messageType === "video") {
-    console.log("🎥 Returning video element");
     return <video src={source} controls className="bubble-media__video" />;
   }
 
   if (messageType === "audio" || messageType === "voice") {
-    console.log("🔊 Returning audio element");
     return <audio src={source} controls className="bubble-media__audio" />;
   }
 
   if (messageType === "document") {
-    console.log("📄 Returning document link");
     return (
       <a href={source} download className="bubble-media__document" target="_blank" rel="noreferrer">
         📄 Télécharger le document
@@ -138,20 +120,14 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
     );
   }
 
-  console.log("📝 Returning fallback text");
   return <span>{message.content_text}</span>;
 }
 
 function RichMediaBubble({ message, messageType }) {
-  const [showIcon, setShowIcon] = useState(true);
+  // Si on a déjà storage_url ou _localPreview, ne pas afficher l'icône
+  const hasSource = !!(message.storage_url || message._localPreview);
+  const [showIcon, setShowIcon] = useState(!hasSource);
   const typeEntry = TYPE_MAP[messageType];
-
-  console.log("🎭 RichMediaBubble mounted:", {
-    messageId: message.id,
-    messageType,
-    hasMediaId: !!message.media_id,
-    mediaId: message.media_id
-  });
 
   // Ne pas afficher le content_text s'il contient juste un placeholder
   const isPlaceholder = message.content_text && 
@@ -169,9 +145,7 @@ function RichMediaBubble({ message, messageType }) {
     }
   };
 
-  console.log("🎭 RichMediaBubble rendering MediaRenderer...");
-
-    return (
+  return (
       <div className="bubble-media bubble-media--rich">
       {showIcon && (
         <div className="bubble-media__icon">{typeEntry?.icon}</div>
@@ -232,15 +206,8 @@ function renderBody(message) {
   const messageType = (message.message_type || "text").toLowerCase();
   const typeEntry = TYPE_MAP[messageType];
 
-  console.log("🎨 renderBody:", {
-    messageType,
-    hasMediaId: !!message.media_id,
-    isFetchable: FETCHABLE_MEDIA.has(messageType),
-    willRenderRichMedia: FETCHABLE_MEDIA.has(messageType) && message.media_id
-  });
-
-  if (FETCHABLE_MEDIA.has(messageType) && message.media_id) {
-    console.log("✨ Rendering RichMediaBubble");
+  // Afficher le média si on a un media_id OU un storage_url (média stocké dans Supabase)
+  if (FETCHABLE_MEDIA.has(messageType) && (message.media_id || message.storage_url)) {
     return <RichMediaBubble message={message} messageType={messageType} />;
   }
 
@@ -264,28 +231,32 @@ function renderBody(message) {
   );
 }
 
-export default function MessageBubble({ message }) {
+export default function MessageBubble({ message, conversation, onReactionChange }) {
+  const [isHovered, setIsHovered] = useState(false);
   const mine = message.direction === "outbound";
   const timestamp = message.timestamp
     ? new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "";
 
   const messageType = (message.message_type || "text").toLowerCase();
-  const isMedia = FETCHABLE_MEDIA.has(messageType) && message.media_id;
-
-  console.log("💬 MessageBubble rendering:", {
-    id: message.id,
-    type: messageType,
-    isMedia,
-    hasMediaId: !!message.media_id,
-    direction: message.direction,
-    content: message.content_text?.substring(0, 30)
-  });
+  const isMedia = FETCHABLE_MEDIA.has(messageType) && (message.media_id || message.storage_url);
 
   return (
-    <div className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""}`}>
+    <div 
+      className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""}`}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
       {renderBody(message)}
-      <small className="bubble__timestamp">{timestamp}</small>
+      <div className="bubble__footer">
+        <small className="bubble__timestamp">{timestamp}</small>
+        <MessageReactions 
+          message={message} 
+          conversation={conversation} 
+          onReactionChange={onReactionChange}
+          isHovered={isHovered}
+        />
+      </div>
     </div>
   );
 }

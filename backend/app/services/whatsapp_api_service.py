@@ -480,20 +480,46 @@ async def verify_code(
 # 4. PROFIL BUSINESS WHATSAPP
 # ============================================================================
 
+@retry_on_network_error(max_attempts=2, min_wait=0.5, max_wait=2.0)
 async def get_business_profile(phone_number_id: str, access_token: str) -> Dict[str, Any]:
     """
     Récupère le profil business WhatsApp
     GET /{PHONE_NUMBER_ID}/whatsapp_business_profile
-    """
-    client = await get_http_client()
     
-    response = await client.get(
-        f"{GRAPH_API_BASE}/{phone_number_id}/whatsapp_business_profile",
-        headers={"Authorization": f"Bearer {access_token}"},
-        params={"fields": "about,address,description,email,profile_picture_url,websites,vertical"}
+    Optimisé avec:
+    - Cache (TTL 5 minutes) car le profil change rarement
+    - Retry automatique en cas d'erreur réseau
+    - Timeout optimisé pour réduire la latence
+    """
+    from app.core.cache import get_cached_or_fetch
+    
+    cache_key = f"whatsapp_business_profile:{phone_number_id}"
+    
+    async def _fetch_profile():
+        client = await get_http_client()
+        
+        # Timeout optimisé pour cette requête spécifique
+        timeout = httpx.Timeout(connect=1.5, read=4.0, write=2.0, pool=1.5)
+        
+        response = await client.get(
+            f"{GRAPH_API_BASE}/{phone_number_id}/whatsapp_business_profile",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip, deflate"
+            },
+            params={"fields": "about,address,description,email,profile_picture_url,websites,vertical"},
+            timeout=timeout
+        )
+        response.raise_for_status()
+        return response.json()
+    
+    # Cache avec TTL de 5 minutes (le profil change rarement)
+    return await get_cached_or_fetch(
+        cache_key,
+        _fetch_profile,
+        ttl_seconds=300  # 5 minutes
     )
-    response.raise_for_status()
-    return response.json()
 
 
 async def update_business_profile(
@@ -710,7 +736,165 @@ async def get_subscribed_apps(
 
 
 # ============================================================================
-# 7. MANAGEMENT DU WABA (WhatsApp Business Account)
+# 7. CONTACTS - Récupération des images de profil
+# ============================================================================
+
+@retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)
+async def get_contact_info(
+    phone_number_id: str,
+    access_token: str,
+    phone_number: str,
+) -> Dict[str, Any]:
+    """
+    Récupère les informations complètes d'un contact WhatsApp via Graph API
+    Inclut: nom, photo de profil, et autres métadonnées disponibles
+    
+    Args:
+        phone_number_id: ID du numéro de téléphone WhatsApp Business
+        access_token: Token d'accès Graph API
+        phone_number: Numéro de téléphone du contact (format international sans +)
+    
+    Returns:
+        Dict avec les informations du contact (profile_picture_url, name, etc.)
+    """
+    try:
+        client = await get_http_client()
+        
+        # Nettoyer le numéro de téléphone
+        clean_phone = phone_number.replace("+", "").replace(" ", "").replace("-", "")
+        
+        # Essayer via l'endpoint /contacts avec tous les champs disponibles
+        try:
+            response = await client.get(
+                f"{GRAPH_API_BASE}/{phone_number_id}/contacts",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={
+                    "phone_numbers": clean_phone,
+                    "fields": "profile_picture_url,name"
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("data") and len(data["data"]) > 0:
+                    contact_data = data["data"][0]
+                    logger.info(f"✅ Contact info found via /contacts endpoint for {clean_phone}")
+                    return {
+                        "profile_picture_url": contact_data.get("profile_picture_url"),
+                        "name": contact_data.get("name"),
+                        "phone_number": clean_phone
+                    }
+        except httpx.HTTPStatusError as e:
+            logger.debug(f"/contacts endpoint failed: {e.response.status_code}")
+        except Exception as e:
+            logger.debug(f"/contacts endpoint error: {e}")
+        
+        # Si aucune info trouvée, retourner un dict vide
+        return {
+            "profile_picture_url": None,
+            "name": None,
+            "phone_number": clean_phone
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error fetching contact info for {phone_number}: {e}", exc_info=True)
+        return {
+            "profile_picture_url": None,
+            "name": None,
+            "phone_number": phone_number.replace("+", "").replace(" ", "").replace("-", "")
+        }
+
+
+@retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)
+async def get_contact_profile_picture(
+    phone_number_id: str,
+    access_token: str,
+    phone_number: str,
+    evolution_instance: Optional[str] = None  # Ignoré, gardé pour compatibilité
+) -> Optional[str]:
+    """
+    Récupère l'URL de l'image de profil d'un contact WhatsApp via Graph API
+    
+    Note: WhatsApp Cloud API a des limitations pour récupérer les images de profil.
+    Cette fonction essaie plusieurs endpoints Graph API disponibles.
+    
+    Args:
+        phone_number_id: ID du numéro de téléphone WhatsApp Business
+        access_token: Token d'accès Graph API
+        phone_number: Numéro de téléphone du contact (format international sans +)
+        evolution_instance: Ignoré (gardé pour compatibilité)
+    
+    Returns:
+        URL de l'image de profil ou None si non disponible
+    """
+    try:
+        client = await get_http_client()
+        
+        # Nettoyer le numéro de téléphone
+        clean_phone = phone_number.replace("+", "").replace(" ", "").replace("-", "")
+        
+        # Méthode 1: Essayer via l'endpoint /contacts
+        try:
+            response = await client.get(
+                f"{GRAPH_API_BASE}/{phone_number_id}/contacts",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={
+                    "phone_numbers": clean_phone,
+                    "fields": "profile_picture_url"
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("data") and len(data["data"]) > 0:
+                    profile_url = data["data"][0].get("profile_picture_url")
+                    if profile_url:
+                        logger.info(f"✅ Profile picture found via /contacts endpoint for {clean_phone}")
+                        return profile_url
+        except httpx.HTTPStatusError as e:
+            logger.debug(f"/contacts endpoint failed: {e.response.status_code}")
+        except Exception as e:
+            logger.debug(f"/contacts endpoint error: {e}")
+        
+        # Méthode 2: Essayer via le WABA (WhatsApp Business Account)
+        try:
+            phone_details = await get_phone_number_details(phone_number_id, access_token)
+            waba_id = phone_details.get("waba_id") or phone_details.get("whatsapp_business_account_id")
+            
+            if waba_id:
+                response = await client.get(
+                    f"{GRAPH_API_BASE}/{waba_id}/contacts",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    params={
+                        "phone_numbers": clean_phone,
+                        "fields": "profile_picture_url"
+                    },
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("data") and len(data["data"]) > 0:
+                        profile_url = data["data"][0].get("profile_picture_url")
+                        if profile_url:
+                            logger.info(f"✅ Profile picture found via WABA endpoint for {clean_phone}")
+                            return profile_url
+        except Exception as e:
+            logger.debug(f"WABA endpoint error: {e}")
+        
+        # Aucune image disponible via Graph API
+        logger.debug(f"No profile picture available via Graph API for {phone_number}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error fetching profile picture for {phone_number}: {e}", exc_info=True)
+        return None
+
+
+# ============================================================================
+# 8. MANAGEMENT DU WABA (WhatsApp Business Account)
 # ============================================================================
 
 async def get_waba_details(waba_id: str, access_token: str) -> Dict[str, Any]:
@@ -760,7 +944,7 @@ async def list_client_wabas(business_id: str, access_token: str) -> Dict[str, An
 
 
 # ============================================================================
-# 8. UTILITAIRES / SÉCURITÉ
+# 9. UTILITAIRES / SÉCURITÉ
 # ============================================================================
 
 async def debug_token(access_token: str, app_id: str, app_secret: str) -> Dict[str, Any]:

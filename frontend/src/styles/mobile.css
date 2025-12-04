@@ -183,7 +183,6 @@
   .conversation-item,
   .account-selector__button,
   .sidebar-nav__btn {
-    min-height: 44px; /* Taille min recommandée Apple */
     touch-action: manipulation; /* Pas de double-tap zoom */
   }
 

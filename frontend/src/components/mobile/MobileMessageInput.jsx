@@ -40,9 +40,13 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
   };
 
   const handleKeyPress = (e) => {
+    const enterKeySends = localStorage.getItem('enterKeySends') !== 'false'; // Par défaut true
     if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSendClick();
+      if (enterKeySends) {
+        e.preventDefault();
+        handleSendClick();
+      }
+      // Si enterKeySends est false, Enter crée une nouvelle ligne (comportement par défaut)
     }
   };
 
@@ -114,12 +118,15 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
           timestamp: new Date().toISOString(),
           // Stocker l'URL locale temporaire
           _localPreview: fileUrl,
+          media_id: mediaId,
         };
         
         console.log("🎨 Affichage aperçu optimiste");
         
-        // TODO: Ajouter le message optimiste à l'UI
-        // (nécessite de passer une fonction depuis le parent)
+        // Appeler le callback pour ajouter le message optimiste
+        if (onMediaSent) {
+          onMediaSent(tempMediaMessage);
+        }
         
         // Envoyer le message média
         await sendMediaMessage({
@@ -131,11 +138,12 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         
         console.log("✅ Message média envoyé");
         
-        // Nettoyer l'URL locale
-        URL.revokeObjectURL(fileUrl);
+        // Nettoyer l'URL locale après un délai
+        setTimeout(() => {
+          URL.revokeObjectURL(fileUrl);
+        }, 5000);
         
         setText("");
-        onMediaSent?.();
       } catch (error) {
         console.error("❌ Erreur upload/envoi:", error);
         alert(`Erreur lors de l'envoi du fichier: ${error.message}`);

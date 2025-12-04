@@ -12,6 +12,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 // Mobile
 import MobileLoginPage from "./pages/MobileLoginPage";
 import MobileInboxPage from "./pages/MobileInboxPage";
+import RegisterPage from "./pages/RegisterPage";
 
 // Composant mobile (sans AuthProvider, gestion directe)
 function MobileApp() {
@@ -29,17 +30,31 @@ function MobileApp() {
         refresh_token: savedSession.refresh_token,
       }).then(({ data, error }) => {
         if (error || !data.session) {
+          console.warn("⚠️ Saved session invalid, clearing:", error);
           clearAuthSession();
           setSession(null);
         } else {
+          console.log("✅ Session restored from storage:", data.session.user?.id);
           setSession(data.session);
         }
         setLoading(false);
       });
     } else {
       // Vérifier la session Supabase actuelle
-      supabaseClient.auth.getSession().then(({ data }) => {
-        setSession(data.session);
+      supabaseClient.auth.getSession().then(({ data, error }) => {
+        if (error) {
+          console.warn("⚠️ Error getting session:", error);
+          setSession(null);
+        } else if (data.session) {
+          console.log("✅ Session found:", data.session.user?.id);
+          if (!data.session.access_token) {
+            console.warn("⚠️ Session exists but no access_token!");
+          }
+          setSession(data.session);
+        } else {
+          console.log("ℹ️ No session found");
+          setSession(null);
+        }
         setLoading(false);
       });
     }
@@ -67,7 +82,11 @@ function MobileApp() {
     setSession(null);
   };
 
-  if (loading) {
+  // Vérifier si on est sur la page de register
+  const isRegisterPage = window.location.pathname === '/register' || 
+                         window.location.search.includes('type=invite');
+
+  if (loading && !isRegisterPage) {
     return (
       <div style={{
         height: '100vh',
@@ -82,6 +101,10 @@ function MobileApp() {
     );
   }
 
+  if (isRegisterPage) {
+    return <RegisterPage />;
+  }
+
   if (!session) {
     return <MobileLoginPage onLoginSuccess={handleLoginSuccess} />;
   }
@@ -93,8 +116,16 @@ function MobileApp() {
 function DesktopApp() {
   const { session, loading } = useAuth();
 
-  if (loading) {
+  // Vérifier si on est sur la page de register
+  const isRegisterPage = window.location.pathname === '/register' || 
+                         window.location.search.includes('type=invite');
+
+  if (loading && !isRegisterPage) {
     return <div className="loading-screen">Chargement...</div>;
+  }
+
+  if (isRegisterPage) {
+    return <RegisterPage />;
   }
 
   if (!session) {
