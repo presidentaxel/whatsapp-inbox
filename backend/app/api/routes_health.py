@@ -20,7 +20,7 @@ async def check_supabase() -> dict:
     """Vérifie la connexion à Supabase."""
     try:
         await asyncio.wait_for(
-            supabase_execute(supabase.table("accounts").select("id").limit(1)),
+            supabase_execute(supabase.table("whatsapp_accounts").select("id").limit(1)),
             timeout=2.0
         )
         return {"status": "ok", "latency_ms": None}

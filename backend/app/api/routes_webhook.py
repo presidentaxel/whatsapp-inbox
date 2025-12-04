@@ -41,8 +41,9 @@ async def verify_webhook(request: Request):
     challenge = request.query_params.get("hub.challenge", "")
 
     logger.info(
-        f"Webhook verification request: mode={mode}, token={'***' if token else 'None'}, "
-        f"challenge={'present' if challenge else 'missing'}"
+        f"🔍 Webhook verification request: mode={mode}, token={'***' + token[:5] + '...' if token else 'None'}, "
+        f"challenge={'present' if challenge else 'missing'}, "
+        f"expected_token={'***' + settings.WHATSAPP_VERIFY_TOKEN[:5] + '...' if settings.WHATSAPP_VERIFY_TOKEN else 'None'}"
     )
 
     if mode == "subscribe":

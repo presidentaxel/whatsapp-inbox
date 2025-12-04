@@ -91,7 +91,14 @@ async def handle_incoming_message(data: dict):
                     metadata = value.get("metadata", {})
                     phone_number_id = metadata.get("phone_number_id")
                     entry_id = entry.get("id")
+                    change_field = change.get("field")
                     account = None
+                    
+                    # Certains types de webhooks n'ont pas besoin d'un compte (ex: message_template_status_update)
+                    # On ne traite que les webhooks qui concernent les messages
+                    if change_field not in ("messages", "message_status"):
+                        logger.debug(f"ℹ️ Skipping webhook field '{change_field}' (not a message-related event)")
+                        continue
                     
                     # Stratégie de recherche du compte:
                     # 1. Utiliser phone_number_id du metadata (méthode principale)
@@ -105,7 +112,7 @@ async def handle_incoming_message(data: dict):
                             logger.info(f"✅ Found account using metadata phone_number_id: {account.get('name')} (id: {account.get('id')})")
                     
                     # Si pas trouvé et qu'on a un entry.id, essayer avec ça
-                    if not account and entry_id:
+                    if not account and entry_id and entry_id != "0":
                         logger.info(f"🔍 Strategy 2: Trying entry.id as phone_number_id: {entry_id}")
                         account = await get_account_by_phone_number_id(entry_id)
                         if account:
@@ -115,38 +122,28 @@ async def handle_incoming_message(data: dict):
                     # Si toujours pas trouvé, logger toutes les infos disponibles
                     if not account:
                         logger.error(
-                            f"❌ Cannot find account!\n"
+                            f"❌ CRITICAL: Cannot find account for webhook!\n"
                             f"   metadata phone_number_id: {phone_number_id or 'MISSING'}\n"
                             f"   entry.id: {entry_id or 'MISSING'}\n"
-                            f"   metadata: {json.dumps(metadata)}\n"
+                            f"   metadata: {json.dumps(metadata, indent=2)}\n"
                             f"   change_field: {change.get('field')}\n"
-                            f"   value_keys: {list(value.keys())}"
+                            f"   value_keys: {list(value.keys())}\n"
+                            f"   This webhook will be SKIPPED - messages will NOT be stored!"
                         )
                         # Lister tous les comptes disponibles pour debug
                         from app.services.account_service import get_all_accounts
                         all_accounts = await get_all_accounts()
                         if all_accounts:
-                            logger.info(f"📋 Available accounts in database:")
+                            logger.error(f"📋 Available accounts in database:")
                             for acc in all_accounts:
-                                logger.info(f"   - {acc.get('name')}: phone_number_id={acc.get('phone_number_id')}")
-                        continue
-                    
-                    if not account:
-                        # Log très détaillé pour comprendre le problème
-                        logger.error(
-                            f"❌ Unknown account for phone_number_id: {phone_number_id}\n"
-                            f"   metadata={json.dumps(metadata)}\n"
-                            f"   entry_id={entry.get('id')}\n"
-                            f"   change_field={change.get('field')}\n"
-                            f"   This phone_number_id is not in the database!"
-                        )
-                        # Lister tous les comptes disponibles pour debug
-                        from app.services.account_service import get_all_accounts
-                        all_accounts = await get_all_accounts()
-                        if all_accounts:
-                            logger.info(f"📋 Available accounts in database:")
-                            for acc in all_accounts:
-                                logger.info(f"   - {acc.get('name')}: phone_number_id={acc.get('phone_number_id')}")
+                                is_active = acc.get('is_active', False)
+                                status = "✅ ACTIVE" if is_active else "❌ INACTIVE"
+                                logger.error(f"   {status} - {acc.get('name')}: phone_number_id={acc.get('phone_number_id')}")
+                        else:
+                            logger.error("📋 NO ACCOUNTS FOUND in database!")
+                            logger.error("   → Check that ensure_default_account() has been called")
+                            logger.error("   → Check that WHATSAPP_PHONE_ID and WHATSAPP_TOKEN are set in .env")
+                        # CRITICAL: Skip this change - messages will be lost if we continue
                         continue
                     
                     logger.info(f"✅ Account found: {account.get('id')} ({account.get('name', 'N/A')})")
@@ -333,32 +330,31 @@ async def _process_incoming_message(
         content_text = _extract_content_text(message)
         media_meta = _extract_media_metadata(message)
 
-        # Insérer le message d'abord pour obtenir son ID
-        message_result = await supabase_execute(
+        # Insérer le message d'abord
+        message_payload = {
+            "conversation_id": conversation["id"],
+            "direction": "inbound",
+            "content_text": content_text,
+            "timestamp": timestamp_iso,
+            "wa_message_id": message.get("id"),
+            "message_type": msg_type,
+            "status": "received",
+            "media_id": media_meta.get("media_id"),
+            "media_mime_type": media_meta.get("media_mime_type"),
+            "media_filename": media_meta.get("media_filename"),
+        }
+        
+        # Faire l'upsert
+        await supabase_execute(
             supabase.table("messages").upsert(
-                {
-                    "conversation_id": conversation["id"],
-                    "direction": "inbound",
-                    "content_text": content_text,
-                    "timestamp": timestamp_iso,
-                    "wa_message_id": message.get("id"),
-                    "message_type": msg_type,
-                    "status": "received",
-                    "media_id": media_meta.get("media_id"),
-                    "media_mime_type": media_meta.get("media_mime_type"),
-                    "media_filename": media_meta.get("media_filename"),
-                },
+                message_payload,
                 on_conflict="wa_message_id",
-            ).select("id")
+            )
         )
         
-        # Récupérer l'ID du message inséré
-        inserted_message = message_result.data[0] if message_result.data else None
-        message_db_id = inserted_message.get("id") if inserted_message else None
-        
-        # Si upsert n'a pas retourné l'ID (peut arriver avec on_conflict), chercher le message par wa_message_id
-        if not message_db_id and message.get("id"):
-            logger.warning(f"⚠️ Message ID not returned from upsert, searching by wa_message_id: {message.get('id')}")
+        # Récupérer l'ID du message en cherchant par wa_message_id
+        message_db_id = None
+        if message.get("id"):
             existing_msg = await supabase_execute(
                 supabase.table("messages")
                 .select("id")
@@ -367,7 +363,11 @@ async def _process_incoming_message(
             )
             if existing_msg.data:
                 message_db_id = existing_msg.data[0].get("id")
-                logger.info(f"✅ Found existing message ID: {message_db_id}")
+                logger.debug(f"✅ Message ID retrieved: {message_db_id}")
+            else:
+                logger.warning(f"⚠️ Message inserted but ID not found by wa_message_id: {message.get('id')}")
+        else:
+            logger.warning("⚠️ Message has no wa_message_id, cannot retrieve database ID")
 
         # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
         if message_db_id and media_meta.get("media_id") and msg_type in ("image", "video", "audio", "document", "sticker"):
@@ -1136,17 +1136,14 @@ async def send_media_message_with_storage(
         "media_mime_type": None,  # Sera mis à jour si disponible
     }
 
-    message_result = await supabase_execute(
-        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id").select("id")
+    # Faire l'upsert
+    await supabase_execute(
+        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
     )
     
-    # Récupérer l'ID du message inséré
-    inserted_message = message_result.data[0] if message_result.data else None
-    message_db_id = inserted_message.get("id") if inserted_message else None
-    
-    # Si upsert n'a pas retourné l'ID, chercher par wa_message_id
-    if not message_db_id and message_id:
-        logger.warning(f"⚠️ Outbound message ID not returned from upsert, searching by wa_message_id: {message_id}")
+    # Récupérer l'ID du message en cherchant par wa_message_id
+    message_db_id = None
+    if message_id:
         existing_msg = await supabase_execute(
             supabase.table("messages")
             .select("id")
@@ -1155,7 +1152,11 @@ async def send_media_message_with_storage(
         )
         if existing_msg.data:
             message_db_id = existing_msg.data[0].get("id")
-            logger.info(f"✅ Found existing outbound message ID: {message_db_id}")
+            logger.debug(f"✅ Outbound message ID retrieved: {message_db_id}")
+        else:
+            logger.warning(f"⚠️ Outbound message inserted but ID not found by wa_message_id: {message_id}")
+    else:
+        logger.warning("⚠️ Outbound message has no wa_message_id, cannot retrieve database ID")
     
     # Télécharger et stocker le média dans Supabase Storage en arrière-plan
     if message_db_id and media_id and media_type in ("image", "video", "audio", "document", "sticker"):

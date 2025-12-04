@@ -1,47 +1,40 @@
 {$DOMAIN} {
   encode zstd gzip
 
+  # Backend URL from environment variable (Render URL)
+  # If BACKEND_URL is not set, fallback to local backend:8000
+  import backends
+
   # API routes - must be before frontend catch-all
-  # In production, backend is on Render, use BACKEND_URL env var
   @api path /api*
   handle @api {
     uri strip_prefix /api
-    reverse_proxy {$BACKEND_URL:backend:8000} {
-      header_up Host {upstream_hostport}
-      header_up X-Forwarded-Proto {scheme}
-    }
+    reverse_proxy {$BACKEND_URL:backend:8000}
   }
 
   # Webhook routes - must be before frontend catch-all
-  # CRITICAL: Webhooks must work!
-  # On OVH: backend:8000 (Docker service name)
-  # On Render: Use BACKEND_URL env var if set
+  # CRITICAL: Webhooks must work in production!
   @webhook path /webhook*
   handle @webhook {
     reverse_proxy {$BACKEND_URL:backend:8000} {
-      # Preserve headers for webhook verification
-      header_up Host {upstream_hostport}
+      # Important: Preserve original request headers for webhook verification
+      header_up Host {host}
       header_up X-Forwarded-Proto {scheme}
       header_up X-Forwarded-For {remote_host}
       header_up X-Real-IP {remote}
-      # Important: Don't strip any headers, Meta needs them
     }
   }
 
   # Diagnostics routes - must be before frontend catch-all
   @diagnostics path /_diagnostics*
   handle @diagnostics {
-    reverse_proxy {$BACKEND_URL:backend:8000} {
-      header_up Host {upstream_hostport}
-    }
+    reverse_proxy {$BACKEND_URL:backend:8000}
   }
 
   # Health check and metrics - must be before frontend catch-all
   @health path /health* /healthz /metrics
   handle @health {
-    reverse_proxy {$BACKEND_URL:backend:8000} {
-      header_up Host {upstream_hostport}
-    }
+    reverse_proxy {$BACKEND_URL:backend:8000}
   }
 
   # Grafana - must be before frontend catch-all

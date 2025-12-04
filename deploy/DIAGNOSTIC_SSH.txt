@@ -1,0 +1,51 @@
+# ==========================================
+# DIAGNOSTIC COMPLET - COPIEZ-COLLEZ DANS SSH
+# ==========================================
+
+echo "=== 1. RÉSEAUX DOCKER ==="
+docker network ls
+echo ""
+
+echo "=== 2. RÉSEAU DU BACKEND (deploy-backend-1) ==="
+docker inspect deploy-backend-1 --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}} (IP: {{$conf.IPAddress}}){{"\n"}}{{end}}' 2>/dev/null || echo "Conteneur non trouvé"
+echo ""
+
+echo "=== 3. RÉSEAU DE CADDY (deploy-caddy-1) ==="
+docker inspect deploy-caddy-1 --format '{{range $net, $conf := .NetworkSettings.Networks}}{{$net}} (IP: {{$conf.IPAddress}}){{"\n"}}{{end}}' 2>/dev/null || echo "Conteneur non trouvé"
+echo ""
+
+echo "=== 4. TEST: Caddy -> backend:8000 ==="
+docker exec deploy-caddy-1 wget -q -O- --timeout=3 http://backend:8000/healthz 2>&1 && echo "✅ SUCCÈS" || echo "❌ ÉCHEC"
+echo ""
+
+echo "=== 5. TEST: Caddy -> deploy-backend-1:8000 ==="
+docker exec deploy-caddy-1 wget -q -O- --timeout=3 http://deploy-backend-1:8000/healthz 2>&1 && echo "✅ SUCCÈS" || echo "❌ ÉCHEC"
+echo ""
+
+echo "=== 6. IP DU BACKEND ==="
+BACKEND_IP=$(docker inspect deploy-backend-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null)
+echo "IP: $BACKEND_IP"
+if [ -n "$BACKEND_IP" ]; then
+    echo "Test depuis Caddy vers IP directe:"
+    docker exec deploy-caddy-1 wget -q -O- --timeout=3 "http://$BACKEND_IP:8000/healthz" 2>&1 && echo "✅ SUCCÈS" || echo "❌ ÉCHEC"
+fi
+echo ""
+
+echo "=== 7. CONFIGURATION CADDY (webhook) ==="
+docker exec deploy-caddy-1 cat /etc/caddy/Caddyfile 2>/dev/null | grep -A 5 "webhook" || echo "Non trouvé"
+echo ""
+
+echo "=== 8. LOGS BACKEND (Uvicorn) ==="
+docker logs deploy-backend-1 2>&1 | grep -i "uvicorn running" | tail -1 || echo "Non trouvé"
+echo ""
+
+echo "=== 9. LOGS CADDY (webhook) ==="
+docker logs --tail=20 deploy-caddy-1 2>&1 | grep -i webhook || echo "Aucune mention de webhook"
+echo ""
+
+echo "=== 10. FICHIER DOCKER-COMPOSE ==="
+find ~ -name "docker-compose.prod.yml" 2>/dev/null | head -1
+echo ""
+
+echo "=== FIN DU DIAGNOSTIC ==="
+
