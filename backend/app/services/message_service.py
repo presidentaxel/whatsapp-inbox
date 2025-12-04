@@ -29,13 +29,48 @@ logger = logging.getLogger(__name__)
 async def handle_incoming_message(data: dict):
     """
     Parse le webhook WhatsApp Cloud API et stocke les messages + statuts.
+    
+    Supporte deux formats:
+    1. Format réel: {"object": "...", "entry": [...]}
+    2. Format test Meta: {"field": "...", "value": {...}}
     """
     try:
         logger.info(f"📥 Webhook received: object={data.get('object')}, entries={len(data.get('entry', []))}")
         
+        # Gérer le format du test Meta (v24.0) qui est différent
+        if "field" in data and "value" in data and "entry" not in data:
+            logger.info("🔄 Format test Meta détecté, conversion au format réel...")
+            # Convertir le format test en format réel
+            field = data.get("field")
+            value = data.get("value")
+            
+            # Créer une structure entry compatible
+            phone_number_id = value.get("metadata", {}).get("phone_number_id")
+            if not phone_number_id:
+                logger.error("❌ Format test Meta: phone_number_id manquant dans metadata")
+                return True
+            
+            # Utiliser phone_number_id comme entry.id (peut être WABA_ID dans certains cas)
+            data = {
+                "object": "whatsapp_business_account",
+                "entry": [
+                    {
+                        "id": phone_number_id,
+                        "changes": [
+                            {
+                                "field": field,
+                                "value": value
+                            }
+                        ]
+                    }
+                ]
+            }
+            logger.info(f"✅ Format converti: entry.id={phone_number_id}, field={field}")
+        
         entries = data.get("entry", [])
         if not entries:
             logger.warning("⚠️ No entries in webhook payload")
+            logger.debug(f"📋 Webhook data keys: {list(data.keys())}")
             return True
 
         for entry_idx, entry in enumerate(entries):
@@ -55,50 +90,46 @@ async def handle_incoming_message(data: dict):
                     
                     metadata = value.get("metadata", {})
                     phone_number_id = metadata.get("phone_number_id")
+                    entry_id = entry.get("id")
+                    account = None
                     
-                    if not phone_number_id:
-                        # Log détaillé pour debug
-                        logger.error(
-                            f"❌ No phone_number_id in metadata! "
-                            f"metadata={json.dumps(metadata)}, "
-                            f"value_keys={list(value.keys())}, "
-                            f"change_field={change.get('field')}, "
-                            f"entry_id={entry.get('id')}"
-                        )
-                        
-                        # Essayer plusieurs stratégies pour trouver le phone_number_id
-                        # 1. Essayer entry.id (parfois c'est le WABA_ID, pas le phone_number_id)
-                        entry_id = entry.get("id")
-                        account = None
-                        
-                        if entry_id:
-                            logger.info(f"🔍 Strategy 1: Trying entry.id as phone_number_id: {entry_id}")
-                            account = await get_account_by_phone_number_id(entry_id)
-                            if account:
-                                logger.info(f"✅ Found account using entry.id: {account.get('id')}")
-                                phone_number_id = entry_id
-                        
-                        # 2. Si pas trouvé, essayer de chercher dans tous les comptes
-                        # et voir si un correspond (peut-être que le format a changé)
-                        if not account:
-                            logger.info(f"🔍 Strategy 2: Searching all accounts for matching pattern")
-                            from app.services.account_service import get_all_accounts
-                            all_accounts = await get_all_accounts()
-                            logger.info(f"   Checking {len(all_accounts)} accounts...")
-                            # Pour l'instant, on ne peut pas deviner, donc on continue
-                        
-                        if not account:
-                            logger.error(
-                                f"❌ Cannot find account - phone_number_id missing from webhook!\n"
-                                f"   Please check:\n"
-                                f"   1. Webhook structure in Meta Business\n"
-                                f"   2. If phone_number_id format has changed\n"
-                                f"   3. Use /webhook/whatsapp/debug endpoint to see full webhook"
-                            )
-                            continue
-                    else:
-                        logger.info(f"🔍 Looking for account with phone_number_id: {phone_number_id}")
+                    # Stratégie de recherche du compte:
+                    # 1. Utiliser phone_number_id du metadata (méthode principale)
+                    # 2. Si absent, essayer entry.id comme phone_number_id
+                    # 3. Si toujours pas trouvé, logger l'erreur
+                    
+                    if phone_number_id:
+                        logger.info(f"🔍 Looking for account with phone_number_id from metadata: {phone_number_id}")
                         account = await get_account_by_phone_number_id(phone_number_id)
+                        if account:
+                            logger.info(f"✅ Found account using metadata phone_number_id: {account.get('name')} (id: {account.get('id')})")
+                    
+                    # Si pas trouvé et qu'on a un entry.id, essayer avec ça
+                    if not account and entry_id:
+                        logger.info(f"🔍 Strategy 2: Trying entry.id as phone_number_id: {entry_id}")
+                        account = await get_account_by_phone_number_id(entry_id)
+                        if account:
+                            logger.info(f"✅ Found account using entry.id: {account.get('name')} (id: {account.get('id')})")
+                            phone_number_id = entry_id  # Utiliser entry.id comme phone_number_id
+                    
+                    # Si toujours pas trouvé, logger toutes les infos disponibles
+                    if not account:
+                        logger.error(
+                            f"❌ Cannot find account!\n"
+                            f"   metadata phone_number_id: {phone_number_id or 'MISSING'}\n"
+                            f"   entry.id: {entry_id or 'MISSING'}\n"
+                            f"   metadata: {json.dumps(metadata)}\n"
+                            f"   change_field: {change.get('field')}\n"
+                            f"   value_keys: {list(value.keys())}"
+                        )
+                        # Lister tous les comptes disponibles pour debug
+                        from app.services.account_service import get_all_accounts
+                        all_accounts = await get_all_accounts()
+                        if all_accounts:
+                            logger.info(f"📋 Available accounts in database:")
+                            for acc in all_accounts:
+                                logger.info(f"   - {acc.get('name')}: phone_number_id={acc.get('phone_number_id')}")
+                        continue
                     
                     if not account:
                         # Log très détaillé pour comprendre le problème
@@ -154,10 +185,37 @@ async def handle_incoming_message(data: dict):
                             
                 except Exception as change_error:
                     logger.error(f"❌ Error processing change {change_idx + 1}: {change_error}", exc_info=True)
+                    # Enregistrer l'erreur pour diagnostic
+                    try:
+                        from app.api.routes_diagnostics import log_error_to_memory
+                        log_error_to_memory(
+                            "message_processing_change",
+                            str(change_error),
+                            {
+                                "entry_id": entry.get("id"),
+                                "change_field": change.get("field"),
+                                "change_idx": change_idx
+                            }
+                        )
+                    except:
+                        pass
                     # Continue avec les autres changes même si un échoue
                     
     except Exception as e:
         logger.error(f"❌ Critical error in handle_incoming_message: {e}", exc_info=True)
+        # Enregistrer l'erreur pour diagnostic
+        try:
+            from app.api.routes_diagnostics import log_error_to_memory
+            log_error_to_memory(
+                "handle_incoming_message_critical",
+                str(e),
+                {
+                    "data_object": data.get("object") if isinstance(data, dict) else None,
+                    "entries_count": len(data.get("entry", [])) if isinstance(data, dict) else 0
+                }
+            )
+        except:
+            pass
         # Ne pas lever l'exception pour que WhatsApp ne réessaie pas indéfiniment
         return True
 

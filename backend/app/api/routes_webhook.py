@@ -166,6 +166,19 @@ async def whatsapp_webhook(request: Request):
     
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {e}", exc_info=True)
+        # Enregistrer l'erreur pour diagnostic
+        try:
+            from app.api.routes_diagnostics import log_error_to_memory
+            log_error_to_memory(
+                "webhook_processing",
+                str(e),
+                {
+                    "client_ip": request.client.host if request.client else "unknown",
+                    "data_keys": list(data.keys()) if 'data' in locals() else []
+                }
+            )
+        except:
+            pass  # Ne pas faire échouer si le diagnostic échoue
         # On retourne quand même 200 pour ne pas que Meta réessaye indéfiniment
         return {"status": "error", "message": str(e)}
 

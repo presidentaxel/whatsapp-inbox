@@ -1,197 +1,336 @@
 """
-Script de diagnostic pour identifier pourquoi les messages ne sont plus reçus
+Script de diagnostic pour identifier pourquoi les webhooks ne stockent pas les messages
+Vérifie les logs et teste le flux complet
 """
+
+from __future__ import annotations
+
 import asyncio
 import json
 import sys
 from pathlib import Path
 
-# Ajouter le répertoire parent au path pour les imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import httpx
+from dotenv import load_dotenv
+
+# Ajouter le répertoire backend au PYTHONPATH
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
+
+# Charger les variables d'environnement
+ENV_PATH = ROOT_DIR / ".env"
+load_dotenv(ENV_PATH)
 
 from app.core.db import supabase, supabase_execute
-from app.core.config import settings
-from app.services.account_service import get_account_by_phone_number_id, get_all_accounts
+from app.services.account_service import get_all_accounts
+
+PRODUCTION_URL = "https://whatsapp.lamaisonduchauffeurvtc.fr"
+
+
+async def check_recent_messages():
+    """Vérifie s'il y a des messages récents dans la base"""
+    print("="*80)
+    print("1. VÉRIFICATION DES MESSAGES EN BASE")
+    print("="*80)
+    
+    try:
+        # Messages entrants des dernières 24h
+        result = await supabase_execute(
+            supabase.table("messages")
+            .select("id, direction, content_text, timestamp, wa_message_id")
+            .eq("direction", "incoming")
+            .order("timestamp", desc=True)
+            .limit(10)
+        )
+        
+        messages = result.data if result.data else []
+        
+        if messages:
+            print(f"✅ {len(messages)} message(s) entrant(s) trouvé(s) récemment:")
+            for msg in messages[:5]:
+                print(f"   - {msg.get('timestamp')}: {msg.get('content_text', '')[:50]}")
+        else:
+            print("❌ Aucun message entrant trouvé dans la base de données")
+            print("   Cela confirme que les webhooks ne stockent pas les messages")
+        
+        return len(messages) > 0
+    except Exception as e:
+        print(f"❌ Erreur lors de la vérification: {e}")
+        return False
 
 
 async def check_accounts():
-    """Vérifie tous les comptes dans la base de données"""
-    print("=" * 60)
-    print("📋 COMPTES DANS LA BASE DE DONNÉES")
-    print("=" * 60)
+    """Vérifie les comptes configurés"""
+    print("\n" + "="*80)
+    print("2. VÉRIFICATION DES COMPTES")
+    print("="*80)
     
-    accounts = await get_all_accounts()
-    
-    if not accounts:
-        print("❌ Aucun compte trouvé dans la base de données!")
-        print("\n💡 Vérifiez que:")
-        print("   1. Les variables d'environnement sont configurées (WHATSAPP_PHONE_ID, etc.)")
-        print("   2. Le compte par défaut a été créé automatiquement")
-        return
-    
-    print(f"\n✅ {len(accounts)} compte(s) trouvé(s):\n")
-    
-    for account in accounts:
-        print(f"📱 Compte: {account.get('name', 'N/A')}")
-        print(f"   ID: {account.get('id')}")
-        print(f"   Slug: {account.get('slug')}")
-        print(f"   Phone Number: {account.get('phone_number', 'N/A')}")
-        print(f"   Phone Number ID: {account.get('phone_number_id', '❌ MANQUANT')}")
-        print(f"   Is Active: {account.get('is_active', False)}")
-        print()
-    
-    return accounts
+    try:
+        accounts = await get_all_accounts()
+        if not accounts:
+            print("❌ Aucun compte trouvé dans la base de données")
+            return None
+        
+        print(f"✅ {len(accounts)} compte(s) trouvé(s):")
+        for acc in accounts:
+            status = "✓ Actif" if acc.get("is_active") else "✗ Inactif"
+            print(f"   - {acc.get('name')}: phone_number_id={acc.get('phone_number_id')} {status}")
+        
+        return accounts[0] if accounts else None
+    except Exception as e:
+        print(f"❌ Erreur: {e}")
+        return None
 
 
-async def check_webhook_structure():
-    """Affiche la structure attendue d'un webhook"""
-    print("=" * 60)
-    print("📥 STRUCTURE ATTENDUE DU WEBHOOK")
-    print("=" * 60)
+async def test_webhook_format_real(account):
+    """Teste avec le format réel des webhooks"""
+    print("\n" + "="*80)
+    print("3. TEST DU WEBHOOK AVEC FORMAT RÉEL")
+    print("="*80)
     
-    example_webhook = {
+    if not account:
+        print("⚠️ Pas de compte disponible pour le test")
+        return False
+    
+    phone_number_id = account.get("phone_number_id")
+    
+    # Format réel des webhooks (format production)
+    payload = {
         "object": "whatsapp_business_account",
-        "entry": [{
-            "id": "WABA_ID",
-            "changes": [{
-                "value": {
-                    "messaging_product": "whatsapp",
-                    "metadata": {
-                        "display_phone_number": "+33612345678",
-                        "phone_number_id": "123456789012345"  # ← C'est ce qui est recherché
-                    },
-                    "contacts": [{
-                        "wa_id": "33783614530",
-                        "profile": {
-                            "name": "John Doe"
-                        }
-                    }],
-                    "messages": [{
-                        "from": "33783614530",
-                        "id": "wamid.xxx",
-                        "timestamp": "1234567890",
-                        "type": "text",
-                        "text": {
-                            "body": "Hello"
-                        }
-                    }]
-                },
-                "field": "messages"
-            }]
-        }]
+        "entry": [
+            {
+                "id": phone_number_id,  # Utiliser phone_number_id comme entry.id
+                "changes": [
+                    {
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "metadata": {
+                                "display_phone_number": "16505551111",
+                                "phone_number_id": phone_number_id
+                            },
+                            "contacts": [
+                                {
+                                    "profile": {
+                                        "name": "Test User Diagnostic"
+                                    },
+                                    "wa_id": "16315551181"
+                                }
+                            ],
+                            "messages": [
+                                {
+                                    "from": "16315551181",
+                                    "id": "DIAGNOSTIC_TEST_" + str(int(asyncio.get_event_loop().time())),
+                                    "timestamp": "1504902988",
+                                    "type": "text",
+                                    "text": {
+                                        "body": "Message de test diagnostic - " + str(int(asyncio.get_event_loop().time()))
+                                    }
+                                }
+                            ]
+                        },
+                        "field": "messages"
+                    }
+                ]
+            }
+        ]
     }
     
-    print("\n📝 Exemple de webhook valide:\n")
-    print(json.dumps(example_webhook, indent=2))
-    print("\n💡 Le phone_number_id doit être dans: entry[].changes[].value.metadata.phone_number_id")
-    print()
-
-
-async def test_phone_number_id_lookup(phone_number_id: str = None):
-    """Teste la recherche d'un compte par phone_number_id"""
-    print("=" * 60)
-    print("🔍 TEST DE RECHERCHE PAR PHONE_NUMBER_ID")
-    print("=" * 60)
+    print(f"Envoi du webhook avec phone_number_id: {phone_number_id}")
+    print(f"Message ID: {payload['entry'][0]['changes'][0]['value']['messages'][0]['id']}")
     
-    if not phone_number_id:
-        # Récupérer le premier phone_number_id de la base
-        accounts = await get_all_accounts()
-        if accounts and accounts[0].get("phone_number_id"):
-            phone_number_id = accounts[0]["phone_number_id"]
-            print(f"\n📱 Utilisation du phone_number_id du premier compte: {phone_number_id}")
-        else:
-            print("\n❌ Aucun phone_number_id disponible pour le test")
-            print("   Fournissez un phone_number_id en argument ou configurez un compte")
-            return
-    
-    print(f"\n🔍 Recherche du compte avec phone_number_id: {phone_number_id}")
-    
-    account = await get_account_by_phone_number_id(phone_number_id)
-    
-    if account:
-        print(f"✅ Compte trouvé!")
-        print(f"   ID: {account.get('id')}")
-        print(f"   Name: {account.get('name')}")
-        print(f"   Phone Number ID: {account.get('phone_number_id')}")
-    else:
-        print(f"❌ Aucun compte trouvé avec ce phone_number_id!")
-        print("\n💡 Vérifiez que:")
-        print("   1. Le phone_number_id dans la base correspond à celui du webhook")
-        print("   2. Le compte est actif (is_active = true)")
-        print("   3. Le phone_number_id n'a pas changé dans Meta Business")
-
-
-async def check_env_vars():
-    """Vérifie les variables d'environnement"""
-    print("=" * 60)
-    print("🔧 VARIABLES D'ENVIRONNEMENT")
-    print("=" * 60)
-    
-    vars_to_check = [
-        "WHATSAPP_PHONE_ID",
-        "WHATSAPP_TOKEN",
-        "WHATSAPP_VERIFY_TOKEN",
-        "WHATSAPP_PHONE_NUMBER",
-    ]
-    
-    print()
-    for var in vars_to_check:
-        value = getattr(settings, var, None)
-        if value:
-            # Masquer les tokens sensibles
-            if "TOKEN" in var or "TOKEN" in var:
-                display_value = f"{value[:10]}..." if len(value) > 10 else "***"
+    try:
+        response = httpx.post(
+            f"{PRODUCTION_URL}/webhook/whatsapp",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=10.0
+        )
+        
+        print(f"\nStatus: {response.status_code}")
+        print(f"Réponse: {response.text}")
+        
+        if response.status_code == 200:
+            print("✅ Webhook accepté par le serveur")
+            print("\n⏳ Attente de 3 secondes pour que le traitement se termine...")
+            await asyncio.sleep(3)
+            
+            # Vérifier si le message a été stocké
+            message_id = payload['entry'][0]['changes'][0]['value']['messages'][0]['id']
+            result = await supabase_execute(
+                supabase.table("messages")
+                .select("id, content_text, timestamp")
+                .eq("wa_message_id", message_id)
+                .limit(1)
+            )
+            
+            if result.data:
+                print(f"✅ Message stocké avec succès!")
+                print(f"   ID: {result.data[0].get('id')}")
+                print(f"   Contenu: {result.data[0].get('content_text')}")
+                return True
             else:
-                display_value = value
-            print(f"✅ {var}: {display_value}")
+                print(f"❌ Message NON stocké dans la base de données")
+                print(f"   Le webhook a été accepté mais le traitement a échoué")
+                print(f"   Vérifiez les logs du serveur pour voir l'erreur exacte")
+                return False
         else:
-            print(f"❌ {var}: Non défini")
+            print(f"❌ Webhook rejeté: status {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erreur lors du test: {e}")
+        return False
+
+
+async def test_webhook_format_meta_test(account):
+    """Teste avec le format du test Meta (v24.0)"""
+    print("\n" + "="*80)
+    print("4. TEST DU WEBHOOK AVEC FORMAT TEST META (v24.0)")
+    print("="*80)
     
-    print()
+    if not account:
+        print("⚠️ Pas de compte disponible pour le test")
+        return False
+    
+    phone_number_id = account.get("phone_number_id")
+    
+    # Format du test Meta (simplifié)
+    payload = {
+        "field": "messages",
+        "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+                "display_phone_number": "16505551111",
+                "phone_number_id": phone_number_id
+            },
+            "contacts": [
+                {
+                    "profile": {
+                        "name": "Test User Meta Format"
+                    },
+                    "wa_id": "16315551181"
+                }
+            ],
+            "messages": [
+                {
+                    "from": "16315551181",
+                    "id": "META_TEST_" + str(int(asyncio.get_event_loop().time())),
+                    "timestamp": "1504902988",
+                    "type": "text",
+                    "text": {
+                        "body": "Test format Meta - " + str(int(asyncio.get_event_loop().time()))
+                    }
+                }
+            ]
+        }
+    }
+    
+    print(f"Envoi du webhook avec format test Meta")
+    print(f"Message ID: {payload['value']['messages'][0]['id']}")
+    
+    try:
+        response = httpx.post(
+            f"{PRODUCTION_URL}/webhook/whatsapp",
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=10.0
+        )
+        
+        print(f"\nStatus: {response.status_code}")
+        print(f"Réponse: {response.text}")
+        
+        if response.status_code == 200:
+            print("✅ Webhook accepté par le serveur")
+            print("\n⏳ Attente de 3 secondes pour que le traitement se termine...")
+            await asyncio.sleep(3)
+            
+            # Vérifier si le message a été stocké
+            message_id = payload['value']['messages'][0]['id']
+            result = await supabase_execute(
+                supabase.table("messages")
+                .select("id, content_text, timestamp")
+                .eq("wa_message_id", message_id)
+                .limit(1)
+            )
+            
+            if result.data:
+                print(f"✅ Message stocké avec succès!")
+                return True
+            else:
+                print(f"❌ Message NON stocké")
+                print(f"   Le format test Meta n'est peut-être pas encore supporté")
+                return False
+        else:
+            print(f"❌ Webhook rejeté: status {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Erreur lors du test: {e}")
+        return False
 
 
 async def main():
-    """Fonction principale"""
-    print("\n" + "=" * 60)
-    print("🔍 DIAGNOSTIC DU PROBLÈME DE RÉCEPTION DES MESSAGES")
-    print("=" * 60 + "\n")
-    
-    # 1. Vérifier les variables d'environnement
-    await check_env_vars()
-    
-    # 2. Vérifier les comptes dans la base
-    accounts = await check_accounts()
-    
-    # 3. Tester la recherche par phone_number_id
-    if accounts:
-        phone_number_id = accounts[0].get("phone_number_id") if accounts else None
-        await test_phone_number_id_lookup(phone_number_id)
-    
-    # 4. Afficher la structure attendue
-    await check_webhook_structure()
-    
-    # 5. Recommandations
-    print("=" * 60)
-    print("💡 RECOMMANDATIONS")
-    print("=" * 60)
-    print("\n1. Vérifiez les logs du serveur pour voir les erreurs:")
-    print("   - Cherchez les messages avec '❌ Unknown account for phone_number_id'")
-    print("   - Vérifiez que le phone_number_id dans les logs correspond à celui en base")
+    print("="*80)
+    print("DIAGNOSTIC COMPLET DES WEBHOOKS")
+    print("="*80)
+    print(f"Backend URL: {PRODUCTION_URL}")
     print()
-    print("2. Vérifiez la configuration du webhook dans Meta:")
-    print("   - Le webhook doit pointer vers: https://votre-domaine.com/webhook/whatsapp")
-    print("   - Le verify_token doit correspondre")
+    
+    # 1. Vérifier les messages existants
+    has_messages = await check_recent_messages()
+    
+    # 2. Vérifier les comptes
+    account = await check_accounts()
+    
+    if not account:
+        print("\n❌ Impossible de continuer sans compte configuré")
+        return
+    
+    # 3. Tester avec le format réel
+    test1_ok = await test_webhook_format_real(account)
+    
+    # 4. Tester avec le format test Meta
+    test2_ok = await test_webhook_format_meta_test(account)
+    
+    # Résumé
+    print("\n" + "="*80)
+    print("RÉSUMÉ DU DIAGNOSTIC")
+    print("="*80)
+    print(f"Messages existants en base: {'✅ Oui' if has_messages else '❌ Non'}")
+    print(f"Format réel des webhooks: {'✅ Fonctionne' if test1_ok else '❌ Échoue'}")
+    print(f"Format test Meta (v24.0): {'✅ Fonctionne' if test2_ok else '❌ Échoue'}")
     print()
-    print("3. Testez le webhook manuellement:")
-    print("   - Utilisez l'outil de test de Meta Business")
-    print("   - Vérifiez que les webhooks arrivent bien (logs du serveur)")
+    print("="*80)
+    print("PROCHAINES ÉTAPES")
+    print("="*80)
+    
+    if not test1_ok and not test2_ok:
+        print("❌ Les deux formats échouent")
+        print("   → Vérifiez les logs dans Render Dashboard → Logs")
+        print("   → Cherchez les lignes avec '❌' pour voir les erreurs")
+        print("   → Vérifiez que le phone_number_id correspond bien à un compte")
+    elif test1_ok and not test2_ok:
+        print("✅ Le format réel fonctionne")
+        print("⚠️ Le format test Meta ne fonctionne pas (normal, c'est juste pour tester)")
+        print("   → Les vrais webhooks de Meta devraient fonctionner")
+    elif not test1_ok and test2_ok:
+        print("⚠️ Le format test Meta fonctionne mais pas le format réel")
+        print("   → Il y a peut-être un problème avec entry.id vs phone_number_id")
+    else:
+        print("✅ Les deux formats fonctionnent")
+        print("   → Si vous ne recevez toujours pas de messages, vérifiez:")
+        print("     1. Que Meta envoie bien les webhooks (logs Render)")
+        print("     2. Que le phone_number_id dans les webhooks correspond à un compte")
+    
     print()
-    print("4. Si le phone_number_id a changé:")
-    print("   - Mettez à jour le phone_number_id dans la table whatsapp_accounts")
-    print("   - Ou recréez le compte avec le bon phone_number_id")
-    print()
+    print("Pour voir les logs en temps réel:")
+    print("  1. https://dashboard.render.com")
+    print("  2. Service 'whatsapp-inbox-backend'")
+    print("  3. Onglet 'Logs'")
+    print("  4. Cherchez '📥 POST /webhook/whatsapp' pour voir les webhooks reçus")
+    print("  5. Cherchez '❌' pour voir les erreurs")
+    print("="*80)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-

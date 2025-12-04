@@ -19,6 +19,7 @@ from app.api.routes_health import router as health_router
 from app.api.routes_app import router as app_router
 from app.api.routes_invitations import router as invitations_router
 from app.api.routes_users import router as users_router
+from app.api.routes_diagnostics import router as diagnostics_router
 
 # Nouvelles routes WhatsApp API complète
 from app.api.routes_whatsapp_messages import router as whatsapp_messages_router
@@ -58,6 +59,7 @@ app.include_router(contacts_router, prefix="/contacts")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(bot_router, prefix="/bot")
 app.include_router(health_router)
+app.include_router(diagnostics_router)
 app.include_router(app_router, prefix="/app")
 app.include_router(invitations_router, prefix="/invitations")
 app.include_router(users_router, prefix="/admin/users")
