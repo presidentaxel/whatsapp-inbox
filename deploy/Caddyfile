@@ -14,6 +14,18 @@
     reverse_proxy backend:8000
   }
 
+  # Diagnostics routes - must be before frontend catch-all
+  @diagnostics path /_diagnostics*
+  handle @diagnostics {
+    reverse_proxy backend:8000
+  }
+
+  # Health check and metrics - must be before frontend catch-all
+  @health path /health* /healthz /metrics
+  handle @health {
+    reverse_proxy backend:8000
+  }
+
   # Grafana - must be before frontend catch-all
   @grafanaExact path /grafana
   handle @grafanaExact {
