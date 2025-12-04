@@ -35,11 +35,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Check SSH secrets
+        run: |
+          if [ -z "${{ secrets.OVH_HOST }}" ]; then
+            echo "❌ OVH_HOST secret manquant"
+            exit 1
+          fi
+          # Support à la fois OVH_USER (ancien) et OVH_USERNAME (nouveau)
+          if [ -z "${{ secrets.OVH_USER }}" ] && [ -z "${{ secrets.OVH_USERNAME }}" ]; then
+            echo "❌ OVH_USER ou OVH_USERNAME secret manquant"
+            exit 1
+          fi
+          if [ -z "${{ secrets.OVH_SSH_KEY }}" ]; then
+            echo "❌ OVH_SSH_KEY secret manquant"
+            exit 1
+          fi
+          echo "✅ Tous les secrets SSH sont présents"
+
       - name: Deploy to OVH Server
         uses: appleboy/ssh-action@v1.0.0
         with:
           host: ${{ secrets.OVH_HOST }}
-          username: ${{ secrets.OVH_USERNAME }}
+          username: ${{ secrets.OVH_USER || secrets.OVH_USERNAME }}
           key: ${{ secrets.OVH_SSH_KEY }}
           port: ${{ secrets.OVH_SSH_PORT || 22 }}
           script: |
