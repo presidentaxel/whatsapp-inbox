@@ -55,13 +55,26 @@ jobs:
             # Aller dans deploy
             cd deploy 2>/dev/null || cd .
             
-            # S'assurer que BACKEND_URL est défini
+            # S'assurer que BACKEND_URL est défini (CRITIQUE pour éviter les 503)
             if [ -f .env ]; then
               if ! grep -q "^BACKEND_URL=" .env; then
                 echo "BACKEND_URL=backend:8000" >> .env
+                echo "✅ BACKEND_URL ajouté au .env"
+              else
+                # S'assurer que la valeur est correcte
+                sed -i 's|^BACKEND_URL=.*|BACKEND_URL=backend:8000|' .env
+                echo "✅ BACKEND_URL mis à jour dans .env"
               fi
             else
               echo "BACKEND_URL=backend:8000" > .env
+              echo "✅ .env créé avec BACKEND_URL"
+            fi
+            
+            # Vérifier aussi dans docker-compose.prod.yml
+            if [ -f docker-compose.prod.yml ]; then
+              if ! grep -q "BACKEND_URL" docker-compose.prod.yml; then
+                echo "⚠️  BACKEND_URL manquant dans docker-compose.prod.yml"
+              fi
             fi
             
             # Rebuild et redémarrer les services
