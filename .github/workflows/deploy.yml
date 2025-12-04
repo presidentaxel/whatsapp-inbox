@@ -1,19 +1,35 @@
 name: Deploy to OVH Server
 
 on:
-  push:
-    branches:
-      - main
-      - master
-    # Déploie sur n'importe quel changement (vous pouvez restreindre si besoin)
-    # paths:
-    #   - 'backend/**'
-    #   - 'frontend/**'
-    #   - 'deploy/**'
+  workflow_run:
+    workflows: ["Tests and Validation"]
+    types:
+      - completed
+  # Permet aussi de déployer manuellement
+  workflow_dispatch:
 
 jobs:
-  deploy:
+  # Vérifier que les tests sont passés
+  check-tests:
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Check test status
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "✅ Déploiement manuel autorisé"
+          elif [ "${{ github.event.workflow_run.conclusion }}" == "success" ]; then
+            echo "✅ Tests validés, déploiement autorisé"
+          else
+            echo "❌ Les tests doivent passer avant le déploiement"
+            exit 1
+          fi
+
+  deploy:
+    needs: check-tests
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
     
     steps:
       - name: Checkout code
@@ -106,4 +122,3 @@ jobs:
             docker compose -f docker-compose.prod.yml logs --tail=20 backend | tail -10 || true
             
             echo "✅ Déploiement terminé!"
-

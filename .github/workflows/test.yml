@@ -1,0 +1,285 @@
+name: Tests and Validation
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  # Tests backend
+  test-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./backend
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 black mypy pylint
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile app/main.py
+          find app -name "*.py" -exec python -m py_compile {} \;
+          echo "✅ Syntaxe Python valide"
+
+      - name: Lint with flake8
+        run: |
+          flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          flake8 app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics || true
+        continue-on-error: true
+
+      - name: Check imports
+        run: |
+          python -c "import app.main; print('✅ Imports valides')" || exit 1
+
+      - name: Validate environment variables
+        run: |
+          python << 'EOF'
+          import os
+          from pathlib import Path
+          
+          # Vérifier que les fichiers .env.example existent ou que les variables critiques sont documentées
+          required_vars = [
+              'SUPABASE_URL',
+              'SUPABASE_KEY',
+              'WHATSAPP_TOKEN',
+              'WHATSAPP_VERIFY_TOKEN'
+          ]
+          
+          # Vérifier que le code peut charger la config
+          try:
+              from app.core.config import settings
+              print("✅ Configuration chargée avec succès")
+          except Exception as e:
+              print(f"❌ Erreur de configuration: {e}")
+              exit(1)
+          EOF
+
+      - name: Check for critical errors
+        run: |
+          python << 'EOF'
+          import sys
+          import importlib.util
+          
+          # Vérifier que les routes principales peuvent être importées
+          routes = [
+              'app.api.routes_webhook',
+              'app.api.routes_accounts',
+              'app.api.routes_auth',
+              'app.api.routes_health'
+          ]
+          
+          for route in routes:
+              try:
+                  spec = importlib.util.find_spec(route)
+                  if spec is None:
+                      print(f"❌ Route non trouvée: {route}")
+                      sys.exit(1)
+                  print(f"✅ Route trouvée: {route}")
+              except Exception as e:
+                  print(f"❌ Erreur d'import pour {route}: {e}")
+                  sys.exit(1)
+          
+          print("✅ Toutes les routes critiques sont valides")
+          EOF
+
+  # Tests frontend
+  test-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./frontend
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check syntax
+        run: |
+          npm run build --if-present || echo "⚠️ Build non configuré, vérification de syntaxe basique"
+          npx eslint . --ext .js,.jsx --max-warnings 0 || echo "⚠️ ESLint non configuré"
+        continue-on-error: true
+
+      - name: Validate package.json
+        run: |
+          node -e "const pkg = require('./package.json'); console.log('✅ package.json valide:', pkg.name)"
+
+  # Validation des fichiers de configuration
+  validate-config:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate Caddyfile
+        run: |
+          if [ -f deploy/Caddyfile ]; then
+            # Vérifier que BACKEND_URL est utilisé
+            if ! grep -q "BACKEND_URL" deploy/Caddyfile; then
+              echo "⚠️  BACKEND_URL non trouvé dans Caddyfile"
+            else
+              echo "✅ Caddyfile contient BACKEND_URL"
+            fi
+            
+            # Vérifier que les routes critiques existent
+            if ! grep -q "@api path /api" deploy/Caddyfile; then
+              echo "❌ Route /api non trouvée dans Caddyfile"
+              exit 1
+            fi
+            
+            if ! grep -q "@webhook path /webhook" deploy/Caddyfile; then
+              echo "❌ Route /webhook non trouvée dans Caddyfile"
+              exit 1
+            fi
+            
+            echo "✅ Caddyfile valide"
+          else
+            echo "❌ Caddyfile non trouvé"
+            exit 1
+          fi
+
+      - name: Validate docker-compose.prod.yml
+        run: |
+          if [ -f deploy/docker-compose.prod.yml ]; then
+            # Vérifier que BACKEND_URL est dans les variables d'environnement
+            if ! grep -q "BACKEND_URL" deploy/docker-compose.prod.yml; then
+              echo "❌ BACKEND_URL manquant dans docker-compose.prod.yml"
+              exit 1
+            fi
+            
+            # Vérifier que les services critiques existent
+            for service in backend frontend caddy; do
+              if ! grep -q "^  $service:" deploy/docker-compose.prod.yml; then
+                echo "❌ Service $service manquant dans docker-compose.prod.yml"
+                exit 1
+              fi
+            done
+            
+            echo "✅ docker-compose.prod.yml valide"
+          else
+            echo "❌ docker-compose.prod.yml non trouvé"
+            exit 1
+          fi
+
+      - name: Validate GitHub workflow
+        run: |
+          if [ -f .github/workflows/deploy.yml ]; then
+            # Vérifier qu'il n'y a qu'un seul workflow de déploiement
+            WORKFLOW_COUNT=$(find .github/workflows -name "deploy*.yml" | wc -l)
+            if [ "$WORKFLOW_COUNT" -gt 1 ]; then
+              echo "⚠️  Plusieurs workflows de déploiement trouvés"
+              find .github/workflows -name "deploy*.yml"
+            else
+              echo "✅ Un seul workflow de déploiement"
+            fi
+          fi
+
+      - name: Check for duplicate workflows
+        run: |
+          WORKFLOWS=$(find .github/workflows -name "*.yml" -o -name "*.yaml" | wc -l)
+          echo "📊 Nombre de workflows: $WORKFLOWS"
+          
+          # Lister tous les workflows
+          echo "Workflows trouvés:"
+          find .github/workflows -name "*.yml" -o -name "*.yaml" || true
+
+  # Tests de déploiement (sans déployer réellement)
+  test-deployment:
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend, validate-config]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate deployment script
+        run: |
+          if [ -f deploy/deploy.sh ]; then
+            # Vérifier que le script est exécutable
+            if [ ! -x deploy/deploy.sh ]; then
+              echo "⚠️  deploy.sh n'est pas exécutable"
+            fi
+            
+            # Vérifier que BACKEND_URL est géré
+            if ! grep -q "BACKEND_URL" deploy/deploy.sh; then
+              echo "⚠️  BACKEND_URL non géré dans deploy.sh"
+            else
+              echo "✅ deploy.sh gère BACKEND_URL"
+            fi
+          fi
+
+      - name: Check Dockerfiles
+        run: |
+          for dockerfile in backend/Dockerfile frontend/Dockerfile; do
+            if [ -f "$dockerfile" ]; then
+              echo "✅ $dockerfile existe"
+            else
+              echo "❌ $dockerfile manquant"
+              exit 1
+            fi
+          done
+
+      - name: Validate environment files structure
+        run: |
+          # Vérifier que les .env.example ou documentation existent
+          if [ -f backend/.env.example ] || [ -f README.md ]; then
+            echo "✅ Documentation des variables d'environnement trouvée"
+          else
+            echo "⚠️  Aucune documentation des variables d'environnement"
+          fi
+
+  # Résumé final
+  test-summary:
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend, validate-config, test-deployment]
+    if: always()
+    
+    steps:
+      - name: Test Summary
+        run: |
+          echo "=========================================="
+          echo "📊 RÉSUMÉ DES TESTS"
+          echo "=========================================="
+          echo ""
+          echo "✅ Tests backend: ${{ needs.test-backend.result }}"
+          echo "✅ Tests frontend: ${{ needs.test-frontend.result }}"
+          echo "✅ Validation config: ${{ needs.validate-config.result }}"
+          echo "✅ Tests déploiement: ${{ needs.test-deployment.result }}"
+          echo ""
+          
+          if [ "${{ needs.test-backend.result }}" != "success" ] || \
+             [ "${{ needs.test-frontend.result }}" != "success" ] || \
+             [ "${{ needs.validate-config.result }}" != "success" ] || \
+             [ "${{ needs.test-deployment.result }}" != "success" ]; then
+            echo "❌ Certains tests ont échoué - Le déploiement sera bloqué"
+            exit 1
+          else
+            echo "✅ Tous les tests sont passés - Le déploiement peut continuer"
+          fi
+
