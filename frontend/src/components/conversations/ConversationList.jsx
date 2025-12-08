@@ -1,4 +1,5 @@
 import { formatPhoneNumber } from "../../utils/formatPhone";
+import { formatRelativeDate } from "../../utils/date";
 
 export default function ConversationList({
   data,
@@ -16,7 +17,7 @@ export default function ConversationList({
         const displayName =
           c.contacts?.display_name || c.contacts?.whatsapp_number || c.client_number;
         const timeLabel = c.updated_at
-          ? new Date(c.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          ? formatRelativeDate(c.updated_at)
           : "";
         return (
           <div

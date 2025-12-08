@@ -65,7 +65,11 @@ export async function showTestNotification() {
 export async function notifyNewMessage(message, conversation, options = {}) {
   // Ne pas notifier si les notifications ne sont pas activées
   if (!areNotificationsEnabled()) {
-    return;
+    const granted = await askForNotificationPermission();
+    if (!granted) {
+      console.warn('🔕 Notification skip: permission not granted');
+      return;
+    }
   }
 
   // Options par défaut
@@ -79,6 +83,7 @@ export async function notifyNewMessage(message, conversation, options = {}) {
   if (!force && !document.hidden && checkConversationOpen) {
     // Vérifier si la conversation est actuellement ouverte
     // Cette vérification se fait maintenant dans le hook useGlobalNotifications
+    console.debug('🔕 Notification skip: app visible and conversation check active');
     return;
   }
 
@@ -89,12 +94,13 @@ export async function notifyNewMessage(message, conversation, options = {}) {
 
   // Aperçu du message
   let messagePreview = 'Nouveau message';
-  if (message.content) {
-    messagePreview = message.content.substring(0, 100);
-    if (message.content.length > 100) {
+  const content = message.content_text || message.content || '';
+  if (content) {
+    messagePreview = content.substring(0, 120);
+    if (content.length > 120) {
       messagePreview += '...';
     }
-  } else if (message.media_url) {
+  } else if (message.media_url || message.media_id) {
     // Détecter le type de média
     const mediaType = message.media_type || 'media';
     const emojiMap = {
@@ -112,7 +118,20 @@ export async function notifyNewMessage(message, conversation, options = {}) {
     messagePreview = '👤 Contact';
   }
 
+  console.log('🔔 About to show notification', {
+    messageId: message.id,
+    conversationId: conversation.id,
+    contactName,
+    preview: messagePreview
+  });
+
   await showMessageNotification(contactName, messagePreview, conversation.id);
+  console.log('✅ Notification shown', {
+    messageId: message.id,
+    conversationId: conversation.id,
+    contactName,
+    preview: messagePreview
+  });
 }
 
 /**

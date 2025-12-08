@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatRelativeDateTime } from "../../utils/date";
 import {
   FiHeadphones,
   FiImage,
@@ -233,9 +234,7 @@ function renderBody(message) {
 
 export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false }) {
   const mine = message.direction === "outbound";
-  const timestamp = message.timestamp
-    ? new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-    : "";
+  const timestamp = message.timestamp ? formatRelativeDateTime(message.timestamp) : "";
 
   const messageType = (message.message_type || "text").toLowerCase();
   const isMedia = FETCHABLE_MEDIA.has(messageType) && (message.media_id || message.storage_url);

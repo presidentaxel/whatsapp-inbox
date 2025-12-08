@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { supabaseClient } from '../api/supabaseClient';
-import { notifyNewMessage } from '../utils/notifications';
+import { notifyNewMessage, askForNotificationPermission } from '../utils/notifications';
 
 /**
  * Hook global pour écouter TOUS les nouveaux messages et afficher des notifications
@@ -14,6 +14,9 @@ export function useGlobalNotifications(selectedConversationId = null) {
   const lastNotifiedRef = useRef(new Set()); // Éviter les doublons
 
   useEffect(() => {
+    // S'assurer d'avoir la permission (une seule demande ici)
+    askForNotificationPermission();
+
     // Nettoyer l'ancien channel
     if (channelRef.current) {
       supabaseClient.removeChannel(channelRef.current);
@@ -38,13 +41,18 @@ export function useGlobalNotifications(selectedConversationId = null) {
           const newMessage = payload.new;
           
           // Ignorer UNIQUEMENT les messages sortants (de nous)
-          if (newMessage.from_me) {
+          if (newMessage.direction === 'outbound') {
+            console.debug('🔕 Skip notify (outbound message)', {
+              messageId: newMessage.id,
+              conversationId: newMessage.conversation_id,
+            });
             return;
           }
 
           // Éviter les doublons (notifications multiples pour le même message)
           const messageKey = `${newMessage.id}-${newMessage.conversation_id}`;
           if (lastNotifiedRef.current.has(messageKey)) {
+            console.debug('🔕 Skip notify (duplicate)', { messageKey });
             return;
           }
           lastNotifiedRef.current.add(messageKey);
@@ -78,6 +86,10 @@ export function useGlobalNotifications(selectedConversationId = null) {
             
             if (isForeground && isConversationOpen) {
               // L'utilisateur regarde déjà cette conversation dans une fenêtre active
+              console.debug('🔕 Skip notify (foreground & open conversation)', {
+                messageId: newMessage.id,
+                conversationId: conversation.id,
+              });
               return;
             }
 
