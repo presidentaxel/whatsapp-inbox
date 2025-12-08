@@ -6,3 +6,5 @@ export const sendMediaMessage = (data) => api.post("/messages/send-media", data)
 export const sendInteractiveMessage = (data) => api.post("/messages/send-interactive", data);
 export const addReaction = (data) => api.post("/messages/reactions/add", data);
 export const removeReaction = (data) => api.post("/messages/reactions/remove", data);
+export const editMessage = (id, data) => api.patch(`/messages/${id}`, data);
+export const deleteMessageApi = (id, data) => api.post(`/messages/${id}/delete`, data);

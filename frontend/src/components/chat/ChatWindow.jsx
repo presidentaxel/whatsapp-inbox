@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiSearch, FiInfo } from "react-icons/fi";
 import { AiFillStar, AiOutlineStar } from "react-icons/ai";
-import { getMessages, sendMessage } from "../../api/messagesApi";
+import { getMessages, sendMessage, editMessage, deleteMessageApi } from "../../api/messagesApi";
 import MessageBubble from "./MessageBubble";
-import MessageInput from "./MessageInput";
 import AdvancedMessageInput from "./AdvancedMessageInput";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 import { notifyNewMessage } from "../../utils/notifications";
+import { useAuth } from "../../context/AuthContext";
 
 export default function ChatWindow({
   conversation,
@@ -16,11 +16,15 @@ export default function ChatWindow({
   canSend = true,
   isWindowActive = true,
 }) {
+  const { profile } = useAuth();
   const [messages, setMessages] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [showInfo, setShowInfo] = useState(false);
   const [botTogglePending, setBotTogglePending] = useState(false);
+  const [reactionTargetId, setReactionTargetId] = useState(null);
+  const [contextMenu, setContextMenu] = useState({ open: false, x: 0, y: 0, message: null });
+  const [autoScroll, setAutoScroll] = useState(true);
 
   const sortMessages = useCallback((items) => {
     return [...items].sort((a, b) => {
@@ -32,6 +36,7 @@ export default function ChatWindow({
 
   const conversationId = conversation?.id;
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
   const displayName =
     conversation?.contacts?.display_name ||
     conversation?.contacts?.whatsapp_number ||
@@ -43,15 +48,34 @@ export default function ChatWindow({
       return;
     }
     getMessages(conversationId).then((res) => {
-      // Filtrer les réactions - elles ne doivent pas être affichées comme des messages normaux
-      const filtered = res.data.filter(msg => msg.message_type !== "reaction");
+      // Filtrer réactions/statuts
+      const currentUserId = profile?.id;
+      const filtered = res.data.filter((msg) => {
+        const type = (msg.message_type || "").toLowerCase();
+        if (["reaction", "status"].includes(type)) return false;
+        if (currentUserId && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(currentUserId)) {
+          return false;
+        }
+        return true;
+      });
       setMessages(sortMessages(filtered));
     });
-  }, [conversationId, sortMessages]);
+  }, [conversationId, sortMessages, profile?.id]);
 
   useEffect(() => {
     refreshMessages();
   }, [refreshMessages]);
+
+  // Fermer le menu contextuel sur clic ailleurs ou scroll
+  useEffect(() => {
+    const closeMenu = () => setContextMenu((prev) => ({ ...prev, open: false }));
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!conversationId || !isWindowActive) {
@@ -97,8 +121,9 @@ export default function ChatWindow({
             return;
           }
           
-          // Afficher une notification si c'est un message entrant et que la fenêtre n'est pas active
-          if (!incoming.from_me && !isWindowActive) {
+          // Afficher une notification si c'est un message entrant et que la fenêtre n'est pas au premier plan
+          const hasFocus = document.hasFocus?.() === true;
+          if (!incoming.from_me && (!isWindowActive || !hasFocus)) {
             notifyNewMessage(incoming, conversation);
           }
           
@@ -147,6 +172,7 @@ export default function ChatWindow({
 
   const onSend = async (text) => {
     if (!conversationId) return;
+
     const tempId = `temp-${Date.now()}`;
     const optimisticMessage = {
       id: tempId,
@@ -181,10 +207,31 @@ export default function ChatWindow({
   }, [messages, searchTerm, showSearch]);
 
   useEffect(() => {
-    if (messagesEndRef.current) {
+    if (autoScroll && messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
-  }, [filteredMessages]);
+  }, [filteredMessages, autoScroll]);
+
+  useEffect(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setAutoScroll(distanceFromBottom < 120);
+    };
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  useEffect(() => {
+    setAutoScroll(true);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!reactionTargetId) return;
+    const t = setTimeout(() => setReactionTargetId(null), 2000);
+    return () => clearTimeout(t);
+  }, [reactionTargetId]);
 
   if (!conversationId) {
     return (
@@ -207,6 +254,40 @@ export default function ChatWindow({
     if (!conversation) return;
     const next = !conversation.is_favorite;
     onFavoriteToggle?.(conversation, next);
+  };
+
+  const handleContextMenu = (event, message) => {
+    event.preventDefault();
+    const menuWidth = 220;
+    const menuHeight = 200;
+    const clampedX = Math.min(event.clientX, window.innerWidth - menuWidth);
+    const clampedY = Math.min(event.clientY, window.innerHeight - menuHeight);
+    setContextMenu({
+      open: true,
+      x: clampedX,
+      y: clampedY,
+      message,
+    });
+  };
+
+  const handleMenuAction = async (action) => {
+    const msg = contextMenu.message;
+    setContextMenu((prev) => ({ ...prev, open: false }));
+    if (!msg) return;
+
+    if (action === "delete_me") {
+      try {
+        await deleteMessageApi(msg.id, { scope: "me" });
+      } finally {
+        refreshMessages();
+      }
+      return;
+    }
+
+    if (action === "react") {
+      setReactionTargetId(msg.id);
+      return;
+    }
   };
 
   return (
@@ -278,13 +359,15 @@ export default function ChatWindow({
       )}
 
       <div className="chat-body">
-        <div className="messages">
+        <div className="messages" ref={messagesContainerRef}>
           {filteredMessages.map((m) => (
             <MessageBubble 
               key={m.id} 
               message={m} 
               conversation={conversation}
               onReactionChange={refreshMessages}
+              forceReactionOpen={reactionTargetId === m.id}
+              onContextMenu={(e) => handleContextMenu(e, m)}
             />
           ))}
           <div ref={messagesEndRef} />
@@ -315,9 +398,20 @@ export default function ChatWindow({
 
       <AdvancedMessageInput 
         conversation={conversation}
-        onSend={onSend} 
+        onSend={onSend}
         disabled={!canSend || !conversationId}
       />
+
+      {contextMenu.open && (
+        <div
+          className="context-menu"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button onClick={() => handleMenuAction("react")}>Ajouter une réaction</button>
+          <button onClick={() => handleMenuAction("delete_me")}>Supprimer pour moi</button>
+        </div>
+      )}
     </div>
   );
 }

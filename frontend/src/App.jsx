@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabaseClient } from "./api/supabaseClient";
-import { isMobileDevice } from "./utils/deviceDetection";
+import { getDeviceType } from "./utils/deviceDetection";
 import { getAuthSession, saveAuthSession, clearAuthSession } from "./utils/secureStorage";
 
 // Desktop
@@ -145,25 +145,23 @@ export default function App() {
   const [deviceType, setDeviceType] = useState(null);
 
   useEffect(() => {
-    setDeviceType(isMobileDevice() ? 'mobile' : 'desktop');
-    
-    // Re-détecter au resize (utile pour le mode responsive)
-    const handleResize = () => {
-      setDeviceType(isMobileDevice() ? 'mobile' : 'desktop');
-    };
-    
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
+    // Détection initiale + re-détection au resize
+    const detect = () => setDeviceType(getDeviceType());
+
+    detect();
+    window.addEventListener("resize", detect);
+    return () => window.removeEventListener("resize", detect);
   }, []);
 
   if (!deviceType) {
     return <div className="loading-screen">Chargement...</div>;
   }
 
-  if (deviceType === 'mobile') {
+  if (deviceType === "mobile") {
     return <MobileApp />;
   }
 
+  // Desktop + tablettes large : on sert l'UI desktop
   return (
     <AuthProvider>
       <DesktopApp />

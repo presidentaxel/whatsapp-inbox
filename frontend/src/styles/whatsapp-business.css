@@ -870,3 +870,32 @@
   }
 }
 
+/* Menu contextuel custom (remplace le clic droit) */
+.context-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #2a3942;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.context-menu button {
+  background: transparent;
+  border: none;
+  color: #e9edef;
+  padding: 12px 14px;
+  text-align: left;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.context-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+

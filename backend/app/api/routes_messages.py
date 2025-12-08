@@ -20,6 +20,8 @@ from app.services.message_service import (
     send_media_message_with_storage,
     send_interactive_message_with_storage,
     send_reaction_to_whatsapp,
+    update_message_content,
+    delete_message_scope,
 )
 
 router = APIRouter()
@@ -250,6 +252,67 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         header_text=header_text,
         footer_text=footer_text
     )
+
+
+@router.patch("/{message_id}")
+async def edit_message(
+    message_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Édite un message texte (édition locale uniquement).
+    """
+    new_content = (payload.get("content_text") or "").strip()
+    if not new_content:
+        raise HTTPException(status_code=400, detail="content_text_required")
+
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+
+    # CurrentUser stocke l'identifiant dans `id` (pas `user_id`)
+    result = await update_message_content(message_id, new_content, current_user.id)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result["message"]
+
+
+@router.post("/{message_id}/delete")
+async def delete_message(
+    message_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Supprime un message localement.
+    scope=me : masque pour l'utilisateur courant.
+    scope=all : marque comme supprimé pour tous (pas de suppression réseau WhatsApp).
+    """
+    scope = payload.get("scope", "me")
+    if scope not in ("me", "all"):
+        raise HTTPException(status_code=400, detail="invalid_scope")
+
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+
+    result = await delete_message_scope(message_id, scope, current_user.id)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result["message"]
 
 
 @router.post("/reactions/add")

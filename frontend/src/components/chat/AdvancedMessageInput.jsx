@@ -4,7 +4,7 @@ import { uploadMedia } from "../../api/whatsappApi";
 import { sendMediaMessage, sendInteractiveMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 
-export default function AdvancedMessageInput({ conversation, onSend, disabled = false }) {
+export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit }) {
   const [text, setText] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -15,6 +15,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const menuRef = useRef(null);
   const emojiRef = useRef(null);
   const fileInputRef = useRef(null);
+  const textAreaRef = useRef(null);
   
   // States pour boutons interactifs
   const [buttons, setButtons] = useState([{ id: "", title: "" }]);
@@ -41,6 +42,13 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    // Pré-remplir en mode édition
+    if (editingMessage) {
+      setText(editingMessage.content_text || "");
+    }
+  }, [editingMessage]);
+
   const handleSend = () => {
     if (disabled || !text.trim()) return;
     onSend(text);
@@ -48,6 +56,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setShowAdvanced(false);
     setMode("text");
   };
+
+  // Ajuster la hauteur du textarea pour suivre le contenu
+  useEffect(() => {
+    if (!textAreaRef.current) return;
+    const el = textAreaRef.current;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+  }, [text]);
 
   const handleMediaSend = async (file) => {
     if (!conversation?.id || !conversation?.account_id) return;
@@ -543,30 +559,46 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         </div>
 
         {/* Champ de saisie */}
-        <div className="input-wrapper">
-          <input
+        <div className="input-wrapper input-wrapper--flat">
+          <textarea
+            ref={textAreaRef}
+            rows={1}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Écrire un message..."
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
+            placeholder="Écrire un message... (Shift+Entrée pour une nouvelle ligne)"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
             disabled={disabled}
           />
         </div>
         
         {/* Bouton d'envoi */}
         <button
-          className="btn-send-whatsapp"
+          className="btn-send-whatsapp btn-send-flat"
           onClick={() => {
             if (mode === "buttons") handleButtonsSend();
             else if (mode === "list") handleListSend();
             else handleSend();
           }}
           disabled={disabled || !text.trim() || uploading}
-          aria-label="Envoyer"
+          aria-label={editingMessage ? "Modifier" : "Envoyer"}
         >
           <FiSend />
         </button>
       </div>
+
+      {editingMessage && (
+        <div className="edit-banner">
+          <span>Modification du message</span>
+          <button type="button" onClick={() => { setText(""); onCancelEdit?.(); }}>
+            Annuler
+          </button>
+        </div>
+      )}
     </div>
   );
 }

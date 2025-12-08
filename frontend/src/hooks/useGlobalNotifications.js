@@ -68,15 +68,16 @@ export function useGlobalNotifications(selectedConversationId = null) {
             }
 
             // Vérifier si on doit notifier
-            // Ne notifier QUE si :
-            // 1. L'app est en arrière-plan OU
-            // 2. La conversation n'est pas ouverte
-            const isAppVisible = !document.hidden;
+            // Notifier si :
+            // - l'app n'est pas au premier plan (tab masqué ou fenêtre non focus)
+            // - ou si la conversation n'est pas ouverte
+            const isVisible = document.visibilityState === 'visible';
+            const hasFocus = document.hasFocus?.() === true;
+            const isForeground = isVisible && hasFocus;
             const isConversationOpen = selectedConversationId === conversation.id;
             
-            if (isAppVisible && isConversationOpen) {
-              // L'utilisateur est en train de regarder cette conversation
-              // Pas besoin de notifier
+            if (isForeground && isConversationOpen) {
+              // L'utilisateur regarde déjà cette conversation dans une fenêtre active
               return;
             }
 
@@ -85,7 +86,8 @@ export function useGlobalNotifications(selectedConversationId = null) {
               messageId: newMessage.id,
               conversationId: conversation.id,
               contact: conversation.contacts?.display_name || conversation.client_number,
-              isAppVisible,
+              isAppVisible: isVisible,
+              hasFocus,
               isConversationOpen
             });
 

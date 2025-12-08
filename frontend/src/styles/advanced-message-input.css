@@ -1,5 +1,6 @@
 /* Container principal */
 .input-area-advanced {
+  background: none;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -377,14 +378,14 @@
 }
 
 /* Zone de saisie principale */
-.input-area-advanced .input-area {
+.input-area {
   padding: 8px 12px !important;
   background: #202c33 !important;
   display: flex !important;
   gap: 8px !important;
   align-items: center !important;
   border-top: none !important;
-  border-radius: 0 !important;
+  border-radius: 50px;
   border: none !important;
 }
 
@@ -518,7 +519,7 @@
 /* Champ de saisie */
 .input-area-advanced .input-wrapper {
   flex: 1;
-  background: #2a3942;
+  background: none;
   border-radius: 8px;
   padding: 0 12px;
   display: flex;
@@ -526,7 +527,8 @@
   min-width: 0;
 }
 
-.input-area-advanced .input-wrapper input {
+.input-area-advanced .input-wrapper input,
+.input-area-advanced .input-wrapper textarea {
   flex: 1;
   padding: 10px 0;
   border: none;
@@ -535,9 +537,16 @@
   color: #e9edef !important;
   font-size: 0.95rem;
   min-width: 0;
+  resize: none;
+  line-height: 1.4;
 }
 
-.input-area-advanced .input-wrapper input::placeholder {
+.input-area-advanced .input-wrapper textarea {
+  max-height: 180px;
+}
+
+.input-area-advanced .input-wrapper input::placeholder,
+.input-area-advanced .input-wrapper textarea::placeholder {
   color: #667781;
 }
 
@@ -601,12 +610,12 @@
 
 /* Bouton d'envoi WhatsApp - Classe unique isolée */
 .btn-send-whatsapp {
-  background: #00a884 !important;
+  background: none;
   border: none !important;
   color: #fff !important;
   min-width: 48px !important;
   height: 40px !important;
-  border-radius: 8px !important;
+  border-radius: 40px !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
@@ -624,7 +633,7 @@
 }
 
 .btn-send-whatsapp:disabled {
-  background: rgba(134, 150, 160, 0.3) !important;
+  background: none;
   color: rgba(255, 255, 255, 0.5) !important;
   cursor: not-allowed !important;
 }
@@ -638,5 +647,33 @@
 
 .btn-send-whatsapp svg path {
   fill: currentColor !important;
+}
+
+/* Préserver les sauts de ligne dans les bulles de message */
+.bubble__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.edit-banner {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: #e9edef;
+}
+
+.edit-banner button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #e9edef;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.edit-banner button:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 

@@ -199,7 +199,7 @@ function InteractiveBubble({ message }) {
   }
   
   // Fallback au texte simple
-  return <span>{content}</span>;
+  return <span className="bubble__text">{content}</span>;
 }
 
 function renderBody(message) {
@@ -217,7 +217,7 @@ function renderBody(message) {
   }
 
   if (!typeEntry || messageType === "text") {
-    return <span>{message.content_text}</span>;
+    return <span className="bubble__text">{message.content_text}</span>;
   }
 
   return (
@@ -225,14 +225,13 @@ function renderBody(message) {
       <div className="bubble-media__icon">{typeEntry.icon}</div>
       <div className="bubble-media__content">
         <strong>{typeEntry.label}</strong>
-        {message.content_text && <p>{message.content_text}</p>}
+        {message.content_text && <p className="bubble__text">{message.content_text}</p>}
       </div>
     </div>
   );
 }
 
-export default function MessageBubble({ message, conversation, onReactionChange }) {
-  const [isHovered, setIsHovered] = useState(false);
+export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false }) {
   const mine = message.direction === "outbound";
   const timestamp = message.timestamp
     ? new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
@@ -240,22 +239,35 @@ export default function MessageBubble({ message, conversation, onReactionChange 
 
   const messageType = (message.message_type || "text").toLowerCase();
   const isMedia = FETCHABLE_MEDIA.has(messageType) && (message.media_id || message.storage_url);
+  const isDeletedForAll = !!message.deleted_for_all_at;
+  const isEdited = !!message.edited_at;
 
   return (
-    <div 
-      className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""}`}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+    <div
+      className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""}`}
+      onContextMenu={onContextMenu}
+      style={{ position: "relative" }}
     >
-      {renderBody(message)}
+      {isDeletedForAll ? (
+        <span className="bubble__text bubble__text--deleted">
+          {mine ? "Vous avez supprimé ce message" : "Ce message a été supprimé"}
+        </span>
+      ) : (
+        renderBody(message)
+      )}
       <div className="bubble__footer">
-        <small className="bubble__timestamp">{timestamp}</small>
-        <MessageReactions 
-          message={message} 
-          conversation={conversation} 
-          onReactionChange={onReactionChange}
-          isHovered={isHovered}
-        />
+        <small className="bubble__timestamp">
+          {timestamp}
+          {isEdited && !isDeletedForAll ? " · modifié" : ""}
+        </small>
+        {!isDeletedForAll && (
+          <MessageReactions 
+            message={message} 
+            conversation={conversation} 
+            onReactionChange={onReactionChange}
+            forceOpen={forceReactionOpen}
+          />
+        )}
       </div>
     </div>
   );

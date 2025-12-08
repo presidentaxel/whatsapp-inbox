@@ -705,6 +705,104 @@ async def get_messages(
     return rows
 
 
+async def update_message_content(
+    message_id: str, new_content: str, user_id: str
+) -> Dict[str, Any]:
+    """
+    Met à jour le contenu d'un message texte (édition locale uniquement).
+    Conserve la première version dans edited_original_content et marque edited_at/edited_by.
+    """
+    msg_res = await supabase_execute(
+        supabase.table("messages")
+        .select("id, content_text, conversation_id, message_type, direction, edited_original_content")
+        .eq("id", message_id)
+        .range(0, 0)
+    )
+    if not msg_res.data:
+        return {"error": "message_not_found"}
+
+    msg = msg_res.data[0]
+
+    # Limiter l'édition aux messages texte émis par nous
+    if msg.get("message_type", "text") not in ("text", None, ""):
+        return {"error": "message_not_editable"}
+    if msg.get("direction") != "outbound":
+        return {"error": "cannot_edit_incoming_message"}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    original = msg.get("edited_original_content") or msg.get("content_text")
+
+    update_res = await supabase_execute(
+        supabase.table("messages")
+        .update(
+            {
+                "content_text": new_content,
+                "edited_at": now_iso,
+                "edited_by": user_id,
+                "edited_original_content": original,
+            }
+        )
+        .eq("id", message_id)
+    )
+
+    if not update_res.data:
+        return {"error": "update_failed"}
+
+    # Recharger le message mis à jour (l'update builder ne supporte pas select/returning)
+    refreshed = await supabase_execute(
+        supabase.table("messages").select("*").eq("id", message_id).range(0, 0)
+    )
+    if not refreshed.data:
+        return {"error": "update_fetch_failed"}
+
+    return {"success": True, "message": refreshed.data[0]}
+
+
+async def delete_message_scope(
+    message_id: str, scope: str, user_id: str
+) -> Dict[str, Any]:
+    """
+    Supprime un message pour l'utilisateur courant (scope=me) ou pour tous (scope=all, local).
+    Note: la suppression côté WhatsApp Cloud API n'est pas disponible : marquage DB/UX uniquement.
+    """
+    msg_res = await supabase_execute(
+        supabase.table("messages")
+        .select("id, conversation_id, direction, deleted_for_all_at, deleted_for_user_ids")
+        .eq("id", message_id)
+        .range(0, 0)
+    )
+    if not msg_res.data:
+        return {"error": "message_not_found"}
+
+    msg = msg_res.data[0]
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if scope == "all":
+        update_payload = {"deleted_for_all_at": now_iso}
+    else:
+        existing = msg.get("deleted_for_user_ids") or []
+        if user_id not in existing:
+            existing.append(user_id)
+        update_payload = {"deleted_for_user_ids": existing}
+
+    update_res = await supabase_execute(
+        supabase.table("messages")
+        .update(update_payload)
+        .eq("id", message_id)
+    )
+
+    if not update_res.data:
+        return {"error": "update_failed"}
+
+    refreshed = await supabase_execute(
+        supabase.table("messages").select("*").eq("id", message_id).range(0, 0)
+    )
+    if not refreshed.data:
+        return {"error": "update_fetch_failed"}
+
+    return {"success": True, "message": refreshed.data[0]}
+
+
 async def add_reaction(message_id: str, emoji: str, from_number: str) -> Dict[str, Any]:
     """
     Ajoute une réaction à un message.
