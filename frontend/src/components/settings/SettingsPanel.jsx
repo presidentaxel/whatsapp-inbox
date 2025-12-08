@@ -1,5 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  FiSettings,
+  FiMonitor,
+  FiKey,
+  FiLock,
+  FiMessageSquare,
+  FiVideo,
+  FiBell,
+  FiType,
+  FiChevronDown,
+  FiSearch,
+  FiUser,
+  FiShield,
+} from "react-icons/fi";
+import {
   createRole,
   deleteRole,
   getAdminUsers,
@@ -47,6 +61,7 @@ export default function SettingsPanel({
   const [overrideDrafts, setOverrideDrafts] = useState({});
   const [statusMessage, setStatusMessage] = useState("");
   const [activePanel, setActivePanel] = useState("general");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const accountMap = useMemo(
     () => Object.fromEntries(accounts.map((acc) => [acc.id, acc])),
@@ -211,84 +226,238 @@ export default function SettingsPanel({
     loadAdminData();
   };
 
-  const panels = useMemo(
-    () =>
-      [
-        { id: "general", label: "Général" },
-        canManageAccounts && { id: "accounts", label: "Comptes" },
-        canManageRoles && { id: "roles", label: "Rôles" },
-        canManageUsers && { id: "users", label: "Utilisateurs" },
-      ].filter(Boolean),
-    [canManageAccounts, canManageRoles, canManageUsers]
+  const navItems = useMemo(() => {
+    // Menus WhatsApp exacts (copiés-collés de WhatsApp Desktop)
+    const base = [
+      {
+        id: "general",
+        label: "Général",
+        icon: FiMonitor,
+        description: "Démarrer et fermer",
+      },
+      {
+        id: "compte",
+        label: "Compte",
+        icon: FiKey,
+        description: "Notifications de sécurité, informations de compte",
+      },
+      {
+        id: "confidentialite",
+        label: "Confidentialité",
+        icon: FiLock,
+        description: "Contacts bloqués, messages éphémères",
+      },
+      {
+        id: "discussions",
+        label: "Discussions",
+        icon: FiMessageSquare,
+        description: "Thème, fond d'écran, paramètres des discussions",
+      },
+      {
+        id: "audio",
+        label: "Vidéo et audio",
+        icon: FiVideo,
+        description: "Camera, micro et haut-parleurs",
+      },
+      {
+        id: "notifications",
+        label: "Notifications",
+        icon: FiBell,
+        description: "Notifications de messages",
+      },
+      {
+        id: "raccourcis",
+        label: "Raccourcis clavier",
+        icon: FiType,
+        description: "Actions rapides",
+      },
+      {
+        id: "aide",
+        label: "Aide",
+        icon: FiChevronDown,
+        description: "",
+      },
+    ];
+    
+    // Menus supplémentaires pour les fonctionnalités existantes
+    if (canManageAccounts)
+      base.push({
+        id: "accounts",
+        label: "Comptes WhatsApp",
+        icon: FiShield,
+        description: "Gérer les comptes WhatsApp Cloud API",
+      });
+    if (canManageRoles)
+      base.push({
+        id: "roles",
+        label: "Rôles",
+        icon: FiShield,
+        description: "Gérer les rôles et permissions",
+      });
+    if (canManageUsers)
+      base.push({
+        id: "users",
+        label: "Utilisateurs",
+        icon: FiUser,
+        description: "Gérer les utilisateurs et leurs accès",
+      });
+    return base;
+  }, [canManageAccounts, canManageRoles, canManageUsers]);
+
+  const filteredNavItems = useMemo(() => {
+    if (!searchQuery.trim()) return navItems;
+    const query = searchQuery.toLowerCase();
+    return navItems.filter(
+      (item) =>
+        item.label.toLowerCase().includes(query) ||
+        item.description.toLowerCase().includes(query)
+    );
+  }, [navItems, searchQuery]);
+
+  const getUserInitials = (email) => {
+    if (!email) return "U";
+    const parts = email.split("@")[0].split(/[._-]/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return email[0].toUpperCase();
+  };
+
+  const renderPlaceholder = () => (
+    <div className="settings-content__empty">
+      <FiSettings className="settings-content__empty-icon" />
+      <h2 className="settings-content__empty-title">Paramètres</h2>
+    </div>
   );
 
   return (
-    <div className="settings-panel">
-      <div className="settings-tabs">
-        {panels.map((tab) => (
-          <button
-            key={tab.id}
-            className={`settings-tab ${activePanel === tab.id ? "active" : ""}`}
-            onClick={() => setActivePanel(tab.id)}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+    <div className="settings-shell">
+      <aside className="settings-menu">
+        <h2 className="settings-menu__title">Paramètres</h2>
+        
+        <div className="settings-menu__search">
+          <FiSearch className="settings-menu__search-icon" />
+          <input
+            type="text"
+            placeholder="Rechercher dans les paramètres"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="settings-menu__search-input"
+          />
+        </div>
 
-      {activePanel === "general" && (
-        <>
-          <section className="settings-card">
-            <h2>Profil</h2>
-            <p>{currentUser?.email || "Utilisateur connecté"}</p>
-            <p className="muted">
-              Rôles actifs :{" "}
-              {currentUser?.roles?.length
-                ? currentUser.roles
-                    .map((r) => (r.role_name ? r.role_name : r.role_slug))
-                    .join(", ")
-                : "aucun"}
-            </p>
-            <button className="danger" onClick={onSignOut}>
-              Déconnexion
-            </button>
-          </section>
+        <div className="settings-menu__profile">
+          <div className="settings-menu__profile-avatar">
+            {getUserInitials(currentUser?.email)}
+          </div>
+          <div className="settings-menu__profile-info">
+            <div className="settings-menu__profile-name">
+              {currentUser?.email?.split("@")[0]?.replace(/[._-]/g, " ") || "Utilisateur"}
+            </div>
+            <div className="settings-menu__profile-status">
+              Salut ! J'utilise WhatsApp.
+            </div>
+          </div>
+        </div>
 
-          <section className="settings-card">
-            <NotificationSettings />
-          </section>
+        <nav className="settings-menu__nav">
+          {filteredNavItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                className={`settings-menu__item ${
+                  activePanel === item.id ? "settings-menu__item--active" : ""
+                }`}
+                onClick={() => setActivePanel(item.id)}
+              >
+                <Icon className="settings-menu__item-icon" />
+                <div className="settings-menu__item-content">
+                  <div className="settings-menu__item-label">{item.label}</div>
+                  {item.description && (
+                    <div className="settings-menu__item-desc">{item.description}</div>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
 
-          <section className="settings-card">
-            <h2>Comptes disponibles</h2>
-            {accounts.length ? (
-              <div className="account-grid">
-                {accounts.map((acc) => (
-                  <article key={acc.id} className="account-card compact">
-                    <header>
-                      <strong>{acc.name}</strong>
-                      <span>{acc.phone_number || "Numéro inconnu"}</span>
-                    </header>
-                    <div className="account-meta">
-                      <span>ID : {acc.id}</span>
-                      <span>Phone ID : {acc.phone_number_id}</span>
-                    </div>
-                  </article>
-                ))}
+      <div className="settings-content">
+        {activePanel === "general" && (
+          <div className="settings-content__panel">
+            <h1 className="settings-content__panel-title">Général</h1>
+            
+            <section className="settings-content__section">
+              <h2 className="settings-content__section-title">Profil</h2>
+              <div className="settings-content__section-content">
+                <p>{currentUser?.email || "Utilisateur connecté"}</p>
+                <p className="muted">
+                  Rôles actifs :{" "}
+                  {currentUser?.roles?.length
+                    ? currentUser.roles
+                        .map((r) => (r.role_name ? r.role_name : r.role_slug))
+                        .join(", ")
+                    : "aucun"}
+                </p>
+                <button className="settings-btn settings-btn--danger" onClick={onSignOut}>
+                  Déconnexion
+                </button>
               </div>
-            ) : (
-              <p>Aucun compte assigné à ce profil.</p>
-            )}
-          </section>
-        </>
-      )}
+            </section>
+
+            <section className="settings-content__section">
+              <h2 className="settings-content__section-title">Comptes disponibles</h2>
+              <div className="settings-content__section-content">
+                {accounts.length ? (
+                  <div className="account-grid">
+                    {accounts.map((acc) => (
+                      <article key={acc.id} className="account-card compact">
+                        <header>
+                          <strong>{acc.name}</strong>
+                          <span>{acc.phone_number || "Numéro inconnu"}</span>
+                        </header>
+                        <div className="account-meta">
+                          <span>ID : {acc.id}</span>
+                          <span>Phone ID : {acc.phone_number_id}</span>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p>Aucun compte assigné à ce profil.</p>
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {activePanel === "notifications" && (
+          <div className="settings-content__panel">
+            <h1 className="settings-content__panel-title">Notifications</h1>
+            <div className="settings-content__section-content">
+              <NotificationSettings accounts={accounts} />
+            </div>
+          </div>
+        )}
+
+        {activePanel === "compte" && renderPlaceholder()}
+        {activePanel === "confidentialite" && renderPlaceholder()}
+        {activePanel === "discussions" && renderPlaceholder()}
+        {activePanel === "audio" && renderPlaceholder()}
+        {activePanel === "raccourcis" && renderPlaceholder()}
+        {activePanel === "aide" && renderPlaceholder()}
 
       {activePanel === "accounts" && canManageAccounts && (
-        <section className="settings-card">
-          <h2>Gestion des comptes</h2>
-          <p className="muted">
-            Ajoute tes numéros WhatsApp Cloud API et choisis les membres qui y auront accès.
-          </p>
-          {statusMessage && <p>{statusMessage}</p>}
+        <div className="settings-content__panel">
+          <h1 className="settings-content__panel-title">Comptes WhatsApp</h1>
+          <section className="settings-content__section">
+            <h2 className="settings-content__section-title">Gestion des comptes</h2>
+            <p className="muted">
+              Ajoute tes numéros WhatsApp Cloud API et choisis les membres qui y auront accès.
+            </p>
+            {statusMessage && <p>{statusMessage}</p>}
           {accounts.length ? (
             <div className="account-grid">
               {accounts.map((acc) => (
@@ -356,12 +525,15 @@ export default function SettingsPanel({
             </div>
             <button type="submit">Créer</button>
           </form>
-        </section>
+          </section>
+        </div>
       )}
 
       {activePanel === "roles" && canManageRoles && (
-        <section className="settings-card">
-          <h2>Rôles & permissions</h2>
+        <div className="settings-content__panel">
+          <h1 className="settings-content__panel-title">Rôles</h1>
+          <section className="settings-content__section">
+            <h2 className="settings-content__section-title">Rôles & permissions</h2>
           {loadingAdmin && <p>Chargement…</p>}
           {!loadingAdmin && (
             <>
@@ -431,12 +603,15 @@ export default function SettingsPanel({
               </form>
             </>
           )}
-        </section>
+          </section>
+        </div>
       )}
 
       {activePanel === "users" && canManageUsers && (
-        <section className="settings-card">
-          <h2>Utilisateurs</h2>
+        <div className="settings-content__panel">
+          <h1 className="settings-content__panel-title">Utilisateurs</h1>
+          <section className="settings-content__section">
+            <h2 className="settings-content__section-title">Gestion des utilisateurs</h2>
           {users.length === 0 && <p>Aucun utilisateur enregistré.</p>}
           {users.map((user) => {
             const roleDraft = roleDrafts[user.user_id] || { role_id: "", account_id: "" };
@@ -587,8 +762,10 @@ export default function SettingsPanel({
               </article>
             );
           })}
-        </section>
+          </section>
+        </div>
       )}
+      </div>
     </div>
   );
 }

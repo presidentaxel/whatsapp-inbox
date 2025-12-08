@@ -13,9 +13,29 @@ import {
   showTestNotification,
 } from '../../utils/notifications';
 
-export default function NotificationSettings() {
+const STORAGE_KEY = 'notif_prefs_v1';
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePrefs(prefs) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  } catch {
+    // ignore
+  }
+}
+
+export default function NotificationSettings({ accounts = [] }) {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [prefs, setPrefs] = useState(() => loadPrefs());
 
   useEffect(() => {
     setNotificationsEnabled(areNotificationsEnabled());
@@ -67,6 +87,26 @@ export default function NotificationSettings() {
     await showTestNotification();
   };
 
+  const updatePref = (accountId, field, value) => {
+    setPrefs((prev) => {
+      const next = {
+        ...prev,
+        [accountId]: {
+          messages: true,
+          previews: true,
+          reactions: true,
+          status: true,
+          ...(prev[accountId] || {}),
+          [field]: value,
+        },
+      };
+      savePrefs(next);
+      return next;
+    });
+  };
+
+  const getPref = (accountId, field) => prefs[accountId]?.[field] ?? true;
+
   return (
     <div className="notif-settings">
       <div className="notif-settings__header">
@@ -90,9 +130,6 @@ export default function NotificationSettings() {
           <div>
             <p className="notif-settings__label">État navigateur</p>
             <p className="notif-settings__value">{status.text}</p>
-            <p className="notif-settings__hint">
-              Basé sur l’autorisation Notification API + Service Worker (Supabase triggers -> notif locale).
-            </p>
           </div>
           <div className="notif-settings__actions">
             <button
@@ -113,14 +150,55 @@ export default function NotificationSettings() {
           </div>
         </div>
 
-        <div className="notif-settings__card-row">
-          <div>
-            <p className="notif-settings__label">Comptes WhatsApp (desktop)</p>
-            <p className="notif-settings__hint">
-              Notifications déclenchées pour tous les comptes sur réception webhook (INSERT messages).
-              Filtrage par compte à venir (sélecteur).
-            </p>
-          </div>
+        <div className="notif-settings__accounts">
+          {accounts.length === 0 && (
+            <div className="notif-settings__empty">Aucun compte WhatsApp configuré.</div>
+          )}
+          {accounts.map((acc) => {
+            const id = acc.id;
+            return (
+              <div key={id} className="notif-settings__account-row">
+                <div className="notif-settings__account-meta">
+                  <p className="notif-settings__account-name">{acc.name || acc.phone_number}</p>
+                  <p className="notif-settings__hint">ID: {acc.id}</p>
+                </div>
+                <div className="notif-settings__toggles">
+                  <label className="notif-toggle">
+                    <input
+                      type="checkbox"
+                      checked={getPref(id, 'messages')}
+                      onChange={(e) => updatePref(id, 'messages', e.target.checked)}
+                    />
+                    <span>Notifications des messages</span>
+                  </label>
+                  <label className="notif-toggle">
+                    <input
+                      type="checkbox"
+                      checked={getPref(id, 'previews')}
+                      onChange={(e) => updatePref(id, 'previews', e.target.checked)}
+                    />
+                    <span>Voir les aperçus</span>
+                  </label>
+                  <label className="notif-toggle">
+                    <input
+                      type="checkbox"
+                      checked={getPref(id, 'reactions')}
+                      onChange={(e) => updatePref(id, 'reactions', e.target.checked)}
+                    />
+                    <span>Notifications des réactions</span>
+                  </label>
+                  <label className="notif-toggle">
+                    <input
+                      type="checkbox"
+                      checked={getPref(id, 'status')}
+                      onChange={(e) => updatePref(id, 'status', e.target.checked)}
+                    />
+                    <span>Réactions au statut</span>
+                  </label>
+                </div>
+              </div>
+            );
+          })}
         </div>
 
         {Notification.permission === 'denied' && (
