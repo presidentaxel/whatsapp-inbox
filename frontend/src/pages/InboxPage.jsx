@@ -35,6 +35,53 @@ export default function InboxPage() {
   const [isWindowActive, setIsWindowActive] = useState(true);
   const canViewContacts = hasPermission?.("contacts.view");
   
+  const loadAccounts = useCallback(async () => {
+    try {
+      const res = await getAccounts();
+      const payload = Array.isArray(res?.data)
+        ? res.data
+        : Array.isArray(res?.data?.data)
+          ? res.data.data
+          : [];
+
+      setAccounts(payload);
+      
+      // Essayer de restaurer le compte sauvegardé
+      const savedAccountId = getActiveAccount();
+      const savedAccountExists = savedAccountId && payload.some((acc) => acc.id === savedAccountId);
+      
+      setActiveAccount((prev) => {
+        // Si un compte est sauvegardé et existe toujours, l'utiliser
+        if (savedAccountExists) {
+          return savedAccountId;
+        }
+        // Sinon, garder le compte actuel s'il existe toujours
+        if (prev && payload.some((acc) => acc.id === prev)) {
+          return prev;
+        }
+        // Sinon, prendre le premier compte disponible
+        return payload[0]?.id ?? null;
+      });
+    } catch (error) {
+      console.error("Failed to load accounts", error);
+      setAccounts([]);
+      setActiveAccount(null);
+    }
+  }, []);
+
+  const refreshConversations = useCallback(
+    (accountId = activeAccount) => {
+      if (!accountId) return;
+      getConversations(accountId).then((res) => {
+        setConversations(res.data);
+        setSelectedConversation((prev) =>
+          prev ? res.data.find((c) => c.id === prev.id) ?? null : null
+        );
+      });
+    },
+    [activeAccount]
+  );
+
   useEffect(() => {
     const handleVisibility = () => setIsWindowActive(!document.hidden);
     document.addEventListener("visibilitychange", handleVisibility);
@@ -97,54 +144,6 @@ export default function InboxPage() {
   // Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
   // Peu importe le compte, la plateforme, etc.
   useGlobalNotifications(selectedConversation?.id);
-
-
-  const loadAccounts = useCallback(async () => {
-    try {
-      const res = await getAccounts();
-      const payload = Array.isArray(res?.data)
-        ? res.data
-        : Array.isArray(res?.data?.data)
-          ? res.data.data
-          : [];
-
-      setAccounts(payload);
-      
-      // Essayer de restaurer le compte sauvegardé
-      const savedAccountId = getActiveAccount();
-      const savedAccountExists = savedAccountId && payload.some((acc) => acc.id === savedAccountId);
-      
-      setActiveAccount((prev) => {
-        // Si un compte est sauvegardé et existe toujours, l'utiliser
-        if (savedAccountExists) {
-          return savedAccountId;
-        }
-        // Sinon, garder le compte actuel s'il existe toujours
-        if (prev && payload.some((acc) => acc.id === prev)) {
-          return prev;
-        }
-        // Sinon, prendre le premier compte disponible
-        return payload[0]?.id ?? null;
-      });
-    } catch (error) {
-      console.error("Failed to load accounts", error);
-      setAccounts([]);
-      setActiveAccount(null);
-    }
-  }, []);
-
-  const refreshConversations = useCallback(
-    (accountId = activeAccount) => {
-      if (!accountId) return;
-      getConversations(accountId).then((res) => {
-        setConversations(res.data);
-        setSelectedConversation((prev) =>
-          prev ? res.data.find((c) => c.id === prev.id) ?? null : null
-        );
-      });
-    },
-    [activeAccount]
-  );
 
   useEffect(() => {
     loadAccounts();

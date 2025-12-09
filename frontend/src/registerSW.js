@@ -4,11 +4,27 @@
 
 export function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
+    // Sur macOS, il est crucial que le Service Worker soit enregistré et actif
+    // avant toute tentative de notification
+    const registerSW = () => {
       navigator.serviceWorker
-        .register('/sw.js')
+        .register('/sw.js', { scope: '/' })
         .then((registration) => {
           console.log('✅ Service Worker enregistré:', registration.scope);
+          
+          // Sur macOS, s'assurer que le Service Worker est actif
+          if (registration.active) {
+            console.log('✅ Service Worker actif (prêt pour les notifications)');
+          } else if (registration.installing) {
+            registration.installing.addEventListener('statechange', () => {
+              if (registration.installing.state === 'activated') {
+                console.log('✅ Service Worker activé (prêt pour les notifications)');
+              }
+            });
+          } else if (registration.waiting) {
+            // Si un Service Worker est en attente, l'activer
+            registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+          }
           
           // Activer le Background Sync pour recevoir des notifications même quand l'app est fermée
           if ('sync' in registration) {
@@ -28,7 +44,16 @@ export function registerServiceWorker() {
         .catch((error) => {
           console.error('❌ Erreur lors de l\'enregistrement du Service Worker:', error);
         });
-    });
+    };
+
+    // Enregistrer immédiatement si la page est déjà chargée
+    // Sur macOS, c'est important pour que les notifications fonctionnent
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      registerSW();
+    } else {
+      // Sinon, attendre le chargement
+      window.addEventListener('load', registerSW);
+    }
 
     // Écouter les mises à jour du SW
     navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -38,6 +63,8 @@ export function registerServiceWorker() {
         window.location.reload();
       }
     });
+  } else {
+    console.warn('⚠️ Service Worker non supporté par ce navigateur');
   }
 }
 
@@ -112,7 +139,16 @@ export async function showInstallPrompt() {
 }
 
 /**
+ * Détecter si on est sur macOS
+ */
+function isMacOS() {
+  return navigator.platform.toUpperCase().indexOf('MAC') >= 0 || 
+         navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+}
+
+/**
  * Afficher une notification locale (style WhatsApp)
+ * Adapté pour macOS et autres plateformes
  * @param {string} title - Titre de la notification
  * @param {object} options - Options de la notification
  * @returns {Promise<void>}
@@ -132,11 +168,12 @@ export async function showNotification(title, options = {}) {
     return;
   }
 
+  const isMac = isMacOS();
+  
   // Options par défaut style WhatsApp
   const defaultOptions = {
     icon: '/192x192.svg',
     badge: '/192x192.svg',
-    vibrate: [200, 100, 200], // Vibration WhatsApp
     tag: 'whatsapp-notification',
     requireInteraction: false,
     silent: false,
@@ -144,15 +181,75 @@ export async function showNotification(title, options = {}) {
     ...options
   };
 
-  // Vérifier si le service worker est disponible
-  if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-    const registration = await navigator.serviceWorker.ready;
+  // Sur macOS, vibrate n'est pas supporté, on le retire
+  if (isMac && defaultOptions.vibrate) {
+    delete defaultOptions.vibrate;
+  } else if (!isMac && !defaultOptions.vibrate) {
+    // Sur les autres plateformes, ajouter la vibration par défaut si non spécifiée
+    defaultOptions.vibrate = [200, 100, 200];
+  }
+
+  // Sur macOS, certaines options peuvent ne pas être supportées
+  // On nettoie les options pour éviter les erreurs
+  const cleanOptions = { ...defaultOptions };
+  
+  // Sur macOS, retirer les options potentiellement problématiques si elles sont null/undefined
+  if (isMac) {
+    // Retirer image si null (peut causer des problèmes sur certains navigateurs Mac)
+    if (cleanOptions.image === null) {
+      delete cleanOptions.image;
+    }
+    // S'assurer que badge est toujours défini (requis sur macOS)
+    if (!cleanOptions.badge) {
+      cleanOptions.badge = '/192x192.svg';
+    }
+  }
+
+  // Sur macOS, les notifications DOIVENT passer par le Service Worker
+  // Pas de fallback avec new Notification()
+  if (isMac) {
+    if (!('serviceWorker' in navigator)) {
+      console.warn('⚠️ Service Worker requis pour les notifications sur macOS');
+      return;
+    }
     
-    // Afficher la notification via le service worker
-    await registration.showNotification(title, defaultOptions);
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      
+      if (!registration) {
+        console.warn('⚠️ Service Worker non prêt sur macOS');
+        return;
+      }
+      
+      // Afficher la notification via le service worker (obligatoire sur macOS)
+      await registration.showNotification(title, cleanOptions);
+      console.log('✅ Notification affichée via Service Worker (macOS)');
+    } catch (error) {
+      console.error('❌ Erreur lors de l\'affichage de la notification sur macOS:', error);
+    }
   } else {
-    // Fallback : notification simple sans service worker
-    new Notification(title, defaultOptions);
+    // Sur les autres plateformes, essayer d'abord le Service Worker, puis fallback
+    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        await registration.showNotification(title, cleanOptions);
+      } catch (error) {
+        console.warn('⚠️ Erreur Service Worker, fallback vers Notification API:', error);
+        // Fallback : notification simple sans service worker
+        try {
+          new Notification(title, cleanOptions);
+        } catch (fallbackError) {
+          console.error('❌ Erreur avec le fallback Notification:', fallbackError);
+        }
+      }
+    } else {
+      // Fallback : notification simple sans service worker
+      try {
+        new Notification(title, cleanOptions);
+      } catch (error) {
+        console.error('❌ Erreur lors de l\'affichage de la notification:', error);
+      }
+    }
   }
 }
 
@@ -307,6 +404,8 @@ export async function showMessageNotification(contactName, messagePreview, conve
   const primaryConversation = sortedConvs[0];
   const notificationIcon = primaryConversation?.contactImage || '/192x192.svg';
   
+  const isMac = isMacOS();
+  
   // Options de notification style WhatsApp Desktop/Mobile
   const options = {
     body: body,
@@ -320,12 +419,8 @@ export async function showMessageNotification(contactName, messagePreview, conve
     },
     // Icon = image de profil de la conversation la plus récente
     icon: notificationIcon,
-    // Badge = icône WhatsApp pour identifier l'app
+    // Badge = icône WhatsApp pour identifier l'app (important sur macOS)
     badge: '/192x192.svg',
-    // Image = image de profil large (notifications riches - si supporté)
-    image: primaryConversation?.contactImage || null,
-    // Vibration style WhatsApp (court, double) - seulement si nouvelle notification
-    vibrate: existingNotification ? [] : [200, 100, 200],
     requireInteraction: false, // Disparaît automatiquement
     silent: existingNotification, // Son seulement pour nouveau message, pas pour mise à jour
     timestamp: Date.now(),
@@ -333,7 +428,6 @@ export async function showMessageNotification(contactName, messagePreview, conve
     lang: 'fr',
     // Renotifier si plusieurs messages
     renotify: true,
-    sticky: false,
     // Couleur de thème WhatsApp (vert)
     color: '#25d366',
     // Actions interactives (si supporté par le navigateur)
@@ -348,6 +442,27 @@ export async function showMessageNotification(contactName, messagePreview, conve
       }
     ]
   };
+
+  // Sur macOS, retirer certaines options non supportées ou problématiques
+  if (isMac) {
+    // Retirer vibrate (non supporté sur macOS)
+    delete options.vibrate;
+    // Retirer image si null (peut causer des problèmes)
+    if (primaryConversation?.contactImage) {
+      options.image = primaryConversation.contactImage;
+    }
+    // Retirer sticky (peut causer des problèmes sur macOS)
+    delete options.sticky;
+  } else {
+    // Sur les autres plateformes, ajouter la vibration si nouvelle notification
+    if (!existingNotification) {
+      options.vibrate = [200, 100, 200];
+    }
+    // Ajouter l'image si disponible
+    if (primaryConversation?.contactImage) {
+      options.image = primaryConversation.contactImage;
+    }
+  }
 
   await showNotification(title, options);
 }
@@ -382,16 +497,23 @@ export function clearConversationNotification(conversationId) {
       : `${convCount} conversations • ${totalMessages} message${totalMessages > 1 ? 's' : ''}`;
     const body = buildNotificationBody(conversations);
     
-    showNotification(title, {
+    const isMac = isMacOS();
+    const updateOptions = {
       body,
       tag: 'whatsapp-all-messages',
       data: { conversations, timestamp: Date.now() },
       icon: primaryConversation?.contactImage || '/192x192.svg',
       badge: '/192x192.svg',
       color: '#25d366',
-      silent: true, // Pas de son pour les mises à jour
-      vibrate: [] // Pas de vibration pour les mises à jour
-    });
+      silent: true // Pas de son pour les mises à jour
+    };
+    
+    // Sur macOS, ne pas ajouter vibrate
+    if (!isMac) {
+      updateOptions.vibrate = []; // Pas de vibration pour les mises à jour
+    }
+    
+    showNotification(title, updateOptions);
   }
 }
 

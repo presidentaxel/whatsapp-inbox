@@ -21,7 +21,16 @@ self.addEventListener('install', (event) => {
         console.log('Service Worker: Mise en cache des assets');
         return cache.addAll(ASSETS_TO_CACHE);
       })
-      .then(() => self.skipWaiting())
+      .then(() => {
+        // skipWaiting() pour activer immédiatement le nouveau Service Worker
+        // Important sur macOS pour que les notifications fonctionnent rapidement
+        self.skipWaiting();
+      })
+      .catch((error) => {
+        console.error('Service Worker: Erreur lors de la mise en cache', error);
+        // Même en cas d'erreur, activer le Service Worker
+        self.skipWaiting();
+      })
   );
 });
 
@@ -29,17 +38,31 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   console.log('Service Worker: Activation');
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cache) => {
-          if (cache !== CACHE_NAME) {
-            console.log('Service Worker: Suppression ancien cache', cache);
-            return caches.delete(cache);
-          }
-        })
-      );
-    }).then(() => self.clients.claim())
+    Promise.all([
+      // Nettoyer les anciens caches
+      caches.keys().then((cacheNames) => {
+        return Promise.all(
+          cacheNames.map((cache) => {
+            if (cache !== CACHE_NAME) {
+              console.log('Service Worker: Suppression ancien cache', cache);
+              return caches.delete(cache);
+            }
+          })
+        );
+      }),
+      // Prendre le contrôle de toutes les pages (important pour macOS)
+      self.clients.claim()
+    ]).then(() => {
+      console.log('Service Worker: Activé et prêt pour les notifications');
+    })
   );
+});
+
+// Écouter les messages pour activer immédiatement (skip waiting)
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // Stratégie de cache : Network First (toujours essayer le réseau d'abord)
