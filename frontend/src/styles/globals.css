@@ -1414,6 +1414,27 @@ body {
   gap: 12px;
 }
 
+.account-selector__badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.account-selector__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  background: #25d366;
+  color: #fff;
+  border-radius: 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
 .account-selector__button:hover,
 .account-selector__button:focus-visible {
   border-color: #25d366;
@@ -1445,6 +1466,10 @@ body {
   padding: 10px 12px;
   border-radius: var(--radius-md);
   cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
 .account-selector__option:hover {

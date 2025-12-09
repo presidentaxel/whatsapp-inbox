@@ -6,6 +6,9 @@ export const getConversations = (accountId) =>
 export const markConversationRead = (conversationId) =>
   api.post(`/conversations/${conversationId}/read`);
 
+export const markConversationUnread = (conversationId) =>
+  api.post(`/conversations/${conversationId}/unread`);
+
 export const toggleConversationFavorite = (conversationId, favorite) =>
   api.post(`/conversations/${conversationId}/favorite`, { favorite });
 

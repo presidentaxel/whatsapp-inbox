@@ -523,7 +523,11 @@ export default function SettingsPanel({
             <h2 className="settings-content__section-title">Accès par compte WhatsApp</h2>
             <PermissionsTable
               accounts={accounts}
-              currentUserRole={currentUser?.roles?.[0]?.role_slug || null}
+              currentUserRole={
+                (currentUser?.roles && currentUser.roles.length > 0 
+                  ? currentUser.roles[0]?.role_slug 
+                  : currentUser?.role_slug) || null
+              }
               canManagePermissions={canManagePermissions}
             />
           </section>

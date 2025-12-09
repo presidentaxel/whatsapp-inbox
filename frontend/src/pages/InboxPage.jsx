@@ -322,6 +322,7 @@ export default function InboxPage() {
                 value={activeAccount}
                 onChange={setActiveAccount}
                 label="Discussions"
+                conversations={conversations}
               />
 
               <div className="conversation-filters">
@@ -358,6 +359,7 @@ export default function InboxPage() {
                 data={filteredConversations}
                 selectedId={selectedConversation?.id}
                 onSelect={handleSelectConversation}
+                onRefresh={() => refreshConversations(activeAccount)}
               />
             </div>
 

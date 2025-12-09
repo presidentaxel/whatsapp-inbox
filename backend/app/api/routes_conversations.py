@@ -6,6 +6,7 @@ from app.services.conversation_service import (
     get_all_conversations,
     get_conversation_by_id,
     mark_conversation_read,
+    mark_conversation_unread,
     set_conversation_bot_mode,
     set_conversation_favorite,
 )
@@ -40,6 +41,20 @@ async def mark_read(conversation_id: str, current_user: CurrentUser = Depends(ge
         raise HTTPException(status_code=404, detail="conversation_not_found")
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, conversation["account_id"])
     await mark_conversation_read(conversation_id)
+    return {"status": "ok"}
+
+
+@router.post("/{conversation_id}/unread")
+async def mark_unread(conversation_id: str, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Marque une conversation comme non lue (unread_count = 1).
+    Permet à l'utilisateur de marquer manuellement une conversation pour y revenir plus tard.
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    current_user.require(PermissionCodes.CONVERSATIONS_VIEW, conversation["account_id"])
+    await mark_conversation_unread(conversation_id)
     return {"status": "ok"}
 
 

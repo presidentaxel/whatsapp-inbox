@@ -6,6 +6,7 @@ export default function AccountSelector({
   value,
   onChange,
   label = "Compte WhatsApp",
+  conversations = [],
 }) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
@@ -29,6 +30,18 @@ export default function AccountSelector({
     if (!normalizedAccounts.length) return null;
     return normalizedAccounts.find((acc) => acc.id === value) ?? normalizedAccounts[0];
   }, [normalizedAccounts, value]);
+
+  // Calculer le nombre total de messages non lus par compte
+  const unreadCountsByAccount = useMemo(() => {
+    const counts = {};
+    (Array.isArray(conversations) ? conversations : []).forEach((conv) => {
+      const accountId = conv.account_id;
+      if (accountId) {
+        counts[accountId] = (counts[accountId] || 0) + (conv.unread_count || 0);
+      }
+    });
+    return counts;
+  }, [conversations]);
 
   if (!normalizedAccounts.length) {
     return (
@@ -56,7 +69,14 @@ export default function AccountSelector({
           <strong>{selected?.name}</strong>
           {selected?.phone_number && <small>{selected.phone_number}</small>}
         </div>
-        {open ? <FiChevronUp /> : <FiChevronDown />}
+        <div className="account-selector__badges">
+          {selected && unreadCountsByAccount[selected.id] > 0 && (
+            <span className="account-selector__badge">
+              {unreadCountsByAccount[selected.id] > 99 ? '99+' : unreadCountsByAccount[selected.id]}
+            </span>
+          )}
+          {open ? <FiChevronUp /> : <FiChevronDown />}
+        </div>
       </button>
 
       {open && (
@@ -74,6 +94,11 @@ export default function AccountSelector({
                 <strong>{acc.name}</strong>
                 {acc.phone_number && <small>{acc.phone_number}</small>}
               </div>
+              {unreadCountsByAccount[acc.id] > 0 && (
+                <span className="account-selector__badge">
+                  {unreadCountsByAccount[acc.id] > 99 ? '99+' : unreadCountsByAccount[acc.id]}
+                </span>
+              )}
             </button>
           ))}
         </div>

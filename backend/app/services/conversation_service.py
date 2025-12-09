@@ -96,6 +96,19 @@ async def mark_conversation_read(conversation_id: str) -> bool:
     return True
 
 
+async def mark_conversation_unread(conversation_id: str) -> bool:
+    """
+    Marque une conversation comme non lue en mettant unread_count à 1.
+    Permet à l'utilisateur de marquer manuellement une conversation pour y revenir plus tard.
+    """
+    await supabase_execute(
+        supabase.table("conversations").update({"unread_count": 1}).eq("id", conversation_id)
+    )
+    # Invalider le cache pour forcer le rechargement
+    await invalidate_cache_pattern(f"conversation:{conversation_id}")
+    return True
+
+
 async def set_conversation_favorite(conversation_id: str, favorite: bool) -> bool:
     await supabase_execute(
         supabase.table("conversations").update({"is_favorite": favorite}).eq("id", conversation_id)

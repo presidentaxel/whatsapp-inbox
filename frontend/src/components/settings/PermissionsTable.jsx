@@ -20,10 +20,26 @@ export default function PermissionsTable({ accounts: propsAccounts, currentUserR
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Admin peut modifier, DEV peut seulement voir
-  const canEdit = canManagePermissions && currentUserRole === "admin";
+  // Normaliser le rôle en minuscules pour la comparaison
+  const normalizedRole = currentUserRole?.toLowerCase() || "";
+  
+  // Si canManagePermissions est true, l'utilisateur peut modifier (c'est la permission qui compte)
+  // Si canManagePermissions est false mais que le rôle est admin, on permet quand même l'édition
+  // (par sécurité, au cas où la permission n'est pas correctement chargée)
+  const canEdit = canManagePermissions || normalizedRole === "admin";
   // Admin et DEV peuvent voir, Manager ne peut rien voir
-  const canView = currentUserRole === "admin" || currentUserRole === "dev";
+  const canView = normalizedRole === "admin" || normalizedRole === "dev";
+
+  // Debug log
+  useEffect(() => {
+    console.log("🔐 PermissionsTable Debug:", {
+      currentUserRole,
+      normalizedRole,
+      canManagePermissions,
+      canEdit,
+      canView,
+    });
+  }, [currentUserRole, normalizedRole, canManagePermissions, canEdit, canView]);
 
   useEffect(() => {
     if (!canView) return;
