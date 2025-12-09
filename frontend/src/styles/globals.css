@@ -2338,7 +2338,6 @@ body {
   width: 50%;
   border-right: 1px solid var(--border-light);
   overflow-y: auto;
-  background: var(--bg-hover);
 }
 
 .contact-item {

@@ -32,6 +32,14 @@ async def update_bot_profile(
     account = await get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
-    current_user.require(PermissionCodes.SETTINGS_MANAGE, account_id)
+    # Permettre aux DEV (qui ont CONVERSATIONS_VIEW ou PERMISSIONS_VIEW) et aux Admin (qui ont SETTINGS_MANAGE)
+    # de modifier le profil du bot, car ils ont tous accès à l'onglet Assistant Gemini
+    has_access = (
+        current_user.permissions.has(PermissionCodes.SETTINGS_MANAGE, account_id) or
+        current_user.permissions.has(PermissionCodes.CONVERSATIONS_VIEW, account_id) or
+        current_user.permissions.has(PermissionCodes.PERMISSIONS_VIEW, account_id)
+    )
+    if not has_access:
+        raise HTTPException(status_code=403, detail="permission_denied")
     return await upsert_bot_profile(account_id, payload.dict())
 

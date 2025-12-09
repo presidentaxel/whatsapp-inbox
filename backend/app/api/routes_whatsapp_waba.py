@@ -27,7 +27,12 @@ async def get_waba_details(
     - message_template_namespace: Namespace pour les templates
     - account_review_status: Statut de review du compte
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    # Permettre ACCOUNTS_VIEW (DEV) ou ACCOUNTS_MANAGE (Admin)
+    if not (
+        current_user.permissions.has(PermissionCodes.ACCOUNTS_VIEW, account_id)
+        or current_user.permissions.has(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    ):
+        raise HTTPException(status_code=403, detail="permission_denied")
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -66,7 +71,12 @@ async def list_owned_wabas(
     
     Note: Nécessite le Business ID qui doit être configuré dans l'account
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    # Permettre ACCOUNTS_VIEW (DEV) ou ACCOUNTS_MANAGE (Admin)
+    if not (
+        current_user.permissions.has(PermissionCodes.ACCOUNTS_VIEW, account_id)
+        or current_user.permissions.has(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    ):
+        raise HTTPException(status_code=403, detail="permission_denied")
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -105,7 +115,12 @@ async def list_client_wabas(
     
     Note: Nécessite le Business ID qui doit être configuré dans l'account
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    # Permettre ACCOUNTS_VIEW (DEV) ou ACCOUNTS_MANAGE (Admin)
+    if not (
+        current_user.permissions.has(PermissionCodes.ACCOUNTS_VIEW, account_id)
+        or current_user.permissions.has(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    ):
+        raise HTTPException(status_code=403, detail="permission_denied")
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -222,7 +237,12 @@ async def get_webhook_subscriptions(
     Récupère la liste des apps abonnées aux webhooks de ce WABA
     GET /{WABA-ID}/subscribed_apps
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    # Permettre ACCOUNTS_VIEW (DEV) ou ACCOUNTS_MANAGE (Admin)
+    if not (
+        current_user.permissions.has(PermissionCodes.ACCOUNTS_VIEW, account_id)
+        or current_user.permissions.has(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    ):
+        raise HTTPException(status_code=403, detail="permission_denied")
     
     account = await get_account_by_id(account_id)
     if not account:

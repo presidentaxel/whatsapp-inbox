@@ -27,7 +27,12 @@ async def list_phone_numbers(
     
     Note: Nécessite le WABA ID qui doit être configuré dans l'account
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    # Permettre ACCOUNTS_VIEW (DEV) ou ACCOUNTS_MANAGE (Admin)
+    if not (
+        current_user.permissions.has(PermissionCodes.ACCOUNTS_VIEW, account_id)
+        or current_user.permissions.has(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    ):
+        raise HTTPException(status_code=403, detail="permission_denied")
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -64,7 +69,12 @@ async def get_phone_details(
     Récupère les détails du numéro de téléphone
     GET /{PHONE_NUMBER_ID}
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    # Permettre ACCOUNTS_VIEW (DEV) ou ACCOUNTS_MANAGE (Admin)
+    if not (
+        current_user.permissions.has(PermissionCodes.ACCOUNTS_VIEW, account_id)
+        or current_user.permissions.has(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    ):
+        raise HTTPException(status_code=403, detail="permission_denied")
     
     account = await get_account_by_id(account_id)
     if not account:
