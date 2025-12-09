@@ -32,6 +32,7 @@ async def read_profile(current_user: CurrentUser = Depends(get_current_user)):
                 acc_id: sorted(list(perms))
                 for acc_id, perms in permissions.account_permissions.items()
             },
+            "account_access_levels": permissions.account_access_levels,  # 'full'|'lecture'|'aucun' par compte
         },
         "roles": current_user.role_assignments,
         "overrides": current_user.overrides,

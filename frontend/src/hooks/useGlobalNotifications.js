@@ -1,15 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { supabaseClient } from '../api/supabaseClient';
 import { notifyNewMessage, askForNotificationPermission } from '../utils/notifications';
+import { useAuth } from '../context/AuthContext';
 
 /**
  * Hook global pour écouter TOUS les nouveaux messages et afficher des notifications
- * Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
- * Peu importe le compte, la plateforme, etc.
- * 
- * La gestion fine (par compte, etc.) sera ajoutée plus tard
+ * Vérifie les permissions avant d'envoyer une notification
+ * Ne notifie que si l'utilisateur a accès au compte/conversation
  */
 export function useGlobalNotifications(selectedConversationId = null) {
+  const { hasPermission } = useAuth();
   const channelRef = useRef(null);
   const lastNotifiedRef = useRef(new Set()); // Éviter les doublons
 
@@ -75,6 +75,24 @@ export function useGlobalNotifications(selectedConversationId = null) {
               return;
             }
 
+            // Vérifier que l'utilisateur a accès à ce compte/conversation
+            const accountId = conversation.account_id;
+            if (!accountId) {
+              console.warn('⚠️ Conversation sans account_id:', conversation.id);
+              return;
+            }
+
+            // Vérifier les permissions : l'utilisateur doit avoir conversations.view pour ce compte
+            // Cela vérifie automatiquement si access_level = 'aucun' (via hasPermission)
+            if (!hasPermission || !hasPermission('conversations.view', accountId)) {
+              console.debug('🔕 Skip notify (no access to account)', {
+                messageId: newMessage.id,
+                conversationId: conversation.id,
+                accountId: accountId,
+              });
+              return;
+            }
+
             // Vérifier si on doit notifier
             // Notifier si :
             // - l'app n'est pas au premier plan (tab masqué ou fenêtre non focus)
@@ -93,10 +111,11 @@ export function useGlobalNotifications(selectedConversationId = null) {
               return;
             }
 
-            // Afficher la notification pour TOUS les autres cas
+            // Afficher la notification seulement si l'utilisateur a accès
             console.log('🔔 Notification pour message:', {
               messageId: newMessage.id,
               conversationId: conversation.id,
+              accountId: accountId,
               contact: conversation.contacts?.display_name || conversation.client_number,
               isAppVisible: isVisible,
               hasFocus,
@@ -131,6 +150,6 @@ export function useGlobalNotifications(selectedConversationId = null) {
       lastNotifiedRef.current.clear();
       console.log('🔕 Notifications globales désactivées');
     };
-  }, [selectedConversationId]);
+  }, [selectedConversationId, hasPermission]);
 }
 

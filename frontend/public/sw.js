@@ -175,57 +175,88 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   
-  const conversationId = event.notification.data?.conversationId;
+  const notificationData = event.notification.data || {};
+  const conversationId = notificationData.conversationId;
+  const conversations = notificationData.conversations || {};
   const action = event.action;
   
   event.waitUntil(
     (async () => {
       // Gérer les actions
-      if (action === 'mark-read') {
-        // Marquer comme lu (message sera envoyé à l'app si ouverte)
+      if (action === 'mark-all-read') {
+        // Marquer toutes les conversations comme lues
         const allClients = await clients.matchAll({
           type: 'window',
           includeUncontrolled: true
         });
+        const conversationIds = Object.keys(conversations);
         for (const client of allClients) {
           if (client.url.includes(self.location.origin)) {
             client.postMessage({
-              type: 'MARK_AS_READ',
-              conversationId
+              type: 'MARK_ALL_AS_READ',
+              conversationIds: conversationIds
             });
           }
         }
+        // Nettoyer le localStorage dans le client
         return;
       }
       
-      // Action par défaut : ouvrir la conversation
-      // Essayer de trouver une fenêtre/tab ouverte
-      const allClients = await clients.matchAll({
-        type: 'window',
-        includeUncontrolled: true
-      });
-      
-      // Si une fenêtre est déjà ouverte, la focus et y naviguer
-      for (const client of allClients) {
-        if (client.url.includes(self.location.origin)) {
-          await client.focus();
-          
-          // Envoyer un message pour ouvrir la conversation
-          if (conversationId) {
-            client.postMessage({
-              type: 'OPEN_CONVERSATION',
-              conversationId
-            });
+      if (action === 'mark-read' || action === 'open') {
+        // Si on a plusieurs conversations, ouvrir la plus récente
+        // Sinon, ouvrir celle spécifiée
+        const targetConvId = conversationId || (Object.keys(conversations).length > 0 
+          ? Object.keys(conversations).sort((a, b) => 
+              (conversations[b]?.lastUpdate || 0) - (conversations[a]?.lastUpdate || 0)
+            )[0]
+          : null);
+        
+        if (action === 'mark-read' && targetConvId) {
+          // Marquer comme lu (message sera envoyé à l'app si ouverte)
+          const allClients = await clients.matchAll({
+            type: 'window',
+            includeUncontrolled: true
+          });
+          for (const client of allClients) {
+            if (client.url.includes(self.location.origin)) {
+              client.postMessage({
+                type: 'MARK_AS_READ',
+                conversationId: targetConvId
+              });
+            }
           }
           return;
         }
+        
+        // Action par défaut : ouvrir la conversation
+        // Essayer de trouver une fenêtre/tab ouverte
+        const allClients = await clients.matchAll({
+          type: 'window',
+          includeUncontrolled: true
+        });
+        
+        // Si une fenêtre est déjà ouverte, la focus et y naviguer
+        for (const client of allClients) {
+          if (client.url.includes(self.location.origin)) {
+            await client.focus();
+            
+            // Envoyer un message pour ouvrir la conversation
+            if (targetConvId) {
+              client.postMessage({
+                type: 'OPEN_CONVERSATION',
+                conversationId: targetConvId
+              });
+            }
+            return;
+          }
+        }
+        
+        // Sinon, ouvrir une nouvelle fenêtre
+        const url = targetConvId 
+          ? `/?conversation=${targetConvId}` 
+          : '/';
+        await clients.openWindow(url);
       }
-      
-      // Sinon, ouvrir une nouvelle fenêtre
-      const url = conversationId 
-        ? `/?conversation=${conversationId}` 
-        : '/';
-      await clients.openWindow(url);
     })()
   );
 });

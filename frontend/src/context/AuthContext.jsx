@@ -63,13 +63,41 @@ export function AuthProvider({ children }) {
   const hasPermission = useCallback(
     (permissionCode, accountId = null) => {
       if (!profile) return false;
+      
+      // Vérifier si le compte est en "aucun" (pas d'accès du tout)
+      const accountAccessLevels = profile.permissions?.account_access_levels || {};
+      if (accountId && accountAccessLevels[accountId] === "aucun") {
+        // Exception : permissions de gestion des permissions ne sont pas bloquées par "aucun"
+        // pour permettre aux admins de gérer les permissions même s'ils ont mis "aucun" pour eux-mêmes
+        const adminPermissions = ["permissions.view", "permissions.manage"];
+        if (!adminPermissions.includes(permissionCode)) {
+          return false;
+        }
+      }
+      
       const global = profile.permissions?.global ?? [];
       if (global.includes(permissionCode)) {
+        // Si permission globale, vérifier que le compte n'est pas en "aucun"
+        if (accountId && accountAccessLevels[accountId] === "aucun") {
+          const adminPermissions = ["permissions.view", "permissions.manage"];
+          if (!adminPermissions.includes(permissionCode)) {
+            return false;
+          }
+        }
         return true;
       }
+      
       if (accountId && profile.permissions?.accounts?.[accountId]) {
+        // Si permission spécifique au compte, vérifier aussi que le compte n'est pas en "aucun"
+        if (accountAccessLevels[accountId] === "aucun") {
+          const adminPermissions = ["permissions.view", "permissions.manage"];
+          if (!adminPermissions.includes(permissionCode)) {
+            return false;
+          }
+        }
         return profile.permissions.accounts[accountId].includes(permissionCode);
       }
+      
       return false;
     },
     [profile]

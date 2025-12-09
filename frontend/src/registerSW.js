@@ -168,57 +168,230 @@ function generateAvatarFallback(name) {
 }
 
 /**
- * Afficher une notification pour un nouveau message (style WhatsApp exact)
+ * Stockage des conversations non lues pour la notification globale
+ * Utilise localStorage pour persister entre les rechargements de page
+ */
+const NOTIFICATION_STORAGE_KEY = 'whatsapp_notifications_conversations';
+
+function getStoredConversations() {
+  try {
+    const stored = localStorage.getItem(NOTIFICATION_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : {};
+  } catch (error) {
+    console.warn('⚠️ Erreur lecture notifications:', error);
+    return {};
+  }
+}
+
+function storeConversations(conversations) {
+  try {
+    localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(conversations));
+  } catch (error) {
+    console.warn('⚠️ Erreur écriture notifications:', error);
+  }
+}
+
+function updateConversationInStore(conversationId, contactName, messagePreview, contactImage, unreadCount) {
+  const conversations = getStoredConversations();
+  conversations[conversationId] = {
+    conversationId,
+    contactName,
+    lastMessagePreview: messagePreview,
+    contactImage: contactImage || null,
+    unreadCount: Math.max(unreadCount, (conversations[conversationId]?.unreadCount || 0) + 1),
+    lastUpdate: Date.now()
+  };
+  storeConversations(conversations);
+  return conversations;
+}
+
+function removeConversationFromStore(conversationId) {
+  const conversations = getStoredConversations();
+  delete conversations[conversationId];
+  storeConversations(conversations);
+  return conversations;
+}
+
+function buildNotificationBody(conversations) {
+  const convs = Object.values(conversations);
+  if (convs.length === 0) return 'Aucun nouveau message';
+  
+  // Trier par dernière mise à jour (plus récent en premier)
+  convs.sort((a, b) => b.lastUpdate - a.lastUpdate);
+  
+  const totalMessages = convs.reduce((sum, c) => sum + c.unreadCount, 0);
+  
+  if (convs.length === 1) {
+    // Une seule conversation : afficher le message directement
+    const conv = convs[0];
+    if (conv.unreadCount === 1) {
+      return conv.lastMessagePreview;
+    } else {
+      return `${conv.lastMessagePreview}\n(${conv.unreadCount} messages)`;
+    }
+  } else {
+    // Plusieurs conversations : afficher un résumé
+    // Format: "Jean Dupont: Message...\nMarie Martin: Message...\n(5 messages au total)"
+    let body = '';
+    // Prendre les 3 premières conversations
+    const topConvs = convs.slice(0, 3);
+    body = topConvs.map(conv => {
+      const preview = conv.lastMessagePreview.length > 40 
+        ? conv.lastMessagePreview.substring(0, 40) + '...'
+        : conv.lastMessagePreview;
+      return `${conv.contactName}: ${preview}`;
+    }).join('\n');
+    
+    if (convs.length > 3) {
+      body += `\n+${convs.length - 3} autre${convs.length - 3 > 1 ? 's' : ''} conversation${convs.length - 3 > 1 ? 's' : ''}`;
+    }
+    
+    body += `\n(${totalMessages} message${totalMessages > 1 ? 's' : ''} au total)`;
+    return body;
+  }
+}
+
+/**
+ * Afficher une notification globale pour tous les messages non lus
+ * Met à jour une seule notification qui regroupe toutes les conversations
  * @param {string} contactName - Nom du contact
  * @param {string} messagePreview - Aperçu du message
  * @param {string} conversationId - ID de la conversation
  * @param {string} contactImage - URL de l'image de profil (optionnel)
+ * @param {number} unreadCount - Nombre de messages non lus dans cette conversation (optionnel)
  */
-export async function showMessageNotification(contactName, messagePreview, conversationId, contactImage = null) {
-  // Le titre est juste le nom du contact (comme WhatsApp)
-  // Pas besoin de préfixe "WhatsApp" ou autre
-  const title = contactName;
+export async function showMessageNotification(contactName, messagePreview, conversationId, contactImage = null, unreadCount = 1) {
+  // Tag unique global pour toutes les notifications
+  const globalTag = 'whatsapp-all-messages';
+  
+  // Mettre à jour le stockage avec cette conversation
+  const allConversations = updateConversationInStore(
+    conversationId,
+    contactName,
+    messagePreview,
+    contactImage,
+    unreadCount
+  );
+  
+  // Vérifier s'il y a déjà une notification globale
+  let existingNotification = null;
+  if ('serviceWorker' in navigator) {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const notifications = await registration.getNotifications({ tag: globalTag });
+      if (notifications.length > 0) {
+        existingNotification = notifications[0];
+      }
+    } catch (error) {
+      console.warn('⚠️ Impossible de récupérer les notifications existantes:', error);
+    }
+  }
+  
+  // Construire le titre et le body de la notification globale
+  const convCount = Object.keys(allConversations).length;
+  const totalMessages = Object.values(allConversations).reduce((sum, c) => sum + c.unreadCount, 0);
+  
+  let title;
+  if (convCount === 1) {
+    // Une seule conversation : titre = nom du contact
+    title = contactName;
+  } else {
+    // Plusieurs conversations : titre avec compteur
+    title = `${convCount} conversations • ${totalMessages} message${totalMessages > 1 ? 's' : ''}`;
+  }
+  
+  const body = buildNotificationBody(allConversations);
+  
+  // Pour l'icône, utiliser la première conversation (la plus récente)
+  const sortedConvs = Object.values(allConversations).sort((a, b) => b.lastUpdate - a.lastUpdate);
+  const primaryConversation = sortedConvs[0];
+  const notificationIcon = primaryConversation?.contactImage || '/192x192.svg';
   
   // Options de notification style WhatsApp Desktop/Mobile
   const options = {
-    body: messagePreview, // Aperçu du message directement
-    tag: `whatsapp-msg-${conversationId}`, // Tag unique par conversation pour regrouper
+    body: body,
+    tag: globalTag, // Tag global unique pour regrouper toutes les notifications
     data: { 
-      conversationId,
-      contactName,
-      timestamp: Date.now()
+      conversations: allConversations,
+      conversationId: conversationId, // Conversation la plus récente
+      timestamp: Date.now(),
+      totalMessages: totalMessages,
+      conversationCount: convCount
     },
-    // Icon = image de profil du contact (rond, comme WhatsApp)
-    icon: contactImage || '/192x192.svg',
+    // Icon = image de profil de la conversation la plus récente
+    icon: notificationIcon,
     // Badge = icône WhatsApp pour identifier l'app
     badge: '/192x192.svg',
     // Image = image de profil large (notifications riches - si supporté)
-    image: contactImage || null,
-    // Vibration style WhatsApp (court, double)
-    vibrate: [200, 100, 200],
+    image: primaryConversation?.contactImage || null,
+    // Vibration style WhatsApp (court, double) - seulement si nouvelle notification
+    vibrate: existingNotification ? [] : [200, 100, 200],
     requireInteraction: false, // Disparaît automatiquement
-    silent: false, // Son activé
+    silent: existingNotification, // Son seulement pour nouveau message, pas pour mise à jour
     timestamp: Date.now(),
     dir: 'ltr',
     lang: 'fr',
-    // Renotifier si plusieurs messages de la même conversation
+    // Renotifier si plusieurs messages
     renotify: true,
     sticky: false,
     // Couleur de thème WhatsApp (vert)
     color: '#25d366',
     // Actions interactives (si supporté par le navigateur)
-    actions: conversationId ? [
+    actions: [
       {
         action: 'open',
-        title: 'Répondre'
+        title: 'Ouvrir'
       },
       {
-        action: 'mark-read',
-        title: 'Marquer comme lu'
+        action: 'mark-all-read',
+        title: 'Tout marquer comme lu'
       }
-    ] : []
+    ]
   };
 
   await showNotification(title, options);
+}
+
+/**
+ * Nettoyer une conversation du stockage quand elle est marquée comme lue
+ */
+export function clearConversationNotification(conversationId) {
+  const conversations = removeConversationFromStore(conversationId);
+  
+  // Si plus de conversations non lues, fermer la notification
+  if (Object.keys(conversations).length === 0) {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(registration => {
+        registration.getNotifications({ tag: 'whatsapp-all-messages' })
+          .then(notifications => {
+            notifications.forEach(n => n.close());
+          });
+      });
+    }
+  } else {
+    // Sinon, mettre à jour la notification avec les conversations restantes
+    const convs = Object.values(conversations);
+    const convCount = convs.length;
+    const totalMessages = convs.reduce((sum, c) => sum + c.unreadCount, 0);
+    
+    const sortedConvs = convs.sort((a, b) => b.lastUpdate - a.lastUpdate);
+    const primaryConversation = sortedConvs[0];
+    
+    const title = convCount === 1 
+      ? primaryConversation.contactName
+      : `${convCount} conversations • ${totalMessages} message${totalMessages > 1 ? 's' : ''}`;
+    const body = buildNotificationBody(conversations);
+    
+    showNotification(title, {
+      body,
+      tag: 'whatsapp-all-messages',
+      data: { conversations, timestamp: Date.now() },
+      icon: primaryConversation?.contactImage || '/192x192.svg',
+      badge: '/192x192.svg',
+      color: '#25d366',
+      silent: true, // Pas de son pour les mises à jour
+      vibrate: [] // Pas de vibration pour les mises à jour
+    });
+  }
 }
 

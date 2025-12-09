@@ -131,20 +131,26 @@ export async function notifyNewMessage(message, conversation, options = {}) {
   // Récupérer l'image de profil du contact si disponible
   const contactImage = conversation?.contacts?.profile_picture_url || null;
   
+  // Récupérer le nombre de messages non lus dans la conversation
+  // Si non disponible, on assume qu'il y a au moins 1 message non lu (le message actuel)
+  const unreadCount = conversation?.unread_count || 1;
+  
   console.log('🔔 About to show notification', {
     messageId: message.id,
     conversationId: conversation.id,
     contactName,
     preview: messagePreview,
-    hasImage: !!contactImage
+    hasImage: !!contactImage,
+    unreadCount
   });
   
-  await showMessageNotification(contactName, messagePreview, conversation.id, contactImage);
+  await showMessageNotification(contactName, messagePreview, conversation.id, contactImage, unreadCount);
   console.log('✅ Notification shown', {
     messageId: message.id,
     conversationId: conversation.id,
     contactName,
-    preview: messagePreview
+    preview: messagePreview,
+    unreadCount
   });
 }
 
@@ -173,10 +179,22 @@ export async function initNotifications() {
   // Écouter les messages du service worker
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (event) => {
-      if (event.data && event.data.type === 'OPEN_CONVERSATION') {
+      if (!event.data) return;
+      
+      if (event.data.type === 'OPEN_CONVERSATION') {
         // Émettre un événement personnalisé que l'app peut écouter
         window.dispatchEvent(new CustomEvent('openConversation', {
           detail: { conversationId: event.data.conversationId }
+        }));
+      } else if (event.data.type === 'MARK_AS_READ') {
+        // Émettre un événement pour marquer une conversation comme lue
+        window.dispatchEvent(new CustomEvent('markConversationRead', {
+          detail: { conversationId: event.data.conversationId }
+        }));
+      } else if (event.data.type === 'MARK_ALL_AS_READ') {
+        // Émettre un événement pour marquer toutes les conversations comme lues
+        window.dispatchEvent(new CustomEvent('markAllConversationsRead', {
+          detail: { conversationIds: event.data.conversationIds || [] }
         }));
       }
     });

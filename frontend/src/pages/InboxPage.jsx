@@ -18,6 +18,7 @@ import GeminiPanel from "../components/bot/GeminiPanel";
 import WhatsAppBusinessPanel from "../components/whatsapp/WhatsAppBusinessPanel";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
+import { clearConversationNotification } from "../registerSW";
 
 
 export default function InboxPage() {
@@ -39,6 +40,58 @@ export default function InboxPage() {
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
+
+  // Écouter les événements du Service Worker pour les notifications
+  useEffect(() => {
+    const handleMarkConversationRead = (event) => {
+      const { conversationId } = event.detail;
+      if (conversationId) {
+        markConversationRead(conversationId).then(() => {
+          refreshConversations();
+          clearConversationNotification(conversationId);
+        });
+      }
+    };
+
+    const handleMarkAllRead = (event) => {
+      const { conversationIds } = event.detail;
+      if (conversationIds && conversationIds.length > 0) {
+        Promise.all(conversationIds.map(id => markConversationRead(id)))
+          .then(() => {
+            refreshConversations();
+            // Nettoyer toutes les conversations du stockage
+            conversationIds.forEach(id => clearConversationNotification(id));
+          });
+      }
+    };
+
+    const handleOpenConversation = (event) => {
+      const { conversationId } = event.detail;
+      if (conversationId) {
+        // Trouver la conversation et la sélectionner
+        const conv = conversations.find(c => c.id === conversationId);
+        if (conv) {
+          setSelectedConversation(conv);
+          if (conv?.unread_count) {
+            markConversationRead(conv.id).then(() => {
+              refreshConversations();
+              clearConversationNotification(conv.id);
+            });
+          }
+        }
+      }
+    };
+
+    window.addEventListener('markConversationRead', handleMarkConversationRead);
+    window.addEventListener('markAllConversationsRead', handleMarkAllRead);
+    window.addEventListener('openConversation', handleOpenConversation);
+
+    return () => {
+      window.removeEventListener('markConversationRead', handleMarkConversationRead);
+      window.removeEventListener('markAllConversationsRead', handleMarkAllRead);
+      window.removeEventListener('openConversation', handleOpenConversation);
+    };
+  }, [conversations, refreshConversations]);
 
   // Écouter TOUS les nouveaux messages pour afficher des notifications
   // Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
@@ -148,7 +201,11 @@ export default function InboxPage() {
   const handleSelectConversation = (conv) => {
     setSelectedConversation(conv);
     if (conv?.unread_count) {
-      markConversationRead(conv.id).then(() => refreshConversations());
+      markConversationRead(conv.id).then(() => {
+        refreshConversations();
+        // Nettoyer la notification pour cette conversation
+        clearConversationNotification(conv.id);
+      });
     }
   };
 
