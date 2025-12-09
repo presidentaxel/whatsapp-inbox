@@ -170,7 +170,7 @@ async def debug_prompt(conversation_id: str):
         "contents": conversation_parts,
         "generationConfig": {
             "temperature": 0.4,
-            "maxOutputTokens": 250,
+            "maxOutputTokens": 1024,
         },
     }
     

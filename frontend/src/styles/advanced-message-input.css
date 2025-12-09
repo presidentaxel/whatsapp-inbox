@@ -13,8 +13,8 @@
 
 /* Zone des options avancées */
 .advanced-options {
-  background: rgba(17, 27, 33, 0.98);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   padding: 16px;
   animation: slideDown 0.2s ease;
@@ -38,20 +38,20 @@
   align-items: center;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--border-light);
 }
 
 .advanced-title {
   font-size: 1rem;
   font-weight: 600;
-  color: #e9edef;
+  color: var(--text-primary);
   margin: 0;
 }
 
 .advanced-close {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bg-hover);
   border: none;
-  color: #fff;
+  color: var(--text-primary);
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -64,7 +64,7 @@
 }
 
 .advanced-close:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--bg-tertiary);
 }
 
 /* Contenu des options */
@@ -105,14 +105,14 @@
 .form-label {
   font-size: 0.9rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.9);
+  color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
 .tooltip {
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-muted);
   cursor: help;
   display: inline-flex;
   align-items: center;
@@ -125,9 +125,9 @@
 .form-input {
   padding: 10px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  border: 1px solid var(--border-color);
+  background: var(--bg-hover);
+  color: var(--text-primary);
   font-size: 0.95rem;
   transition: all 0.2s;
 }
@@ -135,11 +135,11 @@
 .form-input:focus {
   outline: none;
   border-color: #25d366;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-secondary);
 }
 
 .form-input::placeholder {
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--text-muted);
 }
 
 .form-input--small {
@@ -192,9 +192,9 @@
 .btn-add-small {
   padding: 8px 12px;
   border-radius: var(--radius-md);
-  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border: 1px dashed var(--border-color);
   background: transparent;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-secondary);
   font-size: 0.9rem;
   cursor: pointer;
   transition: all 0.2s;
@@ -223,7 +223,8 @@
   align-items: center;
   margin-left: 12px;
   padding: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
   border-radius: var(--radius-md);
 }
 
@@ -233,9 +234,9 @@
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  background: rgba(11, 20, 26, 0.8);
+  background: var(--bg-hover);
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-light);
   position: sticky;
   top: 0;
 }
@@ -243,7 +244,7 @@
 .message-preview__title {
   font-size: 0.85rem;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -346,10 +347,10 @@
 
 .message-preview__note {
   font-size: 0.8rem;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--text-muted);
   line-height: 1.4;
   padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-hover);
   border-radius: 6px;
   border-left: 3px solid rgba(83, 189, 235, 0.5);
 }
@@ -357,30 +358,32 @@
 /* Upload de média */
 .media-upload {
   padding: 20px;
-  border: 2px dashed rgba(255, 255, 255, 0.2);
+  border: 2px dashed var(--border-color);
   border-radius: var(--radius-lg);
   text-align: center;
+  background: var(--bg-hover);
 }
 
 .media-upload input[type="file"] {
   width: 100%;
   padding: 12px;
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
   cursor: pointer;
 }
 
 .media-upload p {
   margin-top: 12px;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-secondary);
   font-style: italic;
 }
 
 /* Zone de saisie principale */
 .input-area {
   padding: 8px 12px !important;
-  background: #202c33 !important;
+  background: var(--bg-tertiary) !important;
   display: flex !important;
   gap: 8px !important;
   align-items: center !important;
@@ -404,7 +407,7 @@
 .input-area-advanced .btn-menu {
   background: transparent !important;
   border: none !important;
-  color: #8696a0 !important;
+  color: var(--text-muted) !important;
   width: 40px !important;
   height: 40px !important;
   min-width: 40px !important;
@@ -422,8 +425,8 @@
 }
 
 .input-area-advanced .btn-menu:hover {
-  background: rgba(134, 150, 160, 0.15) !important;
-  color: #d1d7db !important;
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
 }
 
 .input-area-advanced .btn-menu svg {
@@ -441,7 +444,8 @@
   position: absolute;
   bottom: 55px;
   left: 0;
-  background: #2a3942;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   border-radius: 10px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
   min-width: 260px;
@@ -469,7 +473,7 @@
   padding: 14px 20px;
   background: transparent !important;
   border: none;
-  color: #e9edef !important;
+  color: var(--text-primary) !important;
   font-size: 0.95rem;
   cursor: pointer;
   transition: background 0.15s;
@@ -478,7 +482,7 @@
 }
 
 .input-area-advanced .menu-item:hover {
-  background: rgba(255, 255, 255, 0.08) !important;
+  background: var(--bg-hover) !important;
 }
 
 .input-area-advanced .menu-icon {
@@ -534,7 +538,7 @@
   border: none;
   outline: none;
   background: transparent !important;
-  color: #e9edef !important;
+  color: var(--text-primary) !important;
   font-size: 0.95rem;
   min-width: 0;
   resize: none;
@@ -547,7 +551,7 @@
 
 .input-area-advanced .input-wrapper input::placeholder,
 .input-area-advanced .input-wrapper textarea::placeholder {
-  color: #667781;
+  color: var(--text-muted) !important;
 }
 
 /* Bouton emoji */
@@ -558,7 +562,7 @@
 .input-area-advanced .btn-emoji {
   background: transparent !important;
   border: none !important;
-  color: #8696a0 !important;
+  color: var(--text-muted) !important;
   width: 40px !important;
   height: 40px !important;
   min-width: 40px !important;
@@ -577,8 +581,8 @@
 }
 
 .input-area-advanced .btn-emoji:hover {
-  background: rgba(134, 150, 160, 0.15) !important;
-  color: #d1d7db !important;
+  background: var(--bg-hover) !important;
+  color: var(--text-primary) !important;
 }
 
 .input-area-advanced .btn-emoji svg {

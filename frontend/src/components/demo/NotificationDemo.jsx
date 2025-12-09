@@ -47,7 +47,7 @@ export default function NotificationDemo() {
   const handleImageNotification = async () => {
     await showNotification('Notification avec image', {
       body: 'Cette notification contient une image',
-      image: '/icon-512x512.png'
+      image: '/512x512.svg'
     });
     setStatus('✅ Notification avec image envoyée');
   };

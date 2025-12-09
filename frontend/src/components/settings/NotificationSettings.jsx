@@ -32,6 +32,13 @@ function savePrefs(prefs) {
   }
 }
 
+const NOTIFICATION_TYPES = [
+  { key: 'messages', label: 'Notifications des messages', description: 'Recevoir une notification pour chaque nouveau message' },
+  { key: 'previews', label: 'Voir les aperçus', description: 'Afficher un aperçu du message dans la notification' },
+  { key: 'reactions', label: 'Notifications des réactions', description: 'Recevoir une notification pour les réactions aux messages' },
+  { key: 'status', label: 'Réactions au statut', description: 'Recevoir des notifications pour les réactions aux statuts' },
+];
+
 export default function NotificationSettings({ accounts = [] }) {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -107,31 +114,37 @@ export default function NotificationSettings({ accounts = [] }) {
 
   const getPref = (accountId, field) => prefs[accountId]?.[field] ?? true;
 
+  const getStatusColor = (tone) => {
+    switch (tone) {
+      case 'success':
+        return '#25d366';
+      case 'danger':
+        return '#f44336';
+      case 'warning':
+        return '#ffa500';
+      default:
+        return '#8696a0';
+    }
+  };
+
   return (
-    <div className="notif-settings">
-      <div className="notif-settings__header">
+    <div className="notif-settings-table">
+      <div className="notif-settings-table__header">
         <div>
-          <p className="notif-settings__eyebrow">Notifications</p>
-          <h3 className="notif-settings__title">Push desktop</h3>
-          <p className="notif-settings__subtitle">
-            Alerte sur chaque message entrant (via webhook Supabase), même si l’onglet est en arrière-plan.
+          <p className="notif-settings-table__eyebrow">Notifications</p>
+          <h3 className="notif-settings-table__title">Paramètres de notifications</h3>
+          <p className="notif-settings-table__subtitle">
+            Configurez les notifications pour chaque compte WhatsApp.
           </p>
         </div>
-        <div className={`notif-settings__badge notif-settings__badge--${status.tone}`}>
-          <span className="notif-settings__badge-icon">
-            <status.Icon />
-          </span>
-          <span>{status.text}</span>
-        </div>
-      </div>
-
-      <div className="notif-settings__card">
-        <div className="notif-settings__card-row">
-          <div>
-            <p className="notif-settings__label">État navigateur</p>
-            <p className="notif-settings__value">{status.text}</p>
+        <div className="notif-settings-table__global-status">
+          <div className={`notif-settings-table__badge notif-settings-table__badge--${status.tone}`}>
+            <span className="notif-settings-table__badge-icon">
+              <status.Icon />
+            </span>
+            <span>{status.text}</span>
           </div>
-          <div className="notif-settings__actions">
+          <div className="notif-settings-table__actions">
             <button
               className="notif-btn notif-btn--primary"
               onClick={handleToggleNotifications}
@@ -145,74 +158,90 @@ export default function NotificationSettings({ accounts = [] }) {
               disabled={!notificationsEnabled}
             >
               <FiPlay style={{ marginRight: 6 }} />
-              Tester une notification
+              Tester
             </button>
           </div>
         </div>
-
-        <div className="notif-settings__accounts">
-          {accounts.length === 0 && (
-            <div className="notif-settings__empty">Aucun compte WhatsApp configuré.</div>
-          )}
-          {accounts.map((acc) => {
-            const id = acc.id;
-            return (
-              <div key={id} className="notif-settings__account-row">
-                <div className="notif-settings__account-meta">
-                  <p className="notif-settings__account-name">{acc.name || acc.phone_number}</p>
-                  <p className="notif-settings__hint">ID: {acc.id}</p>
-                </div>
-                <div className="notif-settings__toggles">
-                  <label className="notif-toggle">
-                    <input
-                      type="checkbox"
-                      checked={getPref(id, 'messages')}
-                      onChange={(e) => updatePref(id, 'messages', e.target.checked)}
-                    />
-                    <span>Notifications des messages</span>
-                  </label>
-                  <label className="notif-toggle">
-                    <input
-                      type="checkbox"
-                      checked={getPref(id, 'previews')}
-                      onChange={(e) => updatePref(id, 'previews', e.target.checked)}
-                    />
-                    <span>Voir les aperçus</span>
-                  </label>
-                  <label className="notif-toggle">
-                    <input
-                      type="checkbox"
-                      checked={getPref(id, 'reactions')}
-                      onChange={(e) => updatePref(id, 'reactions', e.target.checked)}
-                    />
-                    <span>Notifications des réactions</span>
-                  </label>
-                  <label className="notif-toggle">
-                    <input
-                      type="checkbox"
-                      checked={getPref(id, 'status')}
-                      onChange={(e) => updatePref(id, 'status', e.target.checked)}
-                    />
-                    <span>Réactions au statut</span>
-                  </label>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {Notification.permission === 'denied' && (
-          <div className="notif-settings__warning">
-            <p className="notif-settings__warning-title">Notifications bloquées</p>
-            <ul>
-              <li>Chrome : cadenas 🔒 → Notifications → Autoriser</li>
-              <li>Firefox : bouclier 🛡️ → Permissions → Notifications → Autoriser</li>
-              <li>Safari : Préférences → Sites web → Notifications → Autoriser</li>
-            </ul>
-          </div>
-        )}
       </div>
+
+      {!('Notification' in window) && (
+        <div className="notif-settings-table__warning">
+          <p>Votre navigateur ne supporte pas les notifications.</p>
+        </div>
+      )}
+
+      {Notification.permission === 'denied' && (
+        <div className="notif-settings-table__warning">
+          <p className="notif-settings-table__warning-title">Notifications bloquées</p>
+          <ul>
+            <li>Chrome : cadenas 🔒 → Notifications → Autoriser</li>
+            <li>Firefox : bouclier 🛡️ → Permissions → Notifications → Autoriser</li>
+            <li>Safari : Préférences → Sites web → Notifications → Autoriser</li>
+          </ul>
+        </div>
+      )}
+
+      {accounts.length === 0 ? (
+        <div className="notif-settings-table__empty">
+          Aucun compte WhatsApp configuré.
+        </div>
+      ) : (
+        <div className="notif-settings-table__wrapper">
+          <table className="notif-settings-table__table">
+            <thead>
+              <tr>
+                <th className="notif-settings-table__account-col">Compte WhatsApp</th>
+                {NOTIFICATION_TYPES.map((type) => (
+                  <th key={type.key} className="notif-settings-table__type-col">
+                    <div className="notif-settings-table__type-header">
+                      <strong>{type.label}</strong>
+                      <small>{type.description}</small>
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {accounts.map((account) => (
+                <tr key={account.id}>
+                  <td className="notif-settings-table__account-cell">
+                    <div className="notif-settings-table__account-info">
+                      <strong>{account.name || account.phone_number}</strong>
+                      {account.phone_number && (
+                        <small>{account.phone_number}</small>
+                      )}
+                    </div>
+                  </td>
+                  {NOTIFICATION_TYPES.map((type) => {
+                    const isEnabled = getPref(account.id, type.key);
+                    return (
+                      <td key={type.key} className="notif-settings-table__toggle-cell">
+                        <label className="notif-settings-table__toggle">
+                          <input
+                            type="checkbox"
+                            checked={isEnabled}
+                            onChange={(e) => updatePref(account.id, type.key, e.target.checked)}
+                            disabled={!notificationsEnabled}
+                          />
+                          <span
+                            className={`notif-settings-table__toggle-switch ${
+                              isEnabled ? 'notif-settings-table__toggle-switch--on' : ''
+                            } ${!notificationsEnabled ? 'notif-settings-table__toggle-switch--disabled' : ''}`}
+                          >
+                            <span className="notif-settings-table__toggle-label">
+                              {isEnabled ? 'Oui' : 'Non'}
+                            </span>
+                          </span>
+                        </label>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
-

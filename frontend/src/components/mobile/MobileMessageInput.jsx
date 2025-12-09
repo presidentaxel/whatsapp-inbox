@@ -3,6 +3,7 @@ import { FiSend, FiSmile, FiPlus, FiImage, FiFileText } from "react-icons/fi";
 import EmojiPicker from "emoji-picker-react";
 import { uploadMedia } from "../../api/whatsappApi";
 import { sendMediaMessage } from "../../api/messagesApi";
+import { useTheme } from "../../hooks/useTheme";
 
 export default function MobileMessageInput({ conversationId, accountId, onSend, onMediaSent, disabled }) {
   const [text, setText] = useState("");
@@ -10,10 +11,19 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
   const [showMenu, setShowMenu] = useState(false);
   const [uploading, setUploading] = useState(false);
   const textareaRef = useRef(null);
+  const discussionPrefs = useTheme();
 
   // Auto-resize du textarea
   const handleTextChange = (e) => {
-    setText(e.target.value);
+    const value = e.target.value;
+    const withEmoji = discussionPrefs?.emojiReplace
+      ? value
+          .replace(/:\)/g, "😊")
+          .replace(/:\("/g, "☹️")
+          .replace(/<3/g, "❤️")
+          .replace(/;\)/g, "😉")
+      : value;
+    setText(withEmoji);
     
     // Ajuster la hauteur automatiquement
     if (textareaRef.current) {
@@ -40,13 +50,16 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
   };
 
   const handleKeyPress = (e) => {
-    const enterKeySends = localStorage.getItem('enterKeySends') !== 'false'; // Par défaut true
-    if (e.key === "Enter" && !e.shiftKey) {
-      if (enterKeySends) {
+    if (e.key === "Enter") {
+      if (discussionPrefs?.enterToSend) {
+        if (!e.shiftKey) {
+          e.preventDefault();
+          handleSendClick();
+        }
+      } else if (e.metaKey || e.ctrlKey) {
         e.preventDefault();
         handleSendClick();
       }
-      // Si enterKeySends est false, Enter crée une nouvelle ligne (comportement par défaut)
     }
   };
 
@@ -209,7 +222,13 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
           value={text}
           onChange={handleTextChange}
           onKeyPress={handleKeyPress}
-          placeholder="Message"
+          spellCheck={discussionPrefs?.spellCheck ?? true}
+          lang="fr"
+          placeholder={
+            discussionPrefs?.enterToSend
+              ? "Message (Shift+Entrée pour une nouvelle ligne)"
+              : "Message (Ctrl+Entrée pour envoyer)"
+          }
           disabled={disabled || uploading}
           rows={1}
           className="mobile-input-textarea"

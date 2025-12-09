@@ -17,7 +17,9 @@ async def fetch_bot_profile(
     account = await get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
-    current_user.require(PermissionCodes.SETTINGS_MANAGE, account_id)
+    # DEV et Manager peuvent voir le profil du bot s'ils ont accès au compte (pas "aucun")
+    # On vérifie qu'ils ont au moins la permission de voir les conversations
+    current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
     return await get_bot_profile(account_id)
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Sequence
+from collections import defaultdict
 
 from fastapi import HTTPException
 
@@ -169,5 +170,110 @@ def set_user_overrides(user_id: str, overrides: Sequence[Dict[str, Any]]):
                 }
             )
         supabase.table("app_user_overrides").upsert(payload).execute()
+
+
+def list_users_with_access() -> Sequence[Dict[str, Any]]:
+    """Liste tous les utilisateurs avec leurs rôles et accès par compte"""
+    users = supabase.table("app_users").select("*").order("created_at").execute().data
+    if not users:
+        return []
+
+    user_ids = [u["user_id"] for u in users]
+    
+    # Récupérer les rôles
+    role_rows = (
+        supabase.table("app_user_roles")
+        .select("id, user_id, role_id, account_id")
+        .in_("user_id", user_ids)
+        .execute()
+        .data
+    )
+    
+    role_ids = list({row["role_id"] for row in role_rows})
+    role_map = {}
+    if role_ids:
+        roles = (
+            supabase.table("app_roles").select("id, slug, name").in_("id", role_ids).execute()
+        ).data
+        role_map = {r["id"]: r for r in roles}
+
+    # Récupérer les accès par compte
+    access_rows = (
+        supabase.table("user_account_access")
+        .select("id, user_id, account_id, access_level")
+        .in_("user_id", user_ids)
+        .execute()
+        .data
+    )
+
+    # Grouper les données par utilisateur - prendre le rôle le plus élevé
+    roles_by_user: Dict[str, Dict[str, Any]] = {}
+    role_priority = {"admin": 3, "dev": 2, "manager": 1}  # Plus élevé = plus de permissions
+    
+    for row in role_rows:
+        role_info = role_map.get(row["role_id"], {})
+        user_id = row["user_id"]
+        role_slug = role_info.get("slug")
+        current_priority = role_priority.get(role_slug, 0)
+        
+        if user_id not in roles_by_user:
+            roles_by_user[user_id] = {
+                "role_id": row["role_id"],
+                "role_slug": role_slug,
+                "role_name": role_info.get("name"),
+            }
+        else:
+            # Garder le rôle avec la priorité la plus élevée
+            existing_slug = roles_by_user[user_id].get("role_slug")
+            existing_priority = role_priority.get(existing_slug, 0)
+            if current_priority > existing_priority:
+                roles_by_user[user_id] = {
+                    "role_id": row["role_id"],
+                    "role_slug": role_slug,
+                    "role_name": role_info.get("name"),
+                }
+
+    access_by_user: Dict[str, List[Dict[str, Any]]] = {}
+    for row in access_rows:
+        access_by_user.setdefault(row["user_id"], []).append({
+            "account_id": row["account_id"],
+            "access_level": row["access_level"],
+        })
+
+    for user in users:
+        user["role_slug"] = roles_by_user.get(user["user_id"], {}).get("role_slug")
+        user["role_name"] = roles_by_user.get(user["user_id"], {}).get("role_name")
+        user["account_access"] = access_by_user.get(user["user_id"], [])
+
+    return users
+
+
+def set_user_account_access(user_id: str, account_id: str, access_level: str):
+    """Définit l'accès d'un utilisateur à un compte WhatsApp"""
+    if access_level not in ["full", "lecture", "aucun"]:
+        raise HTTPException(status_code=400, detail="invalid_access_level")
+    
+    # Vérifier si l'enregistrement existe déjà
+    existing = (
+        supabase.table("user_account_access")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("account_id", account_id)
+        .limit(1)
+        .execute()
+    )
+    
+    if existing.data:
+        # Mise à jour de l'enregistrement existant
+        supabase.table("user_account_access").update({
+            "access_level": access_level,
+        }).eq("user_id", user_id).eq("account_id", account_id).execute()
+    else:
+        # Insertion d'un nouvel enregistrement
+        supabase.table("user_account_access").insert({
+            "user_id": user_id,
+            "account_id": account_id,
+            "access_level": access_level,
+        }).execute()
 
 

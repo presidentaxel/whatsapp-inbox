@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabaseClient } from "./api/supabaseClient";
 import { getDeviceType } from "./utils/deviceDetection";
 import { getAuthSession, saveAuthSession, clearAuthSession } from "./utils/secureStorage";
+import { useTheme } from "./hooks/useTheme";
 
 // Desktop
 import InboxPage from "./pages/InboxPage";
@@ -16,6 +17,7 @@ import RegisterPage from "./pages/RegisterPage";
 
 // Composant mobile (sans AuthProvider, gestion directe)
 function MobileApp() {
+  useTheme(); // Initialiser le thème au chargement de l'application
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -115,6 +117,7 @@ function MobileApp() {
 // Composant desktop (avec AuthProvider)
 function DesktopApp() {
   const { session, loading } = useAuth();
+  useTheme(); // Initialiser le thème au chargement de l'application
 
   // Vérifier si on est sur la page de register
   const isRegisterPage = window.location.pathname === '/register' || 

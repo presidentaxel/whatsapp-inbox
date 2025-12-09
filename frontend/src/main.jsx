@@ -9,6 +9,7 @@ import "./styles/mobile-login.css";
 import "./styles/mobile-inbox.css";
 import "./styles/mobile-bubbles.css";
 import "./styles/mobile-simple-input.css";
+import "./styles/permissions-table.css";
 import { registerServiceWorker, setupInstallPrompt } from "./registerSW";
 import { initNotifications } from "./utils/notifications";
 

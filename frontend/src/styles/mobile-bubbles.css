@@ -25,6 +25,16 @@
     border-radius: 8px 8px 0 8px;
   }
 
+  [data-theme="light"] .mobile-chat__messages .bubble.me {
+    background: #dcf8c6;
+    color: #000;
+  }
+
+  [data-theme="dark"] .mobile-chat__messages .bubble.me {
+    background: #005c4b;
+    color: #e9edef;
+  }
+
   /* Messages reçus (them) - Gris à gauche */
   .mobile-chat__messages .bubble.them {
     background: #202c33;

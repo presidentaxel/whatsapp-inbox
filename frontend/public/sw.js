@@ -1,12 +1,16 @@
-// Service Worker pour PWA
+// Service Worker pour PWA avec notifications en arrière-plan
 const CACHE_NAME = 'lmdcvtc-whatsapp-v1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/icon-192x192.png',
-  '/icon-512x512.png'
+  '/192x192.svg',
+  '/512x512.svg'
 ];
+
+// Intervalle pour vérifier les nouveaux messages quand l'app est en arrière-plan
+const BACKGROUND_SYNC_TAG = 'background-sync-messages';
+const SYNC_INTERVAL = 30000; // 30 secondes - ajustez selon vos besoins
 
 // Installation du Service Worker
 self.addEventListener('install', (event) => {
@@ -68,6 +72,32 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+// Background Sync : Synchroniser les messages même quand l'app est fermée
+self.addEventListener('sync', (event) => {
+  if (event.tag === BACKGROUND_SYNC_TAG) {
+    event.waitUntil(
+      (async () => {
+        try {
+          // Cette fonction sera appelée périodiquement même quand l'app est fermée
+          // Vous pouvez faire un fetch vers votre API pour vérifier les nouveaux messages
+          console.log('🔄 Background sync: vérification des nouveaux messages');
+          
+          // Optionnel : envoyer un message à toutes les fenêtres ouvertes
+          const clients = await self.clients.matchAll();
+          clients.forEach(client => {
+            client.postMessage({
+              type: 'BACKGROUND_SYNC',
+              timestamp: Date.now()
+            });
+          });
+        } catch (error) {
+          console.error('❌ Erreur background sync:', error);
+        }
+      })()
+    );
+  }
+});
+
 // Gestion des notifications push (pour les push serveur)
 self.addEventListener('push', (event) => {
   let notificationData = {
@@ -84,8 +114,9 @@ self.addEventListener('push', (event) => {
         title: data.title || notificationData.title,
         body: data.body || notificationData.body,
         conversationId: data.conversationId || null,
-        icon: data.icon || '/icon-192x192.png',
-        badge: data.badge || '/icon-192x192.png'
+        icon: data.icon || '/192x192.svg',
+        badge: data.badge || '/192x192.svg',
+        image: data.image || null // Image du contact pour notification riche
       };
     } catch (e) {
       // Si ce n'est pas du JSON, essayer comme texte
@@ -93,18 +124,47 @@ self.addEventListener('push', (event) => {
     }
   }
 
+  // Options de notification style WhatsApp Desktop/Mobile
   const options = {
     body: notificationData.body,
-    icon: notificationData.icon || '/icon-192x192.png',
-    badge: notificationData.badge || '/icon-192x192.png',
-    vibrate: [200, 100, 200], // Vibration comme WhatsApp
+    // Icon = image de profil du contact (affiché en rond)
+    icon: notificationData.icon || '/192x192.svg',
+    // Badge = icône WhatsApp (petite icône dans le coin)
+    badge: '/192x192.svg',
+    // Image = image de profil large pour notifications riches (si supporté)
+    image: notificationData.image || null,
+    // Vibration courte et double (style WhatsApp)
+    vibrate: [200, 100, 200],
+    // Tag unique par conversation pour regrouper les notifications
     tag: notificationData.conversationId 
       ? `whatsapp-msg-${notificationData.conversationId}` 
       : 'whatsapp-notification',
-    requireInteraction: false,
+    requireInteraction: false, // Disparaît automatiquement
+    silent: false, // Son activé
+    timestamp: Date.now(),
+    dir: 'ltr',
+    lang: 'fr',
+    // Couleur de thème WhatsApp (vert #25d366)
+    color: '#25d366',
+    // Renotifier si plusieurs messages dans la même conversation
+    renotify: true,
+    // Données personnalisées pour l'interaction
     data: {
-      conversationId: notificationData.conversationId
-    }
+      conversationId: notificationData.conversationId,
+      contactName: notificationData.title,
+      timestamp: Date.now()
+    },
+    // Actions interactives (Répondre, Marquer comme lu)
+    actions: notificationData.conversationId ? [
+      {
+        action: 'open',
+        title: 'Répondre'
+      },
+      {
+        action: 'mark-read',
+        title: 'Marquer comme lu'
+      }
+    ] : []
   };
 
   event.waitUntil(
@@ -118,13 +178,27 @@ self.addEventListener('notificationclick', (event) => {
   const conversationId = event.notification.data?.conversationId;
   const action = event.action;
   
-  // Si l'utilisateur a cliqué sur "Fermer", ne rien faire
-  if (action === 'close') {
-    return;
-  }
-  
   event.waitUntil(
     (async () => {
+      // Gérer les actions
+      if (action === 'mark-read') {
+        // Marquer comme lu (message sera envoyé à l'app si ouverte)
+        const allClients = await clients.matchAll({
+          type: 'window',
+          includeUncontrolled: true
+        });
+        for (const client of allClients) {
+          if (client.url.includes(self.location.origin)) {
+            client.postMessage({
+              type: 'MARK_AS_READ',
+              conversationId
+            });
+          }
+        }
+        return;
+      }
+      
+      // Action par défaut : ouvrir la conversation
       // Essayer de trouver une fenêtre/tab ouverte
       const allClients = await clients.matchAll({
         type: 'window',

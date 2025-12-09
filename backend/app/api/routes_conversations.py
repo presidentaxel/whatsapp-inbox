@@ -22,6 +22,10 @@ async def list_conversations(
     ),
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    # Vérifier que l'utilisateur a accès au compte (pas en 'aucun')
+    if current_user.permissions.account_access_levels.get(account_id) == "aucun":
+        raise HTTPException(status_code=403, detail="account_access_denied")
+    
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
     conversations = await get_all_conversations(account_id, limit=limit, cursor=cursor)
     if conversations is None:

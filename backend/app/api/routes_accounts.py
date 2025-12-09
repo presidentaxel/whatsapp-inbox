@@ -15,12 +15,24 @@ router = APIRouter()
 
 @router.get("")
 async def list_accounts(current_user: CurrentUser = Depends(get_current_user)):
+    # Vérifier la permission de base
+    current_user.require(PermissionCodes.ACCOUNTS_VIEW)
+    
     allowed_scope = current_user.accounts_for(PermissionCodes.ACCOUNTS_VIEW)
     if allowed_scope is None:
-        current_user.require(PermissionCodes.ACCOUNTS_VIEW)
+        # Permission globale : récupérer tous les comptes, puis filtrer ceux en 'aucun'
+        all_accounts = await expose_accounts_limited(None)
+        # Filtrer les comptes où l'utilisateur a access_level = 'aucun'
+        filtered = [
+            acc for acc in all_accounts
+            if current_user.permissions.account_access_levels.get(acc["id"]) != "aucun"
+        ]
+        return filtered
     elif not allowed_scope:
         raise HTTPException(status_code=403, detail="no_account_access")
-    return await expose_accounts_limited(allowed_scope)
+    else:
+        # Permissions spécifiques : retourner seulement les comptes autorisés
+        return await expose_accounts_limited(allowed_scope)
 
 
 @router.post("")

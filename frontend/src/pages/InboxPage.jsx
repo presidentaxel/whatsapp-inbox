@@ -203,10 +203,30 @@ export default function InboxPage() {
     );
   };
 
-  const canManageAccounts = hasPermission?.("accounts.manage");
+  const canViewAccounts = hasPermission?.("accounts.view"); // Permet aux Managers de voir les comptes
+  const canManageAccounts = hasPermission?.("accounts.manage"); // Seul Admin peut créer/supprimer
   const canManageRoles = hasPermission?.("roles.manage");
   const canManageUsers = hasPermission?.("users.manage");
+  // Pour l'onglet Permissions : Admin a permissions.manage, DEV a permissions.view
+  const canViewPermissions = hasPermission?.("permissions.view"); // DEV peut voir les permissions
+  const canManagePermissions = hasPermission?.("permissions.manage"); // Admin peut gérer les permissions
   const canManageSettings = hasPermission?.("settings.manage");
+  // Pour l'onglet Gemini : Admin, DEV et Manager peuvent y accéder
+  // On vérifie si l'utilisateur a au moins un rôle parmi admin, dev, manager
+  const canAccessGemini = canViewPermissions || canManagePermissions || canViewAccounts; // DEV, Admin, ou Manager
+
+  // Debug: afficher les permissions dans la console
+  useEffect(() => {
+    if (profile?.permissions) {
+      console.log("🔐 User permissions:", {
+        global: profile.permissions.global,
+        accounts: profile.permissions.accounts,
+        canViewPermissions,
+        canManagePermissions,
+        canManageRoles,
+      });
+    }
+  }, [profile, canViewPermissions, canManagePermissions, canManageRoles]);
 
   const allowedNavItems = useMemo(() => {
     const items = ["chat"];
@@ -214,12 +234,12 @@ export default function InboxPage() {
       items.push("contacts");
     }
     items.push("whatsapp"); // Nouveau: WhatsApp Business
-    if (canManageSettings) {
+    if (canAccessGemini) {
       items.push("assistant");
     }
     items.push("settings");
     return items;
-  }, [canViewContacts, canManageSettings]);
+  }, [canViewContacts, canAccessGemini]);
 
   useEffect(() => {
     if (!allowedNavItems.includes(navMode)) {
@@ -270,9 +290,12 @@ export default function InboxPage() {
               accounts={accounts}
               onSignOut={signOut}
               currentUser={profile}
+              canViewAccounts={canViewAccounts}
               canManageAccounts={canManageAccounts}
               canManageRoles={canManageRoles}
               canManageUsers={canManageUsers}
+              canViewPermissions={canViewPermissions}
+              canManagePermissions={canManagePermissions}
               onAccountsRefresh={loadAccounts}
             />
           </div>

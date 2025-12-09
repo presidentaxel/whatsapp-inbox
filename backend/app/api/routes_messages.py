@@ -1,4 +1,5 @@
 import logging
+import sys
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -6,6 +7,15 @@ from fastapi.responses import StreamingResponse
 from app.core.auth import get_current_user
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+# S'assurer que les logs sont visibles
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.propagate = True
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services.account_service import get_account_by_id
 from app.services.conversation_service import get_conversation_by_id
@@ -87,12 +97,23 @@ async def fetch_message_media(
 
 @router.post("/send")
 async def send_api_message(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
+    print(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
+    logger.info(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
     conversation_id = payload.get("conversation_id")
     if not conversation_id:
         raise HTTPException(status_code=400, detail="conversation_id_required")
     conversation = await get_conversation_by_id(conversation_id)
+    print(f"📤 [SEND DEBUG] Conversation found: {conversation is not None}, bot_enabled: {conversation.get('bot_enabled') if conversation else None}")
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    # Vérifier que l'utilisateur a accès au compte (pas en 'aucun' et pas en 'lecture' seule)
+    access_level = current_user.permissions.account_access_levels.get(conversation["account_id"])
+    if access_level == "aucun":
+        raise HTTPException(status_code=403, detail="account_access_denied")
+    if access_level == "lecture":
+        raise HTTPException(status_code=403, detail="write_access_denied")
+    
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     return await send_message(payload)
 
@@ -121,6 +142,13 @@ async def send_media_api_message(payload: dict, current_user: CurrentUser = Depe
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    # Vérifier que l'utilisateur a accès en écriture (pas 'aucun' ni 'lecture')
+    access_level = current_user.permissions.account_access_levels.get(conversation["account_id"])
+    if access_level == "aucun":
+        raise HTTPException(status_code=403, detail="account_access_denied")
+    if access_level == "lecture":
+        raise HTTPException(status_code=403, detail="write_access_denied")
     
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     
@@ -216,6 +244,13 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    # Vérifier que l'utilisateur a accès en écriture (pas 'aucun' ni 'lecture')
+    access_level = current_user.permissions.account_access_levels.get(conversation["account_id"])
+    if access_level == "aucun":
+        raise HTTPException(status_code=403, detail="account_access_denied")
+    if access_level == "lecture":
+        raise HTTPException(status_code=403, detail="write_access_denied")
     
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     

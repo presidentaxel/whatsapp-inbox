@@ -9,6 +9,7 @@ Version améliorée de bot_service avec:
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Any, Dict, List, Optional
@@ -161,11 +162,11 @@ async def _call_gemini_api(
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
         body = exc.response.text
-        logger.warning(
-            "Gemini API error for conversation %s (status=%s): %s",
+        logger.error(
+            "❌ Gemini API error for conversation %s (status=%s): %s",
             conversation_id,
             status_code,
-            body[:200],
+            body,  # Log full body, not truncated
         )
         raise
 
@@ -282,7 +283,23 @@ async def generate_bot_reply(
         "uniquement du texte simple et des listes avec des tirets si nécessaire.\n"
     )
 
-    payload = {
+    logger.info(f"🔍 [GEMINI DEBUG] Using model: {settings.GEMINI_MODEL}")
+    
+    # Config commune pour Gemini
+    generation_config: Dict[str, Any] = {
+        "temperature": 0.4,
+        "maxOutputTokens": 2048,  # plus large pour laisser de la marge
+    }
+    
+    # Si on utilise un modèle 2.5 (Pro / Flash / Flash-Lite avec thinking),
+    # on ajoute un thinkingBudget pour éviter qu'il ne mange tout le budget en "pensées".
+    if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
+        generation_config["thinkingConfig"] = {
+            "thinkingBudget": 512  # 512 tokens max pour penser, le reste pour répondre
+        }
+    
+    # Try v1beta first (supports system_instruction, but may not have all models)
+    payload_v1beta = {
         "system_instruction": {
             "role": "system",
             "parts": [
@@ -292,20 +309,59 @@ async def generate_bot_reply(
             ],
         },
         "contents": conversation_parts,
-        "generationConfig": {
-            "temperature": 0.4,
-            "maxOutputTokens": 250,
-        },
+        "generationConfig": generation_config,
+    }
+    
+    # Fallback for v1 API (doesn't support system_instruction, need to put in contents)
+    system_message = {
+        "role": "user",
+        "parts": [
+            {
+                "text": f"{instruction}\n\nContexte entreprise (PLAYBOOK):\n{knowledge_text}".strip()
+            }
+        ],
+    }
+    payload_v1 = {
+        "contents": [system_message] + conversation_parts,
+        "generationConfig": generation_config,
     }
 
-    endpoint = (
+    # Try v1beta endpoint first
+    endpoint_v1beta = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
         f"{settings.GEMINI_MODEL}:generateContent"
     )
+    
+    # Fallback v1 endpoint
+    endpoint_v1 = (
+        f"https://generativelanguage.googleapis.com/v1/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
 
+    # Try v1beta first
+    logger.info(f"🔍 [GEMINI DEBUG] Trying v1beta endpoint: {endpoint_v1beta}")
     try:
-        async with gemini_circuit_breaker:
-            data = await _call_gemini_api(endpoint, payload, conversation_id)
+        data = await gemini_circuit_breaker.call_async(
+            _call_gemini_api, endpoint_v1beta, payload_v1beta, conversation_id
+        )
+    except httpx.HTTPStatusError as exc:
+        # If 404 (model not found in v1beta) or 400 (invalid payload), try v1
+        if exc.response.status_code in (404, 400):
+            logger.warning(
+                f"🔍 [GEMINI DEBUG] v1beta failed (status={exc.response.status_code}), trying v1 endpoint"
+            )
+            logger.info(f"🔍 [GEMINI DEBUG] Trying v1 endpoint: {endpoint_v1}")
+            try:
+                data = await gemini_circuit_breaker.call_async(
+                    _call_gemini_api, endpoint_v1, payload_v1, conversation_id
+                )
+            except Exception as exc2:
+                logger.error(f"❌ Both v1beta and v1 failed. v1 error: {exc2}")
+                return None
+        else:
+            # Other HTTP errors, don't retry
+            logger.error(f"❌ Gemini API error: {exc}")
+            return None
     except CircuitBreakerOpenError:
         logger.warning(
             "Gemini circuit breaker open, skipping generation for conversation %s",
@@ -319,20 +375,43 @@ async def generate_bot_reply(
         logger.exception("Unexpected error while calling Gemini for %s: %s", conversation_id, exc)
         return None
 
+    # Debug: log response structure
+    logger.info(f"🔍 [GEMINI DEBUG] Response keys: {list(data.keys())}")
+    if "promptFeedback" in data:
+        logger.warning(f"🔍 [GEMINI DEBUG] Prompt feedback: {data['promptFeedback']}")
+    if "candidates" not in data:
+        logger.error(f"🔍 [GEMINI DEBUG] No 'candidates' key in response: {data}")
+        return None
+
     candidates: List[Dict[str, Any]] = data.get("candidates") or []
-    for candidate in candidates:
-        parts = candidate.get("content", {}).get("parts") or []
-        for part in parts:
+    logger.info(f"🔍 [GEMINI DEBUG] Number of candidates: {len(candidates)}")
+    
+    for idx, candidate in enumerate(candidates):
+        logger.info(f"🔍 [GEMINI DEBUG] Candidate {idx} keys: {list(candidate.keys())}")
+        if "finishReason" in candidate:
+            logger.info(f"🔍 [GEMINI DEBUG] Candidate {idx} finishReason: {candidate['finishReason']}")
+        if "safetyRatings" in candidate:
+            logger.info(f"🔍 [GEMINI DEBUG] Candidate {idx} safetyRatings: {candidate['safetyRatings']}")
+        
+        content = candidate.get("content", {})
+        logger.info(f"🔍 [GEMINI DEBUG] Candidate {idx} content keys: {list(content.keys())}")
+        parts = content.get("parts") or []
+        logger.info(f"🔍 [GEMINI DEBUG] Candidate {idx} number of parts: {len(parts)}")
+        
+        for part_idx, part in enumerate(parts):
+            logger.info(f"🔍 [GEMINI DEBUG] Candidate {idx} part {part_idx} keys: {list(part.keys())}")
             text = (part.get("text") or "").strip()
             if text:
                 logger.info(
-                    "Gemini produced reply for conversation %s (chars=%d)",
+                    "✅ Gemini produced reply for conversation %s (chars=%d)",
                     conversation_id,
                     len(text),
                 )
                 return text
+            else:
+                logger.warning(f"🔍 [GEMINI DEBUG] Candidate {idx} part {part_idx} has no text: {part}")
 
-    logger.info("Gemini returned no usable candidates for conversation %s", conversation_id)
+    logger.warning(f"❌ Gemini returned no usable candidates for conversation {conversation_id}. Full response: {json.dumps(data, indent=2)[:1000]}")
     return None
 
 
@@ -598,4 +677,4 @@ def _render_template_sections(template: Dict[str, Any]) -> str:
         lines.append("\n## RÈGLES SPÉCIALES BOT")
         lines.append(template["special_rules"])
 
-    return "\n".join(filter(None, lines)).trim()
+    return "\n".join(filter(None, lines)).strip()

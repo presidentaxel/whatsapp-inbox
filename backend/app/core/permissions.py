@@ -20,6 +20,8 @@ class PermissionCodes:
     USERS_MANAGE = "users.manage"
     ROLES_MANAGE = "roles.manage"
     SETTINGS_MANAGE = "settings.manage"
+    PERMISSIONS_VIEW = "permissions.view"
+    PERMISSIONS_MANAGE = "permissions.manage"
 
 
 ALL_PERMISSION_CODES = {
@@ -33,6 +35,8 @@ ALL_PERMISSION_CODES = {
     PermissionCodes.USERS_MANAGE,
     PermissionCodes.ROLES_MANAGE,
     PermissionCodes.SETTINGS_MANAGE,
+    PermissionCodes.PERMISSIONS_VIEW,
+    PermissionCodes.PERMISSIONS_MANAGE,
 }
 
 
@@ -40,25 +44,91 @@ ALL_PERMISSION_CODES = {
 class PermissionMatrix:
     global_permissions: Set[str] = field(default_factory=set)
     account_permissions: Dict[str, Set[str]] = field(default_factory=lambda: defaultdict(set))
+    account_access_levels: Dict[str, str] = field(default_factory=dict)  # account_id -> 'full'|'lecture'|'aucun'
 
     def has(self, permission: str, account_id: Optional[str] = None) -> bool:
         if permission not in ALL_PERMISSION_CODES:
             return False
+        
+        # Exception spéciale : les permissions de gestion des permissions (permissions.view et permissions.manage)
+        # ne sont PAS bloquées par access_level = 'aucun' car elles permettent de gérer les accès
+        # même si l'admin a mis "aucun" pour lui-même
+        admin_permissions = {
+            PermissionCodes.PERMISSIONS_VIEW,
+            PermissionCodes.PERMISSIONS_MANAGE,
+        }
+        if permission in admin_permissions:
+            # Pour ces permissions, on ignore le access_level du compte
+            # On vérifie seulement si l'utilisateur a la permission globale ou spécifique
+            if permission in self.global_permissions:
+                return True
+            if account_id and permission in self.account_permissions.get(account_id, set()):
+                return True
+            # Même si pas de permission spécifique, si on a la permission globale, on l'a
+            return False
+        
+        # Si un compte a access_level = 'aucun', aucune permission pour ce compte
+        if account_id and self.account_access_levels.get(account_id) == "aucun":
+            return False
+        
+        # Si access_level = 'lecture', bloquer les permissions d'écriture
+        if account_id and self.account_access_levels.get(account_id) == "lecture":
+            write_permissions = {
+                PermissionCodes.MESSAGES_SEND,
+                PermissionCodes.ACCOUNTS_MANAGE,
+                PermissionCodes.ACCOUNTS_ASSIGN,
+                PermissionCodes.USERS_MANAGE,
+                PermissionCodes.ROLES_MANAGE,
+                PermissionCodes.SETTINGS_MANAGE,
+                PermissionCodes.PERMISSIONS_MANAGE,
+            }
+            if permission in write_permissions:
+                return False
+        
         if permission in self.global_permissions:
+            # Si permission globale, vérifier que le compte n'est pas en 'aucun'
+            if account_id and self.account_access_levels.get(account_id) == "aucun":
+                return False
             return True
+        
         if account_id and permission in self.account_permissions.get(account_id, set()):
+            # Vérifier aussi que le compte n'est pas en 'aucun'
+            if self.account_access_levels.get(account_id) == "aucun":
+                return False
             return True
         return False
 
     def accounts_with(self, permission: str) -> Optional[Set[str]]:
+        # Si permission globale, retourner tous les comptes sauf ceux en 'aucun'
         if permission in self.global_permissions:
-            return None
+            # Récupérer tous les comptes depuis account_access_levels ou account_permissions
+            all_accounts = set(self.account_access_levels.keys())
+            # Exclure les comptes en 'aucun'
+            excluded = {acc_id for acc_id, level in self.account_access_levels.items() if level == "aucun"}
+            accessible_accounts = all_accounts - excluded
+            # Si on a des comptes accessibles, les retourner, sinon None (accès global)
+            return accessible_accounts if accessible_accounts else None
+        
         scoped = {
             acc_id
             for acc_id, perms in self.account_permissions.items()
-            if permission in perms
+            if permission in perms and self.account_access_levels.get(acc_id) != "aucun"
         }
-        return scoped
+        
+        # Ajouter aussi les comptes avec accès 'full' ou 'lecture' selon la permission
+        view_permissions = {
+            PermissionCodes.ACCOUNTS_VIEW,
+            PermissionCodes.CONVERSATIONS_VIEW,
+            PermissionCodes.MESSAGES_VIEW,
+            PermissionCodes.CONTACTS_VIEW,
+            PermissionCodes.PERMISSIONS_VIEW,
+        }
+        if permission in view_permissions:
+            for acc_id, level in self.account_access_levels.items():
+                if level in ("full", "lecture"):
+                    scoped.add(acc_id)
+        
+        return scoped if scoped else None
 
     def grant(self, permission: str, account_id: Optional[str] = None):
         if permission not in ALL_PERMISSION_CODES:
@@ -142,9 +212,9 @@ def _assign_bootstrap_admin(user_id: str):
     ).execute()
 
 
-def _assign_default_viewer(user_id: str):
+def _assign_default_manager(user_id: str):
     """
-    Ensure every newly invited user has at least the viewer role so they can load the app.
+    Ensure every newly invited user has at least the manager role so they can load the app.
     """
     existing = (
         supabase.table("app_user_roles").select("id").eq("user_id", user_id).limit(1).execute()
@@ -152,14 +222,14 @@ def _assign_default_viewer(user_id: str):
     if existing.data:
         return
 
-    viewer_role = (
-        supabase.table("app_roles").select("id").eq("slug", "viewer").limit(1).execute()
+    manager_role = (
+        supabase.table("app_roles").select("id").eq("slug", "manager").limit(1).execute()
     )
-    if not viewer_role.data:
+    if not manager_role.data:
         return
 
     supabase.table("app_user_roles").insert(
-        {"user_id": user_id, "role_id": viewer_role.data[0]["id"]}
+        {"user_id": user_id, "role_id": manager_role.data[0]["id"]}
     ).execute()
 
 
@@ -183,7 +253,7 @@ def load_current_user(supabase_user: Any) -> CurrentUser:
         try:
             app_profile = _ensure_app_user_record(supabase_user)
             _assign_bootstrap_admin(supabase_user.id)
-            _assign_default_viewer(supabase_user.id)
+            _assign_default_manager(supabase_user.id)
             permissions = PermissionMatrix()
 
             role_rows_raw = (
@@ -297,6 +367,72 @@ def load_current_user(supabase_user: Any) -> CurrentUser:
             permissions.grant(perm, scope)
         else:
             permissions.revoke(perm, scope)
+
+    # Charger les accès par compte depuis user_account_access
+    account_access_raw = []
+    for attempt in range(max_retries + 1):
+        try:
+            account_access_raw = (
+                supabase.table("user_account_access")
+                .select("account_id, access_level")
+                .eq("user_id", supabase_user.id)
+                .execute()
+            ).data
+            break
+        except Exception as e:
+            if attempt < max_retries:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            else:
+                logger.error(f"Error fetching user account access after retries: {e}")
+                account_access_raw = []
+                break
+
+    # Stocker les niveaux d'accès par compte pour les utiliser dans has() et accounts_with()
+    # Ces niveaux prennent le dessus sur les permissions basées sur les rôles
+    for access in account_access_raw:
+        account_id = access.get("account_id")
+        access_level = access.get("access_level")
+        if account_id and access_level:
+            permissions.account_access_levels[account_id] = access_level
+    
+    # Appliquer les restrictions d'accès par compte
+    # Si access_level = 'aucun' → retirer toutes les permissions pour ce compte (même les globales)
+    # Si access_level = 'lecture' → garder seulement les permissions de lecture (pas messages.send)
+    # Si access_level = 'full' → garder toutes les permissions
+    for access in account_access_raw:
+        account_id = access.get("account_id")
+        access_level = access.get("access_level")
+        
+        if access_level == "aucun":
+            # Retirer toutes les permissions pour ce compte (même si permission globale)
+            # On marque juste le niveau, la méthode has() gère le reste
+            permissions.account_permissions.pop(account_id, None)
+        elif access_level == "lecture":
+            # Garder seulement les permissions de lecture, retirer messages.send et autres permissions d'écriture
+            # Même si la permission est globale, on restreint pour ce compte spécifique
+            if account_id in permissions.account_permissions:
+                perms = permissions.account_permissions[account_id]
+                # Retirer les permissions d'écriture/modification
+                perms.discard(PermissionCodes.MESSAGES_SEND)
+                perms.discard(PermissionCodes.ACCOUNTS_MANAGE)
+                perms.discard(PermissionCodes.ACCOUNTS_ASSIGN)
+                perms.discard(PermissionCodes.USERS_MANAGE)
+                perms.discard(PermissionCodes.ROLES_MANAGE)
+                perms.discard(PermissionCodes.SETTINGS_MANAGE)
+                perms.discard(PermissionCodes.PERMISSIONS_MANAGE)
+                # Garder seulement : accounts.view, conversations.view, messages.view, contacts.view, permissions.view
+                allowed_read_perms = {
+                    PermissionCodes.ACCOUNTS_VIEW,
+                    PermissionCodes.CONVERSATIONS_VIEW,
+                    PermissionCodes.MESSAGES_VIEW,
+                    PermissionCodes.CONTACTS_VIEW,
+                    PermissionCodes.PERMISSIONS_VIEW,
+                }
+                perms_to_remove = [p for p in list(perms) if p not in allowed_read_perms]
+                for perm in perms_to_remove:
+                    perms.discard(perm)
+        # Si access_level == "full", on garde toutes les permissions existantes
 
     return CurrentUser(
         id=supabase_user.id,

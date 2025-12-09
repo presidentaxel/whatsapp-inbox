@@ -10,6 +10,7 @@ from app.core.circuit_breaker import (
 )
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services import admin_service
+from app.services.account_service import expose_accounts_public
 
 router = APIRouter()
 
@@ -22,7 +23,10 @@ async def fetch_permissions(current_user: CurrentUser = Depends(get_current_user
 
 @router.get("/roles")
 async def fetch_roles(current_user: CurrentUser = Depends(get_current_user)):
-    current_user.require(PermissionCodes.ROLES_MANAGE)
+    # Permettre à Admin et DEV de voir les rôles (pour l'affichage dans PermissionsTable)
+    # Seul Admin peut modifier les rôles via create/update/delete
+    if not current_user.permissions.has(PermissionCodes.PERMISSIONS_VIEW):
+        current_user.require(PermissionCodes.ROLES_MANAGE)
     return admin_service.list_roles()
 
 
@@ -64,7 +68,11 @@ async def update_user_status(user_id: str, payload: dict, current_user: CurrentU
 
 @router.put("/users/{user_id}/roles")
 async def update_user_roles(user_id: str, payload: dict, current_user: CurrentUser = Depends(get_current_user)):
-    current_user.require(PermissionCodes.ROLES_MANAGE)
+    # Seul Admin peut modifier les rôles (via permissions.manage ou roles.manage)
+    # permissions.manage inclut la gestion des rôles car c'est un aspect de la gestion des permissions
+    if not (current_user.permissions.has(PermissionCodes.PERMISSIONS_MANAGE) or 
+            current_user.permissions.has(PermissionCodes.ROLES_MANAGE)):
+        raise HTTPException(status_code=403, detail="permission_denied")
     assignments = payload.get("assignments", [])
     admin_service.set_user_roles(user_id, assignments)
     return {"status": "ok"}
@@ -132,5 +140,47 @@ async def clear_cache(current_user: CurrentUser = Depends(get_current_user)):
     cache = await get_cache()
     await cache.clear()
     return {"status": "cleared"}
+
+
+@router.get("/accounts/all")
+async def fetch_all_accounts_for_permissions(current_user: CurrentUser = Depends(get_current_user)):
+    """Retourne TOUS les comptes WhatsApp pour la gestion des permissions"""
+    # Seuls Admin et DEV peuvent voir cette liste (pour la table des permissions)
+    # Cette liste ne filtre PAS selon access_level = 'aucun' car elle sert à gérer les permissions
+    if not current_user.permissions.has(PermissionCodes.PERMISSIONS_VIEW):
+        raise HTTPException(status_code=403, detail="permission_denied")
+    # Retourner tous les comptes sans filtre
+    return await expose_accounts_public()
+
+
+@router.get("/users/with-access")
+async def fetch_users_with_access(current_user: CurrentUser = Depends(get_current_user)):
+    """Liste tous les utilisateurs avec leurs rôles et accès par compte"""
+    # Admin et DEV peuvent voir, seul Admin peut modifier
+    # Utiliser les permissions plutôt que le rôle pour plus de flexibilité
+    # permissions.view = DEV peut voir, permissions.manage = Admin peut modifier
+    if not current_user.permissions.has(PermissionCodes.PERMISSIONS_VIEW):
+        raise HTTPException(status_code=403, detail="permission_denied")
+    return admin_service.list_users_with_access()
+
+
+@router.put("/users/{user_id}/accounts/{account_id}/access")
+async def update_user_account_access(
+    user_id: str,
+    account_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """Met à jour l'accès d'un utilisateur à un compte WhatsApp"""
+    # Seul Admin peut modifier (permissions.manage)
+    # Note: cette permission n'est PAS bloquée par access_level = 'aucun' car elle permet
+    # à l'admin de gérer les permissions même s'il a mis "aucun" pour lui-même
+    current_user.require(PermissionCodes.PERMISSIONS_MANAGE)
+    
+    access_level = payload.get("access_level")
+    if not access_level:
+        raise HTTPException(status_code=400, detail="access_level_required")
+    admin_service.set_user_account_access(user_id, account_id, access_level)
+    return {"status": "ok", "user_id": user_id, "account_id": account_id, "access_level": access_level}
 
 

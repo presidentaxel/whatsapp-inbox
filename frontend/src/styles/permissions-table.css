@@ -1,0 +1,287 @@
+/* Styles pour le tableau de permissions */
+
+.permissions-table-container {
+  width: 100%;
+  padding: 24px 0;
+}
+
+.permissions-table-header {
+  margin-bottom: 24px;
+}
+
+.permissions-table-description {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.permissions-table-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.permissions-table-wrapper {
+  overflow-x: auto;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+}
+
+.permissions-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 600px;
+}
+
+.permissions-table thead {
+  background: var(--bg-hover);
+  border-bottom: 2px solid var(--border-color);
+}
+
+.permissions-table th {
+  padding: 16px;
+  text-align: left;
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.permissions-table-user-col {
+  min-width: 200px;
+  position: sticky;
+  left: 0;
+  background: var(--bg-hover);
+  z-index: 2;
+  border-right: 1px solid var(--border-color);
+}
+
+.permissions-table-role-col {
+  min-width: 140px;
+  position: sticky;
+  left: 200px;
+  background: var(--bg-hover);
+  z-index: 2;
+  border-right: 1px solid var(--border-color);
+  text-align: center;
+}
+
+.permissions-table-account-col {
+  min-width: 180px;
+  text-align: center;
+}
+
+.permissions-table-account-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+}
+
+.permissions-table-account-header strong {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.permissions-table-account-header small {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.permissions-table tbody tr {
+  border-bottom: 1px solid var(--border-light);
+  transition: background-color 0.2s;
+}
+
+.permissions-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.permissions-table-user-cell {
+  padding: 16px;
+  background: var(--bg-secondary);
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid var(--border-color);
+}
+
+.permissions-table-role-cell {
+  padding: 16px;
+  background: var(--bg-secondary);
+  position: sticky;
+  left: 200px;
+  z-index: 1;
+  border-right: 1px solid var(--border-color);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.permissions-table-user-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.permissions-table-user-info strong {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.permissions-table-user-role {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.permissions-table-access-cell {
+  padding: 16px;
+  text-align: center;
+  vertical-align: middle;
+  position: relative;
+}
+
+.permissions-table-access-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  min-width: 80px;
+  text-align: center;
+  user-select: none;
+}
+
+.permissions-table-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.permissions-table-select {
+  padding: 6px 12px;
+  border-radius: 12px;
+  border: none;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  min-width: 80px;
+  text-align: center;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23fff' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 28px;
+  transition: opacity 0.2s;
+}
+
+.permissions-table-select:focus {
+  outline: none;
+  opacity: 0.9;
+}
+
+.permissions-table-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.permissions-table-select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px;
+}
+
+.permissions-table-edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.permissions-table-btn {
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  font-size: 14px;
+}
+
+.permissions-table-btn-save {
+  background: #25d366;
+  color: #fff;
+}
+
+.permissions-table-btn-save:hover:not(:disabled) {
+  background: #20ba5a;
+}
+
+.permissions-table-btn-cancel {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+.permissions-table-btn-cancel:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+.permissions-table-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.permissions-table-empty {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.permissions-table-legend {
+  margin-top: 32px;
+  padding: 20px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+
+.permissions-table-legend h4 {
+  color: var(--text-primary);
+  font-size: 16px;
+  margin-bottom: 12px;
+  font-weight: 500;
+}
+
+.permissions-table-legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.permissions-table-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.permissions-table-legend-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  min-width: 70px;
+  text-align: center;
+}
+
+.permissions-table-legend-desc {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+

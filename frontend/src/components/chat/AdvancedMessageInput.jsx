@@ -3,6 +3,7 @@ import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImag
 import { uploadMedia } from "../../api/whatsappApi";
 import { sendMediaMessage, sendInteractiveMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
+import { useTheme } from "../../hooks/useTheme";
 
 export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit }) {
   const [text, setText] = useState("");
@@ -11,6 +12,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [mode, setMode] = useState("text"); // text, media, buttons, list
   const [uploading, setUploading] = useState(false);
+  const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
   const emojiRef = useRef(null);
@@ -27,6 +29,15 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     { title: "", rows: [{ id: "", title: "", description: "" }] }
   ]);
   const [buttonText, setButtonText] = useState("Voir les options");
+
+  const replaceEmojiShortcuts = (value) => {
+    if (!discussionPrefs?.emojiReplace) return value;
+    return value
+      .replace(/:\)/g, "😊")
+      .replace(/:\("/g, "☹️")
+      .replace(/<3/g, "❤️")
+      .replace(/;\)/g, "😉");
+  };
 
   // Fermer les menus quand on clique dehors
   useEffect(() => {
@@ -564,12 +575,25 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
             ref={textAreaRef}
             rows={1}
             value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Écrire un message... (Shift+Entrée pour une nouvelle ligne)"
+            spellCheck={discussionPrefs?.spellCheck ?? true}
+            lang="fr"
+            onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
+            placeholder={
+              discussionPrefs?.enterToSend
+                ? "Écrire un message... (Shift+Entrée pour une nouvelle ligne)"
+                : "Écrire un message... (Ctrl+Entrée pour envoyer)"
+            }
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
+              if (e.key === "Enter") {
+                if (discussionPrefs?.enterToSend) {
+                  if (!e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                } else if (e.metaKey || e.ctrlKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
               }
             }}
             disabled={disabled}

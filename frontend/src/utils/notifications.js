@@ -49,10 +49,14 @@ export async function showTestNotification() {
     if (!granted) return;
   }
 
-  await showNotification('Test de notification', {
-    body: 'Les notifications fonctionnent correctement ! 🎉',
+  // Notification de test style WhatsApp
+  await showNotification('Test WhatsApp', {
+    body: 'Les notifications fonctionnent correctement !',
     tag: 'test-notification',
-    requireInteraction: false
+    requireInteraction: false,
+    icon: '/192x192.svg',
+    badge: '/192x192.svg',
+    color: '#25d366'
   });
 }
 
@@ -92,40 +96,50 @@ export async function notifyNewMessage(message, conversation, options = {}) {
                      conversation?.client_number || 
                      'Contact inconnu';
 
-  // Aperçu du message
+  // Aperçu du message - format exact WhatsApp
   let messagePreview = 'Nouveau message';
   const content = message.content_text || message.content || '';
-  if (content) {
-    messagePreview = content.substring(0, 120);
-    if (content.length > 120) {
+  
+  if (content && content.trim()) {
+    // Limiter à 100 caractères comme WhatsApp
+    const preview = content.trim().substring(0, 100);
+    messagePreview = preview;
+    if (content.length > 100) {
       messagePreview += '...';
     }
-  } else if (message.media_url || message.media_id) {
-    // Détecter le type de média
-    const mediaType = message.media_type || 'media';
-    const emojiMap = {
-      'image': '🖼️ Image',
+  } else if (message.media_url || message.media_id || message.media_type) {
+    // Détecter le type de média - labels exacts WhatsApp
+    const mediaType = (message.media_type || '').toLowerCase();
+    const mediaMap = {
+      'image': '📷 Photo',
       'video': '🎥 Vidéo',
       'audio': '🎵 Audio',
-      'document': '📄 Document',
-      'sticker': '😊 Sticker',
-      'voice': '🎤 Message vocal'
+      'document': '📎 Document',
+      'sticker': '😊 Autocollant',
+      'voice': '🎤 Message vocal',
+      'media': '📎 Média'
     };
-    messagePreview = emojiMap[mediaType] || '📎 Média';
-  } else if (message.type === 'location') {
+    messagePreview = mediaMap[mediaType] || '📎 Média';
+  } else if (message.type === 'location' || message.location) {
     messagePreview = '📍 Localisation';
-  } else if (message.type === 'contacts') {
+  } else if (message.type === 'contacts' || message.contacts) {
     messagePreview = '👤 Contact';
+  } else {
+    messagePreview = 'Nouveau message';
   }
 
+  // Récupérer l'image de profil du contact si disponible
+  const contactImage = conversation?.contacts?.profile_picture_url || null;
+  
   console.log('🔔 About to show notification', {
     messageId: message.id,
     conversationId: conversation.id,
     contactName,
-    preview: messagePreview
+    preview: messagePreview,
+    hasImage: !!contactImage
   });
-
-  await showMessageNotification(contactName, messagePreview, conversation.id);
+  
+  await showMessageNotification(contactName, messagePreview, conversation.id, contactImage);
   console.log('✅ Notification shown', {
     messageId: message.id,
     conversationId: conversation.id,

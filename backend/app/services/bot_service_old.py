@@ -171,7 +171,7 @@ async def generate_bot_reply(
         "contents": conversation_parts,
         "generationConfig": {
             "temperature": 0.4,
-            "maxOutputTokens": 250,
+            "maxOutputTokens": 1024,
         },
     }
 

@@ -25,6 +25,9 @@ import {
 } from "../../api/adminApi";
 import { createAccount, deleteAccount } from "../../api/accountsApi";
 import NotificationSettings from "./NotificationSettings";
+import PermissionsTable from "./PermissionsTable";
+import DiscussionSettings from "./DiscussionSettings";
+import GeneralSettings from "./GeneralSettings";
 
 const INITIAL_ACCOUNT_FORM = {
   name: "",
@@ -46,9 +49,12 @@ export default function SettingsPanel({
   accounts = [],
   onSignOut,
   currentUser,
+  canViewAccounts,
   canManageAccounts,
   canManageRoles,
   canManageUsers,
+  canViewPermissions,
+  canManagePermissions,
   onAccountsRefresh,
 }) {
   const [accountForm, setAccountForm] = useState(INITIAL_ACCOUNT_FORM);
@@ -69,10 +75,12 @@ export default function SettingsPanel({
   );
 
   const loadAdminData = useCallback(async () => {
-    if (!canManageRoles && !canManageUsers) return;
+    // Charger les données si on peut voir ou gérer les permissions
+    if (!canManagePermissions && !canViewPermissions) return;
     setLoadingAdmin(true);
     try {
-      if (canManageRoles) {
+      if (canManagePermissions || canViewPermissions) {
+        // Charger les permissions et rôles si on peut les voir
         const [permRes, roleRes] = await Promise.all([getPermissions(), getRoles()]);
         setPermissions(permRes.data);
         setRoles(roleRes.data);
@@ -86,7 +94,7 @@ export default function SettingsPanel({
     } finally {
       setLoadingAdmin(false);
     }
-  }, [canManageRoles, canManageUsers]);
+  }, [canManagePermissions, canManageUsers, canViewPermissions]);
 
   useEffect(() => {
     loadAdminData();
@@ -236,28 +244,10 @@ export default function SettingsPanel({
         description: "Démarrer et fermer",
       },
       {
-        id: "compte",
-        label: "Compte",
-        icon: FiKey,
-        description: "Notifications de sécurité, informations de compte",
-      },
-      {
-        id: "confidentialite",
-        label: "Confidentialité",
-        icon: FiLock,
-        description: "Contacts bloqués, messages éphémères",
-      },
-      {
         id: "discussions",
         label: "Discussions",
         icon: FiMessageSquare,
         description: "Thème, fond d'écran, paramètres des discussions",
-      },
-      {
-        id: "audio",
-        label: "Vidéo et audio",
-        icon: FiVideo,
-        description: "Camera, micro et haut-parleurs",
       },
       {
         id: "notifications",
@@ -265,44 +255,30 @@ export default function SettingsPanel({
         icon: FiBell,
         description: "Notifications de messages",
       },
-      {
-        id: "raccourcis",
-        label: "Raccourcis clavier",
-        icon: FiType,
-        description: "Actions rapides",
-      },
-      {
-        id: "aide",
-        label: "Aide",
-        icon: FiChevronDown,
-        description: "",
-      },
     ];
     
     // Menus supplémentaires pour les fonctionnalités existantes
-    if (canManageAccounts)
+    // Managers peuvent voir les comptes, mais seuls Admin peuvent les gérer
+    if (canViewAccounts || canManageAccounts)
       base.push({
         id: "accounts",
         label: "Comptes WhatsApp",
         icon: FiShield,
         description: "Gérer les comptes WhatsApp Cloud API",
       });
-    if (canManageRoles)
-      base.push({
-        id: "roles",
-        label: "Rôles",
-        icon: FiShield,
-        description: "Gérer les rôles et permissions",
-      });
-    if (canManageUsers)
-      base.push({
-        id: "users",
-        label: "Utilisateurs",
-        icon: FiUser,
-        description: "Gérer les utilisateurs et leurs accès",
-      });
+        // Remplacement du système de rôles/utilisateurs par le nouveau système de permissions
+        // Seuls Admin et DEV peuvent voir l'onglet Permissions (Manager ne voit rien)
+        // canManagePermissions = Admin (permissions.manage) - peut modifier
+        // canViewPermissions = DEV (permissions.view) - peut seulement voir
+        if (canManagePermissions || canViewPermissions)
+          base.push({
+            id: "permissions",
+            label: "Permissions",
+            icon: FiShield,
+            description: "Gérer les accès par compte WhatsApp",
+          });
     return base;
-  }, [canManageAccounts, canManageRoles, canManageUsers]);
+  }, [canViewAccounts, canManageAccounts, canManageRoles, canManageUsers, canViewPermissions, canManagePermissions]);
 
   const filteredNavItems = useMemo(() => {
     if (!searchQuery.trim()) return navItems;
@@ -388,6 +364,7 @@ export default function SettingsPanel({
         {activePanel === "general" && (
           <div className="settings-content__panel">
             <h1 className="settings-content__panel-title">Général</h1>
+            <GeneralSettings />
             
             <section className="settings-content__section">
               <h2 className="settings-content__section-title">Profil</h2>
@@ -443,19 +420,25 @@ export default function SettingsPanel({
         )}
 
         {activePanel === "compte" && renderPlaceholder()}
-        {activePanel === "confidentialite" && renderPlaceholder()}
-        {activePanel === "discussions" && renderPlaceholder()}
-        {activePanel === "audio" && renderPlaceholder()}
-        {activePanel === "raccourcis" && renderPlaceholder()}
-        {activePanel === "aide" && renderPlaceholder()}
+          {activePanel === "confidentialite" && renderPlaceholder()}
+          {activePanel === "discussions" && (
+            <div className="settings-content__panel">
+              <h1 className="settings-content__panel-title">Discussions</h1>
+              <section className="settings-content__section">
+                <DiscussionSettings />
+              </section>
+            </div>
+          )}
 
-      {activePanel === "accounts" && canManageAccounts && (
+      {activePanel === "accounts" && (canViewAccounts || canManageAccounts) && (
         <div className="settings-content__panel">
           <h1 className="settings-content__panel-title">Comptes WhatsApp</h1>
           <section className="settings-content__section">
             <h2 className="settings-content__section-title">Gestion des comptes</h2>
             <p className="muted">
-              Ajoute tes numéros WhatsApp Cloud API et choisis les membres qui y auront accès.
+              {canManageAccounts 
+                ? "Ajoute tes numéros WhatsApp Cloud API et choisis les membres qui y auront accès."
+                : "Visualise les comptes WhatsApp Cloud API configurés."}
             </p>
             {statusMessage && <p>{statusMessage}</p>}
           {accounts.length ? (
@@ -470,13 +453,15 @@ export default function SettingsPanel({
                     <span>ID : {acc.id}</span>
                     <span>Phone ID : {acc.phone_number_id}</span>
                   </div>
-                  <button
-                    className="danger subtle"
-                    onClick={() => handleDeleteAccount(acc.id)}
-                    type="button"
-                  >
-                    Supprimer
-                  </button>
+                  {canManageAccounts && (
+                    <button
+                      className="danger subtle"
+                      onClick={() => handleDeleteAccount(acc.id)}
+                      type="button"
+                    >
+                      Supprimer
+                    </button>
+                  )}
                 </article>
               ))}
             </div>
@@ -484,130 +469,69 @@ export default function SettingsPanel({
             <p>Aucun compte pour le moment.</p>
           )}
 
-          <form className="account-form" onSubmit={handleCreateAccount}>
-            <h3>Ajouter un compte</h3>
-            <div className="form-grid">
-              <input
-                placeholder="Nom"
-                value={accountForm.name}
-                onChange={(e) => handleAccountInput("name", e.target.value)}
-                required
-              />
-              <input
-                placeholder="Slug"
-                value={accountForm.slug}
-                onChange={(e) => handleAccountInput("slug", e.target.value)}
-                required
-              />
-              <input
-                placeholder="Numéro (optionnel)"
-                value={accountForm.phone_number}
-                onChange={(e) => handleAccountInput("phone_number", e.target.value)}
-              />
-              <input
-                placeholder="Phone Number ID"
-                value={accountForm.phone_number_id}
-                onChange={(e) => handleAccountInput("phone_number_id", e.target.value)}
-                required
-              />
-              <input
-                placeholder="Access Token"
-                value={accountForm.access_token}
-                onChange={(e) => handleAccountInput("access_token", e.target.value)}
-                required
-              />
-              <input
-                placeholder="Verify Token"
-                value={accountForm.verify_token}
-                onChange={(e) => handleAccountInput("verify_token", e.target.value)}
-                required
-              />
-            </div>
-            <button type="submit">Créer</button>
-          </form>
-          </section>
-        </div>
-      )}
-
-      {activePanel === "roles" && canManageRoles && (
-        <div className="settings-content__panel">
-          <h1 className="settings-content__panel-title">Rôles</h1>
-          <section className="settings-content__section">
-            <h2 className="settings-content__section-title">Rôles & permissions</h2>
-          {loadingAdmin && <p>Chargement…</p>}
-          {!loadingAdmin && (
-            <>
-              <div className="role-list">
-                {roles.map((role) => (
-                  <article key={role.id} className="role-card">
-                    <header>
-                      <div>
-                        <strong>{role.name}</strong>
-                        <span className="role-slug">{role.slug}</span>
-                      </div>
-                      {role.slug !== "admin" && (
-                        <button
-                          type="button"
-                          className="danger subtle"
-                          onClick={() => handleDeleteRole(role.id, role.slug)}
-                        >
-                          Supprimer
-                        </button>
-                      )}
-                    </header>
-                    <p>{role.description}</p>
-                    <div className="chip-list">
-                      {(role.permissions || []).map((perm) => (
-                        <span key={perm} className="chip">
-                          {perm}
-                        </span>
-                      ))}
-                    </div>
-                  </article>
-                ))}
-              </div>
-              <form className="role-form" onSubmit={handleCreateRole}>
-                <h3>Nouveau rôle</h3>
+          {canManageAccounts && (
+            <form className="account-form" onSubmit={handleCreateAccount}>
+              <h3>Ajouter un compte</h3>
+              <div className="form-grid">
                 <input
                   placeholder="Nom"
-                  value={roleForm.name}
-                  onChange={(e) => setRoleForm((prev) => ({ ...prev, name: e.target.value }))}
+                  value={accountForm.name}
+                  onChange={(e) => handleAccountInput("name", e.target.value)}
                   required
                 />
                 <input
                   placeholder="Slug"
-                  value={roleForm.slug}
-                  onChange={(e) => setRoleForm((prev) => ({ ...prev, slug: e.target.value }))}
+                  value={accountForm.slug}
+                  onChange={(e) => handleAccountInput("slug", e.target.value)}
                   required
                 />
-                <textarea
-                  placeholder="Description"
-                  value={roleForm.description}
-                  onChange={(e) =>
-                    setRoleForm((prev) => ({ ...prev, description: e.target.value }))
-                  }
+                <input
+                  placeholder="Numéro (optionnel)"
+                  value={accountForm.phone_number}
+                  onChange={(e) => handleAccountInput("phone_number", e.target.value)}
                 />
-                <div className="permission-grid">
-                  {permissions.map((perm) => (
-                    <label key={perm.code}>
-                      <input
-                        type="checkbox"
-                        checked={roleForm.permissions.includes(perm.code)}
-                        onChange={() => toggleRolePermission(perm.code)}
-                      />
-                      {perm.label || perm.code}
-                    </label>
-                  ))}
-                </div>
-                <button type="submit">Créer le rôle</button>
-              </form>
-            </>
+                <input
+                  placeholder="Phone Number ID"
+                  value={accountForm.phone_number_id}
+                  onChange={(e) => handleAccountInput("phone_number_id", e.target.value)}
+                  required
+                />
+                <input
+                  placeholder="Access Token"
+                  value={accountForm.access_token}
+                  onChange={(e) => handleAccountInput("access_token", e.target.value)}
+                  required
+                />
+                <input
+                  placeholder="Verify Token"
+                  value={accountForm.verify_token}
+                  onChange={(e) => handleAccountInput("verify_token", e.target.value)}
+                  required
+                />
+              </div>
+              <button type="submit">Créer</button>
+            </form>
           )}
           </section>
         </div>
       )}
 
-      {activePanel === "users" && canManageUsers && (
+      {activePanel === "permissions" && (canManagePermissions || canViewPermissions) && (
+        <div className="settings-content__panel">
+          <h1 className="settings-content__panel-title">Permissions</h1>
+          <section className="settings-content__section">
+            <h2 className="settings-content__section-title">Accès par compte WhatsApp</h2>
+            <PermissionsTable
+              accounts={accounts}
+              currentUserRole={currentUser?.roles?.[0]?.role_slug || null}
+              canManagePermissions={canManagePermissions}
+            />
+          </section>
+        </div>
+      )}
+
+      {/* Anciennes sections roles/users - conservées pour référence mais non affichées */}
+      {false && activePanel === "users" && canManageUsers && (
         <div className="settings-content__panel">
           <h1 className="settings-content__panel-title">Utilisateurs</h1>
           <section className="settings-content__section">

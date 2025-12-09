@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
@@ -18,12 +19,18 @@ from app.services.account_service import (
 from app.services.conversation_service import get_conversation_by_id, set_conversation_bot_mode
 from app.services.profile_picture_service import queue_profile_picture_update
 
-logger = logging.getLogger("uvicorn.error").getChild("bot.message")
-logger.setLevel(logging.INFO)
-
-FALLBACK_MESSAGE = "Je me renseigne auprès d’un collègue et je reviens vers vous au plus vite."
+FALLBACK_MESSAGE = "Je me renseigne auprès d'un collègue et je reviens vers vous au plus vite."
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+# S'assurer que les logs sont visibles
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.propagate = True
 
 
 async def handle_incoming_message(data: dict):
@@ -223,9 +230,11 @@ async def _process_incoming_message(
     account_id: str, message: Dict[str, Any], contacts_map: Dict[str, Any]
 ):
     try:
+        print(f"🔍 [BOT DEBUG] _process_incoming_message called: account_id={account_id}, message_id={message.get('id')}, from={message.get('from')}")
+        logger.info(f"🔍 [BOT DEBUG] _process_incoming_message called: account_id={account_id}, message_id={message.get('id')}, from={message.get('from')}")
         wa_id = message.get("from")
         if not wa_id:
-            logger.warning("⚠️ Message has no 'from' field, skipping")
+            logger.warning("⚠️ [BOT DEBUG] Message has no 'from' field, skipping")
             return
 
         contact_info = contacts_map.get(wa_id, {})
@@ -245,7 +254,10 @@ async def _process_incoming_message(
 
         timestamp_iso = _timestamp_to_iso(message.get("timestamp"))
         contact = await _upsert_contact(wa_id, profile_name, profile_picture_url)
+        logger.info(f"🔍 [BOT DEBUG] Contact upserted: id={contact.get('id')}, whatsapp_number={contact.get('whatsapp_number')}")
+        
         conversation = await _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
+        logger.info(f"🔍 [BOT DEBUG] Conversation upserted: id={conversation.get('id')}, bot_enabled={conversation.get('bot_enabled')}")
         
         # Mettre à jour l'image de profil en arrière-plan si pas déjà disponible
         # Note: WhatsApp ne fournit généralement pas l'image dans les webhooks,
@@ -409,6 +421,13 @@ async def _process_incoming_message(
         await _update_conversation_timestamp(conversation["id"], timestamp_iso)
         await _increment_unread_count(conversation)
 
+        # Recharger la conversation pour s'assurer qu'on a la valeur à jour de bot_enabled
+        # (l'upsert pourrait avoir préservé une ancienne valeur)
+        refreshed_conversation = await get_conversation_by_id(conversation["id"])
+        if refreshed_conversation:
+            conversation = refreshed_conversation
+        
+        logger.info(f"🔍 [BOT DEBUG] Processing incoming message: conversation_id={conversation['id']}, bot_enabled={conversation.get('bot_enabled')}, content_text length={len(content_text or '')}")
         await _maybe_trigger_bot_reply(conversation["id"], content_text, contact, message.get("type"))
         
         logger.info(f"✅ Message processed successfully: conversation_id={conversation['id']}, type={msg_type}, from={wa_id}")
@@ -502,15 +521,32 @@ async def _upsert_contact(
 async def _upsert_conversation(
     account_id: str, contact_id: str, client_number: str, timestamp_iso: str
 ):
+    # Vérifier si la conversation existe déjà pour préserver bot_enabled
+    existing = await supabase_execute(
+        supabase.table("conversations")
+        .select("bot_enabled")
+        .eq("account_id", account_id)
+        .eq("client_number", client_number)
+        .limit(1)
+    )
+    
+    bot_enabled = existing.data[0].get("bot_enabled") if existing.data else None
+    
+    upsert_data = {
+        "contact_id": contact_id,
+        "client_number": client_number,
+        "account_id": account_id,
+        "status": "open",
+        "updated_at": timestamp_iso,
+    }
+    
+    # Préserver bot_enabled si la conversation existe déjà
+    if bot_enabled is not None:
+        upsert_data["bot_enabled"] = bot_enabled
+    
     res = await supabase_execute(
         supabase.table("conversations").upsert(
-            {
-                "contact_id": contact_id,
-                "client_number": client_number,
-                "account_id": account_id,
-                "status": "open",
-                "updated_at": timestamp_iso,
-            },
+            upsert_data,
             on_conflict="account_id,client_number",
         )
     )
@@ -593,36 +629,42 @@ async def _maybe_trigger_bot_reply(
     contact: Dict[str, Any],
     message_type: Optional[str] = "text",
 ):
+    print(f"🔍 [BOT DEBUG] _maybe_trigger_bot_reply called for conversation {conversation_id}, content_text length: {len(content_text or '')}, message_type: {message_type}")
+    logger.info(f"🔍 [BOT DEBUG] _maybe_trigger_bot_reply called for conversation {conversation_id}, content_text length: {len(content_text or '')}, message_type: {message_type}")
+    
     message_text = (content_text or "").strip()
     if not message_text:
-        logger.info("Bot skip: empty message for %s", conversation_id)
+        logger.info(f"ℹ️ [BOT DEBUG] Bot skip: empty message for conversation {conversation_id}")
         return
 
+    logger.info(f"🔍 [BOT DEBUG] Fetching conversation {conversation_id} to check bot status")
     conversation = await get_conversation_by_id(conversation_id)
-    if not conversation or not conversation.get("bot_enabled"):
-        logger.info(
-            "Bot skip: bot disabled/missing conversation (id=%s, enabled=%s)",
-            conversation_id,
-            conversation.get("bot_enabled") if conversation else None,
-        )
+    
+    if not conversation:
+        logger.warning(f"⚠️ [BOT DEBUG] Conversation {conversation_id} not found, cannot trigger bot")
+        return
+        
+    logger.info(f"🔍 [BOT DEBUG] Conversation found: id={conversation_id}, bot_enabled={conversation.get('bot_enabled')}, account_id={conversation.get('account_id')}")
+    
+    if not conversation.get("bot_enabled"):
+        logger.info(f"ℹ️ [BOT DEBUG] Bot skip: bot disabled for conversation {conversation_id}")
         return
 
     account_id = conversation["account_id"]
+    logger.info(f"🔍 [BOT DEBUG] Account ID: {account_id}")
 
     if message_type and message_type.lower() != "text":
         fallback = "Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ?"
-        logger.info("Non-text message detected for %s; sending fallback", conversation_id)
-        await send_message({"conversation_id": conversation_id, "content": fallback})
+        logger.info(f"ℹ️ [BOT DEBUG] Non-text message detected for {conversation_id} (type: {message_type}); sending fallback")
+        await send_message({"conversation_id": conversation_id, "content": fallback}, skip_bot_trigger=True)
         return
 
     contact_name = contact.get("display_name") or contact.get("whatsapp_number")
+    logger.info(f"🔍 [BOT DEBUG] Contact name: {contact_name}, contact data: {list(contact.keys())}")
 
     try:
         logger.info(
-            "Gemini invocation for conversation %s (account=%s, contact=%s)",
-            conversation_id,
-            conversation["account_id"],
-            contact_name,
+            f"🤖 [BOT DEBUG] Starting Gemini invocation for conversation {conversation_id} (account={account_id}, contact={contact_name}, message_length={len(message_text)})"
         )
         reply = await bot_service.generate_bot_reply(
             conversation_id,
@@ -630,33 +672,37 @@ async def _maybe_trigger_bot_reply(
             message_text,
             contact_name,
         )
+        logger.info(f"✅ [BOT DEBUG] Gemini returned reply: length={len(reply) if reply else 0}, preview: '{reply[:100] if reply else None}...'")
     except Exception as exc:
-        logger.warning("Bot generation failed for %s: %s", conversation_id, exc)
+        logger.error(f"❌ [BOT DEBUG] Bot generation failed for {conversation_id}: {exc}", exc_info=True)
         return
 
     if not reply:
-        logger.info("Gemini returned empty text for %s, escalating to human", conversation_id)
-        await send_message({"conversation_id": conversation_id, "content": FALLBACK_MESSAGE})
+        logger.info(f"ℹ️ [BOT DEBUG] Gemini returned empty text for {conversation_id}, escalating to human")
+        await send_message({"conversation_id": conversation_id, "content": FALLBACK_MESSAGE}, skip_bot_trigger=True)
         await _escalate_to_human(conversation, message_text)
         return
 
     normalized_reply = reply.strip().lower()
     requires_escalation = normalized_reply == FALLBACK_MESSAGE.lower()
 
-    send_result = await send_message({"conversation_id": conversation_id, "content": reply})
+    logger.info(f"🔍 [BOT DEBUG] Sending bot reply for conversation {conversation_id}, reply length: {len(reply)}")
+    send_result = await send_message({"conversation_id": conversation_id, "content": reply}, skip_bot_trigger=True)
+    
     if isinstance(send_result, dict) and send_result.get("error"):
-        logger.warning("Bot send failed for %s: %s", conversation_id, send_result)
+        logger.error(f"❌ [BOT DEBUG] Bot send failed for {conversation_id}: {send_result}")
         if message_type and message_type != "text":
-            logger.info("Disabling bot for %s after unsupported content", conversation_id)
+            logger.info(f"ℹ️ [BOT DEBUG] Disabling bot for {conversation_id} after unsupported content")
             await set_conversation_bot_mode(conversation_id, False)
         return
 
-    logger.info("Bot reply sent for conversation %s (length=%d)", conversation_id, len(reply))
+    logger.info(f"✅ [BOT DEBUG] Bot reply sent successfully for conversation {conversation_id} (length={len(reply)})")
     await supabase_execute(
         supabase.table("conversations")
         .update({"bot_last_reply_at": datetime.now(timezone.utc).isoformat()})
         .eq("id", conversation_id)
     )
+    logger.info(f"✅ [BOT DEBUG] Updated bot_last_reply_at for conversation {conversation_id}")
     # Invalider le cache pour garantir la cohérence
     from app.core.cache import invalidate_cache_pattern
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
@@ -958,13 +1004,24 @@ async def _send_to_whatsapp_with_retry(phone_id: str, token: str, body: dict) ->
     return response
 
 
-async def send_message(payload: dict):
+async def send_message(payload: dict, skip_bot_trigger: bool = False):
+    """
+    Envoie un message WhatsApp.
+    
+    Args:
+        payload: Dict avec 'conversation_id' et 'content'
+        skip_bot_trigger: Si True, ne déclenche pas le bot après envoi (utilisé quand le bot envoie lui-même)
+    """
     import asyncio
+    
+    print(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}")
+    logger.info(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}")
     
     conv_id = payload.get("conversation_id")
     text = payload.get("content")
 
     if not conv_id or not text:
+        print(f"❌ [SEND MESSAGE] Invalid payload: conv_id={conv_id}, text_length={len(text or '')}")
         return {"error": "invalid_payload", "message": "conversation_id and content are required"}
 
     # Récupérer la conversation (avec cache)
@@ -1021,6 +1078,8 @@ async def send_message(payload: dict):
     except ValueError:
         response_json = None
 
+    # Retourner immédiatement après l'envoi à WhatsApp
+    # L'insertion en base se fera en arrière-plan pour ne pas bloquer la réponse
     message_payload = {
         "conversation_id": conv_id,
         "direction": "outbound",
@@ -1031,13 +1090,23 @@ async def send_message(payload: dict):
         "status": "sent",
     }
 
-    # Paralléliser l'insertion du message et l'update de la conversation
-    await asyncio.gather(
-        supabase_execute(
-            supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
-        ),
-        _update_conversation_timestamp(conv_id, timestamp_iso)
-    )
+    # Exécuter l'insertion en base en arrière-plan (fire-and-forget)
+    async def _save_message_async():
+        try:
+            await asyncio.gather(
+                supabase_execute(
+                    supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+                ),
+                _update_conversation_timestamp(conv_id, timestamp_iso)
+            )
+        except Exception as e:
+            logger.error("Error saving message to database in background: %s", e, exc_info=True)
+    
+    # Lancer la sauvegarde en arrière-plan sans attendre
+    asyncio.create_task(_save_message_async())
+
+    # En mode production, le bot répond uniquement aux messages entrants via webhook
+    # On ne déclenche pas le bot pour les messages sortants depuis l'interface
 
     return {"status": "sent", "message_id": message_id}
 

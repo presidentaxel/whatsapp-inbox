@@ -16,3 +16,9 @@ export const setUserOverrides = (userId, overrides) =>
   api.put(`/admin/users/${userId}/overrides`, { overrides });
 export const deleteUser = (userId) => api.delete(`/admin/users/${userId}`);
 
+// Nouveau système de permissions par compte
+export const getUsersWithAccess = () => api.get("/admin/users/with-access");
+export const getAllAccountsForPermissions = () => api.get("/admin/accounts/all");
+export const updateUserAccountAccess = (userId, accountId, accessLevel) =>
+  api.put(`/admin/users/${userId}/accounts/${accountId}/access`, { access_level: accessLevel });
+
