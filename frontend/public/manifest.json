@@ -12,13 +12,13 @@
   "id": "whatsapp-lmdcvtc",
   "icons": [
     {
-      "src": "/192x192.svg",
+      "src": "/192x192.svg?v=v2.0.1",
       "sizes": "192x192",
       "type": "image/svg+xml",
       "purpose": "any maskable"
     },
     {
-      "src": "/512x512.svg",
+      "src": "/512x512.svg?v=v2.0.1",
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"
@@ -30,7 +30,7 @@
       "short_name": "Chat",
       "description": "Accéder aux conversations",
       "url": "/?mode=chat",
-      "icons": [{ "src": "/192x192.svg", "sizes": "192x192" }]
+      "icons": [{ "src": "/192x192.svg?v=v2.0.1", "sizes": "192x192" }]
     }
   ],
   "categories": ["business", "productivity", "communication"],

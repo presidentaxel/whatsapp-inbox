@@ -58,8 +58,15 @@ export function registerServiceWorker() {
     // Écouter les mises à jour du SW
     navigator.serviceWorker.addEventListener('controllerchange', () => {
       console.log('🔄 Service Worker mis à jour');
-      // Optionnel : afficher une notification à l'utilisateur
-      if (confirm('Une nouvelle version est disponible. Recharger ?')) {
+      // Recharger automatiquement pour forcer la mise à jour
+      window.location.reload();
+    });
+
+    // Écouter les messages du Service Worker
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'SW_UPDATED') {
+        console.log('🔄 Service Worker mis à jour:', event.data.version);
+        // Recharger automatiquement pour forcer la mise à jour
         window.location.reload();
       }
     });

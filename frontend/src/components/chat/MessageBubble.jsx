@@ -12,6 +12,7 @@ import {
 } from "react-icons/fi";
 import { api } from "../../api/axiosClient";
 import MessageReactions from "./MessageReactions";
+import MessageStatus from "./MessageStatus";
 
 const FETCHABLE_MEDIA = new Set(["audio", "voice", "image", "video", "document", "sticker"]);
 
@@ -255,16 +256,26 @@ export default function MessageBubble({ message, conversation, onReactionChange,
         renderBody(message)
       )}
       <div className="bubble__footer">
-        <small className="bubble__timestamp">
-          {timestamp}
-          {isEdited && !isDeletedForAll ? " · modifié" : ""}
-        </small>
+        <div className="bubble__footer-left">
+          <small className="bubble__timestamp">
+            {timestamp}
+            {isEdited && !isDeletedForAll ? " · modifié" : ""}
+          </small>
+          {!isDeletedForAll && (
+            <MessageReactions 
+              message={message} 
+              conversation={conversation} 
+              onReactionChange={onReactionChange}
+              forceOpen={forceReactionOpen}
+            />
+          )}
+        </div>
         {!isDeletedForAll && (
-          <MessageReactions 
-            message={message} 
-            conversation={conversation} 
-            onReactionChange={onReactionChange}
-            forceOpen={forceReactionOpen}
+          <MessageStatus 
+            status={message.status} 
+            isOwnMessage={mine}
+            conversation={conversation}
+            messageTimestamp={message.timestamp}
           />
         )}
       </div>

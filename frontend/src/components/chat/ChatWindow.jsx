@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiSearch, FiInfo } from "react-icons/fi";
 import { AiFillStar, AiOutlineStar } from "react-icons/ai";
 import { getMessages, sendMessage, editMessage, deleteMessageApi } from "../../api/messagesApi";
+import { markConversationRead } from "../../api/conversationsApi";
 import MessageBubble from "./MessageBubble";
 import AdvancedMessageInput from "./AdvancedMessageInput";
+import TypingIndicator from "./TypingIndicator";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 import { notifyNewMessage } from "../../utils/notifications";
@@ -25,6 +27,7 @@ export default function ChatWindow({
   const [reactionTargetId, setReactionTargetId] = useState(null);
   const [contextMenu, setContextMenu] = useState({ open: false, x: 0, y: 0, message: null });
   const [autoScroll, setAutoScroll] = useState(true);
+  const [otherTyping, setOtherTyping] = useState(false);
 
   const sortMessages = useCallback((items) => {
     return [...items].sort((a, b) => {
@@ -66,6 +69,20 @@ export default function ChatWindow({
     refreshMessages();
   }, [refreshMessages]);
 
+  // Marquer la conversation comme lue quand elle est ouverte et active
+  useEffect(() => {
+    if (conversationId && isWindowActive && conversation) {
+      // Marquer comme lue après un court délai pour éviter les appels trop fréquents
+      const markReadTimeout = setTimeout(() => {
+        markConversationRead(conversationId).catch((err) => {
+          console.error("Failed to mark conversation as read:", err);
+        });
+      }, 1000);
+
+      return () => clearTimeout(markReadTimeout);
+    }
+  }, [conversationId, isWindowActive, conversation]);
+
   // Fermer le menu contextuel sur clic ailleurs ou scroll
   useEffect(() => {
     const closeMenu = () => setContextMenu((prev) => ({ ...prev, open: false }));
@@ -98,6 +115,42 @@ export default function ChatWindow({
     };
   }, [conversationId, refreshMessages, isWindowActive]);
 
+  // Détecter si l'autre personne est en train d'écrire
+  // Basé sur le timing des messages entrants récents
+  useEffect(() => {
+    if (!conversationId || !isWindowActive || messages.length === 0) {
+      return;
+    }
+
+    // Trouver le dernier message entrant
+    const lastInboundMessage = messages
+      .filter(m => (m.direction === "inbound" || (!m.from_me && m.direction !== "outbound")) && m.message_type !== "reaction")
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())[0];
+
+    if (!lastInboundMessage) {
+      setOtherTyping(false);
+      return;
+    }
+
+    const messageTime = new Date(lastInboundMessage.timestamp || 0).getTime();
+    const now = Date.now();
+    const timeSinceMessage = now - messageTime;
+
+    // Si le dernier message entrant date de moins de 8 secondes,
+    // simuler "en train d'écrire" pour indiquer que l'autre personne est active
+    // (approximation car WhatsApp Cloud API ne fournit pas cette info directement)
+    if (timeSinceMessage < 8000 && timeSinceMessage > 500) {
+      setOtherTyping(true);
+      const typingTimeout = setTimeout(() => {
+        setOtherTyping(false);
+      }, Math.max(0, 8000 - timeSinceMessage));
+      
+      return () => clearTimeout(typingTimeout);
+    } else {
+      setOtherTyping(false);
+    }
+  }, [messages, conversationId, isWindowActive]);
+
   useEffect(() => {
     if (!conversationId) {
       return undefined;
@@ -120,6 +173,9 @@ export default function ChatWindow({
           if (incoming.message_type === "reaction") {
             return;
           }
+          
+          // Si c'est un message entrant (de l'autre personne), 
+          // l'indicateur "en train d'écrire" sera géré par le useEffect qui surveille les messages
           
           // Afficher une notification si c'est un message entrant et que la fenêtre n'est pas au premier plan
           const hasFocus = document.hasFocus?.() === true;
@@ -146,6 +202,8 @@ export default function ChatWindow({
         },
         (payload) => {
           const updated = payload.new;
+          // Si le statut d'un message sortant a changé (sent → delivered → read),
+          // mettre à jour la liste pour afficher le nouveau statut
           setMessages((prev) =>
             sortMessages(prev.map((msg) => (msg.id === updated.id ? updated : msg)))
           );
@@ -370,6 +428,7 @@ export default function ChatWindow({
               onContextMenu={(e) => handleContextMenu(e, m)}
             />
           ))}
+          {otherTyping && <TypingIndicator />}
           <div ref={messagesEndRef} />
         </div>
 

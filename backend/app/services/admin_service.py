@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Sequence
 from collections import defaultdict
+import asyncio
+import logging
 
 from fastapi import HTTPException
 
 from app.core.db import supabase
+from app.core.cache import get_cache, invalidate_cache_pattern
+
+logger = logging.getLogger(__name__)
 
 
 def list_permissions() -> Sequence[Dict[str, Any]]:
@@ -154,6 +159,17 @@ def set_user_roles(user_id: str, assignments: Sequence[Dict[str, Any]]):
                 }
             )
         supabase.table("app_user_roles").upsert(payload).execute()
+    
+    # Invalider le cache de manière asynchrone (fire-and-forget)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_invalidate_user_cache_async(user_id))
+        else:
+            loop.run_until_complete(_invalidate_user_cache_async(user_id))
+    except RuntimeError:
+        # Pas de boucle d'événements, créer une nouvelle
+        asyncio.run(_invalidate_user_cache_async(user_id))
 
 
 def set_user_overrides(user_id: str, overrides: Sequence[Dict[str, Any]]):
@@ -248,6 +264,21 @@ def list_users_with_access() -> Sequence[Dict[str, Any]]:
     return users
 
 
+async def _invalidate_user_cache_async(user_id: str):
+    """Invalide le cache de l'utilisateur pour forcer le rechargement des permissions"""
+    # Invalider tous les caches d'authentification (brutal mais efficace)
+    # On va invalider le pattern "auth_user:*" qui correspond à tous les utilisateurs
+    # car on ne peut pas facilement lier un token_hash à un user_id
+    # En production, on pourrait utiliser une table de mapping token -> user_id
+    try:
+        # Invalider tous les caches auth (tous les utilisateurs)
+        # C'est acceptable car le cache TTL est court (2 minutes)
+        await invalidate_cache_pattern("auth_user:")
+        logger.info(f"Cache invalidated for all users after permission change for user {user_id}")
+    except Exception as e:
+        logger.warning(f"Could not invalidate cache for user {user_id}: {e}")
+
+
 def set_user_account_access(user_id: str, account_id: str, access_level: str):
     """Définit l'accès d'un utilisateur à un compte WhatsApp"""
     if access_level not in ["full", "lecture", "aucun"]:
@@ -275,5 +306,17 @@ def set_user_account_access(user_id: str, account_id: str, access_level: str):
             "account_id": account_id,
             "access_level": access_level,
         }).execute()
+    
+    # Invalider le cache de manière asynchrone (fire-and-forget)
+    # On ne peut pas await ici car la fonction est synchrone, donc on crée une tâche
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.create_task(_invalidate_user_cache_async(user_id))
+        else:
+            loop.run_until_complete(_invalidate_user_cache_async(user_id))
+    except RuntimeError:
+        # Pas de boucle d'événements, créer une nouvelle
+        asyncio.run(_invalidate_user_cache_async(user_id))
 
 

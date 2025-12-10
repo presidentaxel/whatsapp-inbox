@@ -1920,6 +1920,124 @@ body {
   margin-top: 4px;
 }
 
+.bubble__footer-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+/* Indicateurs de statut des messages */
+.message-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.message-status--sent {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.message-status--delivered {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.message-status--read {
+  color: #53bdeb; /* Bleu WhatsApp pour "lu" */
+}
+
+.message-status--failed {
+  color: #f15c6d;
+  opacity: 1;
+}
+
+.message-status svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Pour les messages dans le thème clair */
+[data-theme="light"] .message-status--sent {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] .message-status--delivered {
+  color: rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] .message-status--read {
+  color: #53bdeb;
+}
+
+[data-theme="light"] .message-status--failed {
+  color: #f15c6d;
+}
+
+/* Indicateur "en train d'écrire" */
+.typing-indicator {
+  display: flex;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.typing-indicator__bubble {
+  background: var(--bg-secondary);
+  border-radius: 18px;
+  padding: 12px 16px;
+  display: inline-block;
+  max-width: 80px;
+}
+
+.typing-indicator__dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.typing-indicator__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  animation: typingDot 1.4s infinite ease-in-out;
+}
+
+.typing-indicator__dot:nth-child(1) {
+  animation-delay: -0.32s;
+}
+
+.typing-indicator__dot:nth-child(2) {
+  animation-delay: -0.16s;
+}
+
+.typing-indicator__dot:nth-child(3) {
+  animation-delay: 0;
+}
+
+@keyframes typingDot {
+  0%, 80%, 100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Pour le thème clair */
+[data-theme="light"] .typing-indicator__bubble {
+  background: var(--bg-tertiary);
+}
+
+[data-theme="light"] .typing-indicator__dot {
+  background: rgba(0, 0, 0, 0.4);
+}
+
 /* Styles pour les réactions */
 .message-reactions {
   position: absolute;

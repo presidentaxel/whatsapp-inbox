@@ -1,11 +1,20 @@
 // Service Worker pour PWA avec notifications en arrière-plan
-const CACHE_NAME = 'lmdcvtc-whatsapp-v1';
+// IMPORTANT: Incrémenter cette version à chaque déploiement pour forcer la mise à jour
+// Cette version est aussi utilisée pour forcer la mise à jour des icônes PWA
+const SW_VERSION = 'v2.0.1';
+const CACHE_NAME = `lmdcvtc-whatsapp-${SW_VERSION}`;
+
+// URLs des icônes avec version pour forcer la mise à jour
+const ICON_192 = `/192x192.svg?v=${SW_VERSION}`;
+const ICON_512 = `/512x512.svg?v=${SW_VERSION}`;
+const MANIFEST = `/manifest.json?v=${SW_VERSION}`;
+
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
-  '/manifest.json',
-  '/192x192.svg',
-  '/512x512.svg'
+  MANIFEST,
+  ICON_192,
+  ICON_512
 ];
 
 // Intervalle pour vérifier les nouveaux messages quand l'app est en arrière-plan
@@ -36,14 +45,14 @@ self.addEventListener('install', (event) => {
 
 // Activation du Service Worker
 self.addEventListener('activate', (event) => {
-  console.log('Service Worker: Activation');
+  console.log(`Service Worker: Activation (version ${SW_VERSION})`);
   event.waitUntil(
     Promise.all([
       // Nettoyer les anciens caches
       caches.keys().then((cacheNames) => {
         return Promise.all(
           cacheNames.map((cache) => {
-            if (cache !== CACHE_NAME) {
+            if (cache !== CACHE_NAME && cache.startsWith('lmdcvtc-whatsapp-')) {
               console.log('Service Worker: Suppression ancien cache', cache);
               return caches.delete(cache);
             }
@@ -53,7 +62,17 @@ self.addEventListener('activate', (event) => {
       // Prendre le contrôle de toutes les pages (important pour macOS)
       self.clients.claim()
     ]).then(() => {
-      console.log('Service Worker: Activé et prêt pour les notifications');
+      console.log(`Service Worker: Activé et prêt pour les notifications (version ${SW_VERSION})`);
+      // Notifier tous les clients de la nouvelle version
+      return self.clients.matchAll({ includeUncontrolled: true, type: 'window' }).then((clients) => {
+        clients.forEach((client) => {
+          client.postMessage({
+            type: 'SW_UPDATED',
+            version: SW_VERSION,
+            message: 'Une nouvelle version est disponible. Veuillez recharger la page.'
+          });
+        });
+      });
     })
   );
 });
@@ -137,8 +156,8 @@ self.addEventListener('push', (event) => {
         title: data.title || notificationData.title,
         body: data.body || notificationData.body,
         conversationId: data.conversationId || null,
-        icon: data.icon || '/192x192.svg',
-        badge: data.badge || '/192x192.svg',
+        icon: data.icon || ICON_192,
+        badge: data.badge || ICON_192,
         image: data.image || null // Image du contact pour notification riche
       };
     } catch (e) {
@@ -151,9 +170,9 @@ self.addEventListener('push', (event) => {
   const options = {
     body: notificationData.body,
     // Icon = image de profil du contact (affiché en rond)
-    icon: notificationData.icon || '/192x192.svg',
+    icon: notificationData.icon || ICON_192,
     // Badge = icône WhatsApp (petite icône dans le coin)
-    badge: '/192x192.svg',
+    badge: ICON_192,
     // Image = image de profil large pour notifications riches (si supporté)
     image: notificationData.image || null,
     // Vibration courte et double (style WhatsApp)

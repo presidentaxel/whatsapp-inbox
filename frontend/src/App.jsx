@@ -161,7 +161,11 @@ export default function App() {
   }
 
   if (deviceType === "mobile") {
-    return <MobileApp />;
+    return (
+      <AuthProvider>
+        <MobileApp />
+      </AuthProvider>
+    );
   }
 
   // Desktop + tablettes large : on sert l'UI desktop
