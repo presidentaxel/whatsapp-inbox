@@ -1955,6 +1955,68 @@ body {
   opacity: 1;
 }
 
+.message-status-container {
+  position: relative;
+  display: inline-block;
+}
+
+.message-status--resend {
+  background: rgba(241, 92, 109, 0.15);
+  border: 1px solid rgba(241, 92, 109, 0.3);
+  border-radius: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 1;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.message-status--resend:hover {
+  background: rgba(241, 92, 109, 0.25);
+  border-color: rgba(241, 92, 109, 0.5);
+  transform: translateY(-1px);
+}
+
+.message-status--resend:active {
+  transform: translateY(0);
+}
+
+.message-status__error-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.message-status__resend-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: #f15c6d;
+}
+
+.message-status__resend-icon {
+  width: 12px;
+  height: 12px;
+  color: #f15c6d;
+  animation: none;
+}
+
+.message-status--resend:hover .message-status__resend-icon {
+  animation: spin 0.6s ease-in-out;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .message-status svg {
   width: 14px;
   height: 14px;
@@ -1975,6 +2037,97 @@ body {
 
 [data-theme="light"] .message-status--failed {
   color: #f15c6d;
+}
+
+[data-theme="light"] .message-status--resend {
+  background: rgba(241, 92, 109, 0.1);
+  border-color: rgba(241, 92, 109, 0.25);
+}
+
+[data-theme="light"] .message-status--resend:hover {
+  background: rgba(241, 92, 109, 0.2);
+  border-color: rgba(241, 92, 109, 0.4);
+}
+
+[data-theme="light"] .message-status__resend-text {
+  color: #dc2626;
+}
+
+[data-theme="light"] .message-status__resend-icon {
+  color: #dc2626;
+}
+
+/* Tooltip d'erreur */
+.message-status__error-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: rgba(17, 27, 33, 0.98);
+  border: 1px solid rgba(241, 92, 109, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  min-width: 250px;
+  max-width: 300px;
+  max-height: 200px;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  pointer-events: none;
+  animation: tooltipFadeIn 0.2s ease;
+  /* S'assurer que le tooltip reste dans la page */
+  word-wrap: break-word;
+}
+
+.message-status__error-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  right: 20px;
+  border: 6px solid transparent;
+  border-top-color: rgba(241, 92, 109, 0.3);
+}
+
+.message-status__error-tooltip-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f15c6d;
+}
+
+.message-status__error-tooltip-header svg {
+  width: 14px;
+  height: 14px;
+}
+
+.message-status__error-tooltip-content {
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.8);
+  word-wrap: break-word;
+}
+
+@keyframes tooltipFadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+[data-theme="light"] .message-status__error-tooltip {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(241, 92, 109, 0.4);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="light"] .message-status__error-tooltip-content {
+  color: rgba(0, 0, 0, 0.8);
 }
 
 /* Indicateur "en train d'écrire" */

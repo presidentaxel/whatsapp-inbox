@@ -4,6 +4,7 @@ import {
   markConversationRead,
   toggleConversationFavorite,
   toggleConversationBotMode,
+  findOrCreateConversation,
 } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
 import { getContacts } from "../api/contactsApi";
@@ -33,6 +34,7 @@ export default function InboxPage() {
   const [contactSearch, setContactSearch] = useState("");
   const [selectedContact, setSelectedContact] = useState(null);
   const [isWindowActive, setIsWindowActive] = useState(true);
+  const [conversationSearch, setConversationSearch] = useState("");
   const canViewContacts = hasPermission?.("contacts.view");
   
   const loadAccounts = useCallback(async () => {
@@ -70,14 +72,45 @@ export default function InboxPage() {
   }, []);
 
   const refreshConversations = useCallback(
-    (accountId = activeAccount) => {
+    async (accountId = activeAccount) => {
       if (!accountId) return;
-      getConversations(accountId).then((res) => {
-        setConversations(res.data);
-        setSelectedConversation((prev) =>
-          prev ? res.data.find((c) => c.id === prev.id) ?? null : null
-        );
-      });
+      
+      // Charger toutes les conversations avec pagination
+      let allConversations = [];
+      let hasMore = true;
+      let cursor = null;
+      const limit = 200; // Maximum autorisé par l'API
+      
+      while (hasMore) {
+        try {
+          const res = await getConversations(accountId, { limit, cursor });
+          const conversations = res.data || [];
+          
+          if (conversations.length === 0) {
+            hasMore = false;
+            break;
+          }
+          
+          allConversations = [...allConversations, ...conversations];
+          
+          // Si on a moins de messages que la limite, on a tout chargé
+          if (conversations.length < limit) {
+            hasMore = false;
+          } else {
+            // Utiliser le updated_at de la dernière conversation comme cursor
+            const lastConversation = conversations[conversations.length - 1];
+            cursor = lastConversation.updated_at;
+          }
+        } catch (error) {
+          console.error("Error loading conversations:", error);
+          hasMore = false;
+        }
+      }
+      
+      setConversations(allConversations);
+      setSelectedConversation((prev) =>
+        prev ? allConversations.find((c) => c.id === prev.id) ?? null : null
+      );
     },
     [activeAccount]
   );
@@ -408,7 +441,31 @@ export default function InboxPage() {
                 </button>
               </div>
               <div className="conversation-search">
-                <input placeholder="Rechercher ou démarrer une discussion" />
+                <input 
+                  placeholder="Taper un numéro et appuyer sur Entrée (ex: +33612345678)" 
+                  value={conversationSearch}
+                  onChange={(e) => setConversationSearch(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter" && conversationSearch.trim() && activeAccount) {
+                      const phoneNumber = conversationSearch.trim();
+                      // Vérifier si c'est un numéro de téléphone (contient des chiffres)
+                      if (/\d/.test(phoneNumber)) {
+                        try {
+                          const res = await findOrCreateConversation(activeAccount, phoneNumber);
+                          if (res.data) {
+                            setSelectedConversation(res.data);
+                            setConversationSearch("");
+                            refreshConversations(activeAccount);
+                          }
+                        } catch (error) {
+                          console.error("Erreur lors de la création de la conversation:", error);
+                          const errorMsg = error.response?.data?.detail || error.message || "Erreur inconnue";
+                          alert(`Impossible de créer la conversation: ${errorMsg}`);
+                        }
+                      }
+                    }
+                  }}
+                />
               </div>
 
               <ConversationList

@@ -1,5 +1,6 @@
 import logging
 import sys
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -27,6 +28,10 @@ from app.services.message_service import (
     _download_and_store_media_async,
     remove_reaction,
     send_message,
+    send_free_message,
+    send_message_with_template_fallback,
+    is_within_free_window,
+    calculate_message_price,
     send_media_message_with_storage,
     send_interactive_message_with_storage,
     send_reaction_to_whatsapp,
@@ -97,6 +102,10 @@ async def fetch_message_media(
 
 @router.post("/send")
 async def send_api_message(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Envoie un message WhatsApp. Envoie toujours le message texte normalement, même hors fenêtre.
+    Affiche toujours le prix du message (gratuit si dans fenêtre de 24h, payant sinon).
+    """
     print(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
     logger.info(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
     conversation_id = payload.get("conversation_id")
@@ -115,7 +124,140 @@ async def send_api_message(payload: dict, current_user: CurrentUser = Depends(ge
         raise HTTPException(status_code=403, detail="write_access_denied")
     
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
-    return await send_message(payload)
+    
+    # Envoyer le message normalement (force_send=True pour toujours envoyer, même hors fenêtre)
+    # WhatsApp facturera automatiquement si hors fenêtre
+    result = await send_message(payload, force_send=True)
+    
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result.get("message", result.get("error")))
+    
+    return result
+
+
+@router.post("/send-free")
+async def send_free_api_message(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Envoie un message WhatsApp uniquement si on est dans la fenêtre gratuite de 24h.
+    
+    Cette fonction vérifie automatiquement si le dernier message entrant date de moins de 24h.
+    Si oui, le message est envoyé gratuitement. Sinon, une erreur est retournée indiquant
+    qu'un template de message est nécessaire.
+    
+    Payload:
+    {
+        "conversation_id": "uuid",
+        "content": "Texte du message"
+    }
+    """
+    conversation_id = payload.get("conversation_id")
+    if not conversation_id:
+        raise HTTPException(status_code=400, detail="conversation_id_required")
+    
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    # Vérifier que l'utilisateur a accès au compte
+    access_level = current_user.permissions.account_access_levels.get(conversation["account_id"])
+    if access_level == "aucun":
+        raise HTTPException(status_code=403, detail="account_access_denied")
+    if access_level == "lecture":
+        raise HTTPException(status_code=403, detail="write_access_denied")
+    
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+    
+    result = await send_free_message(payload)
+    
+    # Si erreur de fenêtre expirée, retourner 400 avec détails
+    if result.get("error") == "free_window_expired":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "free_window_expired",
+                "message": result.get("message"),
+                "last_inbound_time": result.get("last_inbound_time"),
+                "requires_template": True
+            }
+        )
+    
+    # Autres erreurs
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result.get("message", result.get("error")))
+    
+    return result
+
+
+@router.get("/free-window/{conversation_id}")
+async def check_free_window(
+    conversation_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Vérifie si on est dans la fenêtre gratuite de 24h pour une conversation.
+    
+    Returns:
+    {
+        "is_free": true/false,
+        "last_inbound_time": "2024-01-01T12:00:00Z" ou null,
+        "hours_elapsed": 12.5 (si hors fenêtre),
+        "hours_remaining": 11.5 (si dans fenêtre)
+    }
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    is_free, last_inbound_time = await is_within_free_window(conversation_id)
+    
+    result = {
+        "is_free": is_free,
+        "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None
+    }
+    
+    if last_inbound_time:
+        now = datetime.now(timezone.utc)
+        hours_elapsed = (now - last_inbound_time).total_seconds() / 3600
+        result["hours_elapsed"] = round(hours_elapsed, 2)
+        
+        if is_free:
+            result["hours_remaining"] = round(24.0 - hours_elapsed, 2)
+        else:
+            result["hours_remaining"] = 0
+    
+    return result
+
+
+@router.get("/price/{conversation_id}")
+async def get_message_price(
+    conversation_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Calcule le prix d'un message pour une conversation.
+    Utilise un message conversationnel normal (pas de template) si hors fenêtre.
+    
+    Returns:
+    {
+        "is_free": true/false,
+        "price_usd": 0.02,
+        "price_eur": 0.018,
+        "currency": "USD",
+        "category": "free" ou "conversational",
+        "last_inbound_time": "2024-01-01T12:00:00Z" ou null
+    }
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    # Calculer le prix avec message conversationnel (pas de template)
+    price_info = await calculate_message_price(conversation_id, use_conversational=True)
+    return price_info
 
 
 @router.post("/send-media")
@@ -348,6 +490,35 @@ async def delete_message(
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result["message"]
+
+
+@router.delete("/{message_id}")
+async def permanently_delete_message(
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Supprime définitivement un message de la base de données.
+    Utilisé pour supprimer les messages échoués avant de les renvoyer.
+    """
+    from app.core.db import supabase_execute, supabase
+    
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+
+    # Supprimer définitivement le message
+    await supabase_execute(
+        supabase.table("messages").delete().eq("id", message_id)
+    )
+    
+    return {"status": "deleted", "message_id": message_id}
 
 
 @router.post("/reactions/add")

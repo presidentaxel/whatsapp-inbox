@@ -9,6 +9,7 @@ from app.services.conversation_service import (
     mark_conversation_unread,
     set_conversation_bot_mode,
     set_conversation_favorite,
+    find_or_create_conversation,
 )
 
 router = APIRouter()
@@ -17,7 +18,7 @@ router = APIRouter()
 @router.get("")
 async def list_conversations(
     account_id: str = Query(..., description="WhatsApp account ID"),
-    limit: int = Query(50, ge=1, le=200, description="Nombre max de conversations"),
+    limit: int = Query(200, ge=1, le=200, description="Nombre max de conversations"),
     cursor: str | None = Query(
         None, description="ISO timestamp cursor: retourne les conversations avant cette date"
     ),
@@ -84,3 +85,64 @@ async def toggle_bot(
     if not updated:
         raise HTTPException(status_code=500, detail="bot_toggle_failed")
     return {"status": "ok", "conversation": updated}
+
+
+@router.post("/find-or-create")
+async def find_or_create(
+    payload: dict, current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Trouve ou crée une conversation avec un numéro de téléphone.
+    
+    Payload:
+    {
+        "account_id": "uuid",
+        "phone_number": "+33612345678" ou "06 12 34 56 78" (format libre)
+    }
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    account_id = payload.get("account_id")
+    phone_number = payload.get("phone_number")
+    
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+    if not phone_number:
+        raise HTTPException(status_code=400, detail="phone_number is required")
+    
+    # Vérifier que l'utilisateur a accès au compte
+    if current_user.permissions.account_access_levels.get(account_id) == "aucun":
+        raise HTTPException(status_code=403, detail="account_access_denied")
+    
+    current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
+    
+    try:
+        logger.info(f"Creating/finding conversation: account_id={account_id}, phone={phone_number}")
+        conversation = await find_or_create_conversation(account_id, phone_number)
+        
+        if not conversation:
+            logger.error(f"Failed to create conversation: account_id={account_id}, phone={phone_number}")
+            raise HTTPException(
+                status_code=400, 
+                detail="Failed to create conversation. Please check the phone number format (e.g., +33612345678 or 0612345678) and ensure the account exists."
+            )
+        
+        logger.info(f"Successfully created/found conversation: {conversation.get('id')}")
+        return conversation
+    except ValueError as ve:
+        # Erreur de validation du numéro de téléphone
+        logger.warning(f"Phone number validation error: {ve}")
+        raise HTTPException(
+            status_code=400,
+            detail=str(ve) or "Invalid phone number format. Please use format like +33612345678 or 0612345678"
+        )
+    except HTTPException as he:
+        # Re-raise HTTPException avec le message original
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in find_or_create: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred while creating the conversation. Please try again or contact support if the issue persists."
+        )

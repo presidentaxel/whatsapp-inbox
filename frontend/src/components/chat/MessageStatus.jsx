@@ -1,4 +1,5 @@
-import { FiCheck, FiCheckCircle } from "react-icons/fi";
+import { useState } from "react";
+import { FiCheck, FiCheckCircle, FiRefreshCw, FiInfo } from "react-icons/fi";
 
 /**
  * Composant pour afficher le statut d'un message (coches)
@@ -6,7 +7,8 @@ import { FiCheck, FiCheckCircle } from "react-icons/fi";
  * Pour les messages SORTANTS (qu'on envoie) : sent, delivered, read (masqué)
  * Pour les messages ENTRANTS (qu'on reçoit) : reçu, lu (si conversation marquée comme lue)
  */
-export default function MessageStatus({ status, isOwnMessage, conversation, messageTimestamp }) {
+export default function MessageStatus({ status, isOwnMessage, conversation, messageTimestamp, message, onResend }) {
+  const [showErrorTooltip, setShowErrorTooltip] = useState(false);
   // Pour les messages sortants (qu'on envoie) : afficher les statuts WhatsApp
   if (isOwnMessage) {
     const normalizedStatus = (status || "sent").toLowerCase();
@@ -40,10 +42,40 @@ export default function MessageStatus({ status, isOwnMessage, conversation, mess
 
       case "failed":
       case "error":
+        const errorMessage = message?.error_message;
         return (
-          <span className="message-status message-status--failed" title="Échec">
-            ⚠️
-          </span>
+          <div 
+            className="message-status-container"
+            onMouseEnter={() => errorMessage && setShowErrorTooltip(true)}
+            onMouseLeave={() => setShowErrorTooltip(false)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="message-status message-status--failed message-status--resend"
+              title={errorMessage || "Message non envoyé - Cliquez pour renvoyer"}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onResend && message) {
+                  onResend(message);
+                }
+              }}
+            >
+              <span className="message-status__error-icon">⚠️</span>
+              <span className="message-status__resend-text">Renvoyer</span>
+              <FiRefreshCw className="message-status__resend-icon" />
+            </button>
+            {errorMessage && showErrorTooltip && (
+              <div className="message-status__error-tooltip">
+                <div className="message-status__error-tooltip-header">
+                  <FiInfo />
+                  <span>Détails de l'erreur</span>
+                </div>
+                <div className="message-status__error-tooltip-content">
+                  {errorMessage}
+                </div>
+              </div>
+            )}
+          </div>
         );
 
       default:

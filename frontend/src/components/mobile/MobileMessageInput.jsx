@@ -226,7 +226,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
           lang="fr"
           placeholder={
             discussionPrefs?.enterToSend
-              ? "Message (Shift+Entrée pour une nouvelle ligne)"
+              ? "Message"
               : "Message (Ctrl+Entrée pour envoyer)"
           }
           disabled={disabled || uploading}

@@ -18,6 +18,12 @@ from app.services.account_service import (
 )
 from app.services.conversation_service import get_conversation_by_id, set_conversation_bot_mode
 from app.services.profile_picture_service import queue_profile_picture_update
+from app.services.whatsapp_api_service import (
+    get_phone_number_details,
+    list_message_templates,
+    create_message_template,
+    send_template_message,
+)
 
 FALLBACK_MESSAGE = "Je me renseigne auprès d'un collègue et je reviens vers vous au plus vite."
 
@@ -443,6 +449,24 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
     status_value = status_payload.get("status")
     recipient_id = status_payload.get("recipient_id")
     timestamp_iso = _timestamp_to_iso(status_payload.get("timestamp"))
+    
+    # Extraire les informations d'erreur si le statut est "failed"
+    error_message = None
+    if status_value == "failed":
+        # WhatsApp peut envoyer des détails d'erreur dans différents champs
+        errors = status_payload.get("errors", [])
+        if errors and isinstance(errors, list) and len(errors) > 0:
+            # Prendre le premier message d'erreur
+            error_obj = errors[0]
+            error_code = error_obj.get("code")
+            error_title = error_obj.get("title", "")
+            error_details = error_obj.get("details", "")
+            error_message = f"Code {error_code}: {error_title}"
+            if error_details:
+                error_message += f" - {error_details}"
+        elif status_payload.get("error"):
+            # Format alternatif
+            error_message = str(status_payload.get("error"))
 
     if not message_id or not status_value:
         return
@@ -456,9 +480,12 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
 
     if existing.data:
         record = existing.data[0]
+        update_data = {"status": status_value, "timestamp": timestamp_iso}
+        if error_message:
+            update_data["error_message"] = error_message
         await supabase_execute(
             supabase.table("messages")
-            .update({"status": status_value, "timestamp": timestamp_iso})
+            .update(update_data)
             .eq("id", record["id"])
         )
         await _update_conversation_timestamp(record["conversation_id"], timestamp_iso)
@@ -607,6 +634,26 @@ async def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Op
     # Invalider le cache pour garantir la cohérence
     from app.core.cache import invalidate_cache_pattern
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
+
+
+async def _save_failed_message(conversation_id: str, content_text: str, timestamp_iso: str, error_message: str):
+    """Stocke un message échoué dans la base de données"""
+    try:
+        message_payload = {
+            "conversation_id": conversation_id,
+            "direction": "outbound",
+            "content_text": content_text,
+            "timestamp": timestamp_iso,
+            "message_type": "text",
+            "status": "failed",
+            "error_message": error_message,
+        }
+        await supabase_execute(
+            supabase.table("messages").insert(message_payload)
+        )
+        await _update_conversation_timestamp(conversation_id, timestamp_iso)
+    except Exception as e:
+        logger.error("Error saving failed message to database: %s", e, exc_info=True)
 
 
 async def _increment_unread_count(conversation: Dict[str, Any]):
@@ -1004,18 +1051,22 @@ async def _send_to_whatsapp_with_retry(phone_id: str, token: str, body: dict) ->
     return response
 
 
-async def send_message(payload: dict, skip_bot_trigger: bool = False):
+async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send: bool = False):
     """
     Envoie un message WhatsApp.
+    
+    Si force_send=True, envoie même hors fenêtre gratuite (sera facturé comme message conversationnel par WhatsApp).
+    Si force_send=False, essaie d'abord gratuitement, puis utilise template si hors fenêtre.
     
     Args:
         payload: Dict avec 'conversation_id' et 'content'
         skip_bot_trigger: Si True, ne déclenche pas le bot après envoi (utilisé quand le bot envoie lui-même)
+        force_send: Si True, force l'envoi même hors fenêtre (sans template, message conversationnel normal)
     """
     import asyncio
     
-    print(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}")
-    logger.info(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}")
+    print(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}, force_send={force_send}")
+    logger.info(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}, force_send={force_send}")
     
     conv_id = payload.get("conversation_id")
     text = payload.get("content")
@@ -1023,6 +1074,13 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False):
     if not conv_id or not text:
         print(f"❌ [SEND MESSAGE] Invalid payload: conv_id={conv_id}, text_length={len(text or '')}")
         return {"error": "invalid_payload", "message": "conversation_id and content are required"}
+
+    # Vérifier si on est dans la fenêtre gratuite
+    is_free, last_inbound_time = await is_within_free_window(conv_id)
+    
+    # Si force_send=False et hors fenêtre, utiliser le système avec fallback template
+    if not force_send and not is_free:
+        return await send_message_with_template_fallback(payload, skip_bot_trigger=skip_bot_trigger)
 
     # Récupérer la conversation (avec cache)
     conversation = await get_conversation_by_id(conv_id)
@@ -1053,22 +1111,72 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False):
     # Utiliser le client HTTP partagé avec retry automatique
     timestamp_iso = datetime.now(timezone.utc).isoformat()
     
+    # Vérifier si on est dans la fenêtre gratuite pour le prix
+    is_free, _ = await is_within_free_window(conv_id)
+    # Utiliser message conversationnel (pas de template) si hors fenêtre
+    price_info = await calculate_message_price(conv_id, use_template=False, use_conversational=not is_free)
+    
     try:
         response = await _send_to_whatsapp_with_retry(phone_id, token, body)
     except httpx.HTTPError as exc:
         logger.error("WhatsApp API error after retries: %s", exc)
+        error_details = str(exc)
+        status_code = 0
+        if hasattr(exc, "response") and exc.response:
+            status_code = exc.response.status_code
+            try:
+                error_json = exc.response.json()
+                if isinstance(error_json, dict):
+                    error_obj = error_json.get("error", {})
+                    if isinstance(error_obj, dict):
+                        error_code = error_obj.get("code")
+                        error_message = error_obj.get("message", "")
+                        if error_code:
+                            error_details = f"Code {error_code}"
+                            if error_message:
+                                error_details += f": {error_message}"
+            except (ValueError, KeyError, AttributeError):
+                pass
+        
+        # Stocker le message échoué dans la base de données
+        await _save_failed_message(conv_id, text, timestamp_iso, error_details)
+        
         return {
             "error": "whatsapp_api_error",
-            "status_code": getattr(exc, "response", {}).get("status_code", 0),
-            "details": str(exc),
+            "status_code": status_code,
+            "details": error_details,
         }
 
     if response.is_error:
         logger.error("WhatsApp send error: %s %s", response.status_code, response.text)
+        error_details = response.text
+        try:
+            error_json = response.json()
+            if isinstance(error_json, dict):
+                error_obj = error_json.get("error", {})
+                if isinstance(error_obj, dict):
+                    error_code = error_obj.get("code")
+                    error_message = error_obj.get("message", "")
+                    error_type = error_obj.get("type", "")
+                    error_subcode = error_obj.get("error_subcode")
+                    if error_code:
+                        error_details = f"Code {error_code}"
+                        if error_type:
+                            error_details += f" ({error_type})"
+                        if error_message:
+                            error_details += f": {error_message}"
+                        if error_subcode:
+                            error_details += f" [Subcode: {error_subcode}]"
+        except (ValueError, KeyError):
+            pass
+        
+        # Stocker le message échoué dans la base de données
+        await _save_failed_message(conv_id, text, timestamp_iso, error_details)
+        
         return {
             "error": "whatsapp_api_error",
             "status_code": response.status_code,
-            "details": response.text,
+            "details": error_details,
         }
 
     message_id = None
@@ -1108,7 +1216,353 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False):
     # En mode production, le bot répond uniquement aux messages entrants via webhook
     # On ne déclenche pas le bot pour les messages sortants depuis l'interface
 
-    return {"status": "sent", "message_id": message_id}
+    result = {"status": "sent", "message_id": message_id}
+    result["is_free"] = is_free
+    result["price_usd"] = price_info.get("price_usd", 0.0)
+    result["price_eur"] = price_info.get("price_eur", 0.0)
+    result["category"] = price_info.get("category", "free" if is_free else "paid")
+    return result
+
+
+async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[datetime]]:
+    """
+    Vérifie si on est dans la fenêtre de 24h pour envoyer un message gratuit.
+    
+    WhatsApp Cloud API permet d'envoyer des messages gratuits pendant 24h
+    après le dernier message entrant d'un utilisateur.
+    
+    Returns:
+        Tuple[bool, Optional[datetime]]: 
+        - (True, last_inbound_time) si dans la fenêtre gratuite
+        - (False, last_inbound_time) si hors fenêtre (nécessite un template payant)
+        - (False, None) si aucun message entrant trouvé
+    """
+    # Récupérer le dernier message entrant de la conversation
+    last_inbound = await supabase_execute(
+        supabase.table("messages")
+        .select("timestamp")
+        .eq("conversation_id", conversation_id)
+        .eq("direction", "inbound")
+        .order("timestamp", desc=True)
+        .limit(1)
+    )
+    
+    if not last_inbound.data or len(last_inbound.data) == 0:
+        logger.warning(f"⚠️ No inbound messages found for conversation {conversation_id}")
+        return (False, None)
+    
+    last_inbound_time_str = last_inbound.data[0]["timestamp"]
+    
+    # Parser le timestamp
+    try:
+        if isinstance(last_inbound_time_str, str):
+            # Gérer différents formats de timestamp
+            if "T" in last_inbound_time_str:
+                last_inbound_time = datetime.fromisoformat(last_inbound_time_str.replace("Z", "+00:00"))
+            else:
+                last_inbound_time = datetime.fromisoformat(last_inbound_time_str)
+        else:
+            last_inbound_time = last_inbound_time_str
+        
+        # S'assurer que c'est timezone-aware
+        if last_inbound_time.tzinfo is None:
+            last_inbound_time = last_inbound_time.replace(tzinfo=timezone.utc)
+        
+        # Calculer la différence avec maintenant
+        now = datetime.now(timezone.utc)
+        time_diff = now - last_inbound_time
+        hours_elapsed = time_diff.total_seconds() / 3600
+        
+        # Fenêtre gratuite = 24 heures
+        is_free = hours_elapsed < 24.0
+        
+        logger.info(
+            f"🕐 Free window check for conversation {conversation_id}: "
+            f"last_inbound={last_inbound_time}, hours_elapsed={hours_elapsed:.2f}, is_free={is_free}"
+        )
+        
+        return (is_free, last_inbound_time)
+        
+    except Exception as e:
+        logger.error(f"❌ Error parsing timestamp {last_inbound_time_str}: {e}", exc_info=True)
+        return (False, None)
+
+
+async def calculate_message_price(conversation_id: str, use_template: bool = False, use_conversational: bool = False) -> Dict[str, Any]:
+    """
+    Calcule le prix d'un message WhatsApp.
+    
+    Args:
+        conversation_id: ID de la conversation
+        use_template: Si True, utilise un template UTILITY (le moins cher)
+        use_conversational: Si True, utilise un message conversationnel normal (plus cher que template)
+    
+    Returns:
+        Dict avec:
+        - is_free: bool
+        - price_usd: float (0.0 si gratuit)
+        - price_eur: float (0.0 si gratuit)
+        - currency: str
+        - category: str ("free", "utility", "conversational")
+        - last_inbound_time: Optional[datetime]
+    """
+    is_free, last_inbound_time = await is_within_free_window(conversation_id)
+    
+    if is_free and not use_template and not use_conversational:
+        return {
+            "is_free": True,
+            "price_usd": 0.0,
+            "price_eur": 0.0,
+            "currency": "USD",
+            "category": "free",
+            "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None
+        }
+    
+    if use_template:
+        # Prix des templates WhatsApp UTILITY (le moins cher)
+        # Prix moyen en Europe : ~0.005-0.01 USD par message UTILITY
+        utility_price_usd = 0.008
+        utility_price_eur = 0.007
+        return {
+            "is_free": False,
+            "price_usd": utility_price_usd,
+            "price_eur": utility_price_eur,
+            "currency": "USD",
+            "category": "utility",
+            "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None,
+            "template_required": True
+        }
+    
+    # Message conversationnel normal (hors fenêtre, sans template)
+    # Plus cher que les templates : ~0.015-0.03 USD en Europe
+    conversational_price_usd = 0.02
+    conversational_price_eur = 0.018
+    
+    return {
+        "is_free": False,
+        "price_usd": conversational_price_usd,
+        "price_eur": conversational_price_eur,
+        "currency": "USD",
+        "category": "conversational",
+        "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None,
+        "template_required": False
+    }
+
+
+async def _get_or_create_default_template(account: Dict[str, Any]) -> Optional[str]:
+    """
+    Récupère ou crée un template UTILITY par défaut pour envoyer des messages.
+    Retourne le nom du template ou None si erreur.
+    """
+    try:
+        phone_id = account.get("phone_number_id")
+        token = account.get("access_token")
+        
+        if not phone_id or not token:
+            return None
+        
+        # Récupérer le WABA ID depuis le phone number
+        try:
+            phone_details = await get_phone_number_details(phone_id, token)
+            waba_id = phone_details.get("waba_id") or phone_details.get("whatsapp_business_account_id")
+        except Exception as e:
+            logger.warning(f"Could not get WABA ID: {e}")
+            # Essayer avec phone_id directement (parfois phone_id = waba_id)
+            waba_id = phone_id
+        
+        if not waba_id:
+            logger.error("Could not determine WABA ID")
+            return None
+        
+        # Chercher un template UTILITY existant avec statut APPROVED
+        templates_res = await list_message_templates(waba_id, token, limit=100)
+        templates = templates_res.get("data", [])
+        
+        # Chercher un template UTILITY approuvé
+        for template in templates:
+            if (template.get("status") == "APPROVED" and 
+                template.get("category") == "UTILITY"):
+                logger.info(f"✅ Found existing UTILITY template: {template.get('name')}")
+                return template.get("name")
+        
+        # Si aucun template UTILITY trouvé, on ne peut pas en créer un automatiquement
+        # (nécessite validation Meta). On retourne None et l'utilisateur devra créer un template.
+        logger.warning("⚠️ No UTILITY template found. User must create one in Meta Business Manager.")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error getting/creating template: {e}", exc_info=True)
+        return None
+
+
+async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: bool = False):
+    """
+    Envoie un message WhatsApp. Essaie d'abord gratuitement, puis utilise un template UTILITY si hors fenêtre.
+    
+    Args:
+        payload: Dict avec 'conversation_id' et 'content'
+        skip_bot_trigger: Si True, ne déclenche pas le bot après envoi
+    
+    Returns:
+        Dict avec 'status', 'message_id', 'is_free', 'price_usd', etc.
+    """
+    conv_id = payload.get("conversation_id")
+    text = payload.get("content")
+
+    if not conv_id or not text:
+        return {"error": "invalid_payload", "message": "conversation_id and content are required"}
+
+    # Vérifier si on est dans la fenêtre gratuite
+    is_free, last_inbound_time = await is_within_free_window(conv_id)
+    
+    # Si gratuit, envoyer normalement
+    if is_free:
+        logger.info(f"✅ Sending free message within 24h window for conversation {conv_id}")
+        result = await send_message(payload, skip_bot_trigger=skip_bot_trigger)
+        if result.get("error"):
+            return result
+        result["is_free"] = True
+        result["price_usd"] = 0.0
+        result["price_eur"] = 0.0
+        return result
+    
+    # Hors fenêtre : utiliser un template UTILITY
+    logger.info(f"💰 Sending paid message with UTILITY template for conversation {conv_id}")
+    
+    conversation = await get_conversation_by_id(conv_id)
+    if not conversation:
+        return {"error": "conversation_not_found"}
+    
+    account = await get_account_by_id(conversation.get("account_id"))
+    if not account:
+        return {"error": "account_not_found"}
+    
+    # Récupérer ou créer un template UTILITY
+    template_name = await _get_or_create_default_template(account)
+    
+    if not template_name:
+        return {
+            "error": "template_required",
+            "message": (
+                "Aucun template UTILITY trouvé. Vous devez créer un template de message "
+                "dans Meta Business Manager avec la catégorie UTILITY pour envoyer des messages hors fenêtre gratuite."
+            ),
+            "requires_template": True
+        }
+    
+    # Envoyer via template
+    phone_id = account.get("phone_number_id") or settings.WHATSAPP_PHONE_ID
+    token = account.get("access_token") or settings.WHATSAPP_TOKEN
+    to_number = conversation["client_number"]
+    
+    try:
+        # Créer les composants du template avec le texte du message
+        components = [
+            {
+                "type": "BODY",
+                "text": text
+            }
+        ]
+        
+        response = await send_template_message(
+            phone_number_id=phone_id,
+            access_token=token,
+            to=to_number,
+            template_name=template_name,
+            language_code="fr",
+            components=components
+        )
+        
+        message_id = response.get("messages", [{}])[0].get("id")
+        timestamp_iso = datetime.now(timezone.utc).isoformat()
+        
+        # Sauvegarder le message
+        message_payload = {
+            "conversation_id": conv_id,
+            "direction": "outbound",
+            "content_text": text,
+            "timestamp": timestamp_iso,
+            "wa_message_id": message_id,
+            "message_type": "template",
+            "status": "sent",
+        }
+        
+        async def _save_message_async():
+            try:
+                await asyncio.gather(
+                    supabase_execute(
+                        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+                    ),
+                    _update_conversation_timestamp(conv_id, timestamp_iso)
+                )
+            except Exception as e:
+                logger.error("Error saving template message to database: %s", e, exc_info=True)
+        
+        asyncio.create_task(_save_message_async())
+        
+        price_info = await calculate_message_price(conv_id, use_template=True)
+        
+        return {
+            "status": "sent",
+            "message_id": message_id,
+            "is_free": False,
+            "price_usd": price_info["price_usd"],
+            "price_eur": price_info["price_eur"],
+            "category": "utility",
+            "template_name": template_name
+        }
+        
+    except Exception as e:
+        logger.error(f"Error sending template message: {e}", exc_info=True)
+        return {
+            "error": "template_send_error",
+            "message": f"Erreur lors de l'envoi via template: {str(e)}"
+        }
+
+
+async def send_free_message(payload: dict, skip_bot_trigger: bool = False):
+    """
+    Envoie un message WhatsApp uniquement si on est dans la fenêtre gratuite de 24h.
+    
+    Si on est hors fenêtre, retourne une erreur indiquant qu'un template est nécessaire.
+    
+    Args:
+        payload: Dict avec 'conversation_id' et 'content'
+        skip_bot_trigger: Si True, ne déclenche pas le bot après envoi
+    
+    Returns:
+        Dict avec 'status' et 'message_id' si succès, ou 'error' si hors fenêtre
+    """
+    conv_id = payload.get("conversation_id")
+    text = payload.get("content")
+
+    if not conv_id or not text:
+        return {"error": "invalid_payload", "message": "conversation_id and content are required"}
+
+    # Vérifier si on est dans la fenêtre gratuite
+    is_free, last_inbound_time = await is_within_free_window(conv_id)
+    
+    if not is_free:
+        if last_inbound_time is None:
+            error_msg = "Aucun message entrant trouvé. Vous devez utiliser un template de message pour initier la conversation."
+        else:
+            hours_elapsed = (datetime.now(timezone.utc) - last_inbound_time).total_seconds() / 3600
+            error_msg = (
+                f"Fenêtre gratuite expirée. Le dernier message entrant date de {hours_elapsed:.1f} heures. "
+                f"Vous devez utiliser un template de message approuvé pour envoyer ce message."
+            )
+        
+        logger.warning(f"⚠️ Attempt to send free message outside window: {error_msg}")
+        return {
+            "error": "free_window_expired",
+            "message": error_msg,
+            "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None,
+            "requires_template": True
+        }
+    
+    # Si on est dans la fenêtre gratuite, utiliser la fonction send_message normale
+    logger.info(f"✅ Sending free message within 24h window for conversation {conv_id}")
+    return await send_message(payload, skip_bot_trigger=skip_bot_trigger)
 
 
 async def send_interactive_message_with_storage(

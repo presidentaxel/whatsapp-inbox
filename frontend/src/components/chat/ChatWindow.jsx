@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiSearch, FiInfo } from "react-icons/fi";
 import { AiFillStar, AiOutlineStar } from "react-icons/ai";
-import { getMessages, sendMessage, editMessage, deleteMessageApi } from "../../api/messagesApi";
+import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage } from "../../api/messagesApi";
 import { markConversationRead } from "../../api/conversationsApi";
 import MessageBubble from "./MessageBubble";
 import AdvancedMessageInput from "./AdvancedMessageInput";
@@ -28,11 +28,29 @@ export default function ChatWindow({
   const [contextMenu, setContextMenu] = useState({ open: false, x: 0, y: 0, message: null });
   const [autoScroll, setAutoScroll] = useState(true);
   const [otherTyping, setOtherTyping] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [removedMessageIds, setRemovedMessageIds] = useState(new Set());
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState(null);
 
   const sortMessages = useCallback((items) => {
     return [...items].sort((a, b) => {
-      const aTs = new Date(a.timestamp || a.created_at || 0).getTime();
-      const bTs = new Date(b.timestamp || b.created_at || 0).getTime();
+      // Normaliser les dates - s'assurer qu'elles sont au format ISO string
+      const getTimestamp = (msg) => {
+        const ts = msg.timestamp || msg.created_at;
+        if (!ts) return 0;
+        // Si c'est déjà un nombre (timestamp Unix), le convertir
+        if (typeof ts === 'number') {
+          return ts;
+        }
+        // Si c'est une string, la parser
+        const date = new Date(ts);
+        return isNaN(date.getTime()) ? 0 : date.getTime();
+      };
+      
+      const aTs = getTimestamp(a);
+      const bTs = getTimestamp(b);
       return aTs - bTs;
     });
   }, []);
@@ -48,9 +66,12 @@ export default function ChatWindow({
   const refreshMessages = useCallback(() => {
     if (!conversationId) {
       setMessages([]);
-      return;
+      return Promise.resolve();
     }
-    getMessages(conversationId).then((res) => {
+    
+    // Pour le polling, on charge seulement les 100 derniers messages
+    // et on met à jour la liste en gardant les anciens messages déjà chargés
+    return getMessages(conversationId, { limit: 100 }).then((res) => {
       // Filtrer réactions/statuts
       const currentUserId = profile?.id;
       const filtered = res.data.filter((msg) => {
@@ -61,13 +82,101 @@ export default function ChatWindow({
         }
         return true;
       });
-      setMessages(sortMessages(filtered));
+      
+      // Mettre à jour les messages : fusionner avec les messages existants
+      // en gardant les plus récents et en évitant les doublons
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map(m => m.id));
+        const newMessages = filtered.filter(m => !existingIds.has(m.id));
+        const combined = [...prev, ...newMessages];
+        return sortMessages(combined);
+      });
+      
+      return filtered;
     });
   }, [conversationId, sortMessages, profile?.id]);
 
+  // Charger tous les messages au démarrage
   useEffect(() => {
-    refreshMessages();
-  }, [refreshMessages]);
+    if (!conversationId) {
+      setMessages([]);
+      setHasMoreMessages(true);
+      setOldestMessageTimestamp(null);
+      setIsInitialLoad(false);
+      return;
+    }
+    
+    // Réinitialiser l'état
+    setMessages([]);
+    setHasMoreMessages(true);
+    setOldestMessageTimestamp(null);
+    setIsInitialLoad(true);
+    
+    // Charger automatiquement tout l'historique
+    const loadAllHistory = async () => {
+      let hasMore = true;
+      let before = null;
+      let allMessages = [];
+      
+      while (hasMore && conversationId) {
+        const res = await getMessages(conversationId, before ? { before, limit: 100 } : { limit: 100 });
+        const filtered = res.data.filter((msg) => {
+          const type = (msg.message_type || "").toLowerCase();
+          if (["reaction", "status"].includes(type)) return false;
+          if (profile?.id && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(profile.id)) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (filtered.length === 0) {
+          hasMore = false;
+          break;
+        }
+        
+        // Ajouter les nouveaux messages à la liste complète
+        allMessages = [...allMessages, ...filtered];
+        
+        // Trouver le timestamp du message le plus ancien
+        const oldest = filtered.reduce((oldest, msg) => {
+          const ts = msg.timestamp || msg.created_at;
+          if (!ts) return oldest;
+          const date = new Date(ts);
+          if (isNaN(date.getTime())) return oldest;
+          const time = date.getTime();
+          return !oldest || time < oldest ? time : oldest;
+        }, null);
+        
+        if (oldest) {
+          before = new Date(oldest).toISOString();
+          setOldestMessageTimestamp(before);
+        } else {
+          hasMore = false;
+        }
+        
+        // Si on a moins de 100 messages, on a tout chargé
+        if (filtered.length < 100) {
+          hasMore = false;
+        }
+      }
+      
+      // Trier et afficher tous les messages
+      setMessages(sortMessages(allMessages));
+      setHasMoreMessages(false);
+      setIsInitialLoad(false);
+      
+      // Scroll en bas après le chargement complet
+      setTimeout(() => {
+        if (messagesEndRef.current && messagesContainerRef.current) {
+          const container = messagesContainerRef.current;
+          container.scrollTop = container.scrollHeight;
+          messagesEndRef.current.scrollIntoView({ behavior: "auto" });
+        }
+      }, 100);
+    };
+    
+    loadAllHistory();
+  }, [conversationId, sortMessages, profile?.id]);
 
   // Marquer la conversation comme lue quand elle est ouverte et active
   useEffect(() => {
@@ -125,14 +234,30 @@ export default function ChatWindow({
     // Trouver le dernier message entrant
     const lastInboundMessage = messages
       .filter(m => (m.direction === "inbound" || (!m.from_me && m.direction !== "outbound")) && m.message_type !== "reaction")
-      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())[0];
+      .sort((a, b) => {
+        const getTime = (msg) => {
+          const ts = msg.timestamp || msg.created_at;
+          if (!ts) return 0;
+          if (typeof ts === 'number') return ts;
+          const date = new Date(ts);
+          return isNaN(date.getTime()) ? 0 : date.getTime();
+        };
+        return getTime(b) - getTime(a);
+      })[0];
 
     if (!lastInboundMessage) {
       setOtherTyping(false);
       return;
     }
 
-    const messageTime = new Date(lastInboundMessage.timestamp || 0).getTime();
+    const getMessageTime = (msg) => {
+      const ts = msg.timestamp || msg.created_at;
+      if (!ts) return 0;
+      if (typeof ts === 'number') return ts;
+      const date = new Date(ts);
+      return isNaN(date.getTime()) ? 0 : date.getTime();
+    };
+    const messageTime = getMessageTime(lastInboundMessage);
     const now = Date.now();
     const timeSinceMessage = now - messageTime;
 
@@ -184,6 +309,10 @@ export default function ChatWindow({
           }
           
           setMessages((prev) => {
+            // Ignorer les messages qui ont été supprimés pour renvoi
+            if (removedMessageIds.has(incoming.id) || removedMessageIds.has(incoming.wa_message_id)) {
+              return prev;
+            }
             const exists = prev.some((msg) => msg.id === incoming.id);
             if (exists) {
               return sortMessages(prev.map((msg) => (msg.id === incoming.id ? incoming : msg)));
@@ -226,7 +355,7 @@ export default function ChatWindow({
     return () => {
       supabaseClient.removeChannel(channel);
     };
-  }, [conversationId, sortMessages]);
+  }, [conversationId, sortMessages, removedMessageIds]);
 
   const onSend = async (text) => {
     if (!conversationId) return;
@@ -242,9 +371,60 @@ export default function ChatWindow({
       timestamp: new Date().toISOString(),
     };
     setMessages((prev) => sortMessages([...prev, optimisticMessage]));
+    // Forcer le scroll en bas quand l'utilisateur envoie un message
+    setAutoScroll(true);
     try {
       await sendMessage({ conversation_id: conversationId, content: text });
     } finally {
+      refreshMessages();
+    }
+  };
+
+  const resendMessage = async (message) => {
+    if (!conversationId || !message) return;
+    
+    const messageContent = message.content_text;
+    if (!messageContent) return;
+
+    const messageId = message.id;
+    
+    // Supprimer le message échoué de la base de données AVANT de renvoyer
+    try {
+      if (messageId) {
+        await permanentlyDeleteMessage(messageId);
+      }
+    } catch (error) {
+      console.error("Erreur lors de la suppression du message:", error);
+      // Continuer quand même le renvoi même si la suppression échoue
+    }
+    
+    // Supprimer le message échoué de la liste locale immédiatement
+    setMessages((prev) => prev.filter((m) => m.id !== messageId));
+    
+    // Ajouter l'ID à la liste des messages supprimés pour éviter qu'il réapparaisse via webhook
+    setRemovedMessageIds((prev) => {
+      const newSet = new Set(prev);
+      if (messageId) newSet.add(messageId);
+      if (message.wa_message_id) newSet.add(message.wa_message_id);
+      return newSet;
+    });
+    
+    // Forcer le scroll en bas quand l'utilisateur renvoie un message
+    setAutoScroll(true);
+    
+    // Renvoyer le message
+    try {
+      await sendMessage({ conversation_id: conversationId, content: messageContent });
+      // Ne pas appeler refreshMessages() ici car le nouveau message sera ajouté via le webhook Supabase
+    } catch (error) {
+      console.error("Erreur lors du renvoi du message:", error);
+      // En cas d'erreur, retirer de la liste des supprimés et rafraîchir
+      setRemovedMessageIds((prev) => {
+        const newSet = new Set(prev);
+        if (messageId) newSet.delete(messageId);
+        if (message.wa_message_id) newSet.delete(message.wa_message_id);
+        return newSet;
+      });
       refreshMessages();
     }
   };
@@ -260,29 +440,116 @@ export default function ChatWindow({
     if (!showSearch || !searchTerm.trim()) {
       return messages;
     }
-    const term = searchTerm.toLowerCase();
-    return messages.filter((m) => (m.content_text || "").toLowerCase().includes(term));
+    const term = searchTerm.toLowerCase().trim();
+    return messages.filter((m) => {
+      const content = (m.content_text || "").toLowerCase();
+      return content.includes(term);
+    });
   }, [messages, searchTerm, showSearch]);
 
-  useEffect(() => {
-    if (autoScroll && messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+  // Fonction pour vérifier si l'utilisateur est proche du bas
+  const isNearBottom = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return false;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    return distanceFromBottom < 120;
+  }, []);
+
+  // Fonction pour scroller en bas
+  const scrollToBottom = useCallback((behavior = "auto") => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior });
     }
-  }, [filteredMessages, autoScroll]);
+  }, []);
+
+  // Scroller seulement si l'utilisateur est déjà en bas
+  useEffect(() => {
+    if (!messagesEndRef.current || filteredMessages.length === 0) return;
+    
+    // Si c'est le chargement initial, toujours scroller en bas
+    if (isInitialLoad) {
+      // Utiliser plusieurs tentatives pour s'assurer que le scroll se fait après le rendu
+      const attemptScroll = () => {
+        if (messagesEndRef.current && messagesContainerRef.current) {
+          const container = messagesContainerRef.current;
+          const isAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+          
+          if (!isAtBottom) {
+            scrollToBottom("auto");
+            // Réessayer après un court délai si nécessaire
+            setTimeout(() => {
+              if (messagesEndRef.current) {
+                scrollToBottom("auto");
+              }
+            }, 100);
+          }
+          setIsInitialLoad(false);
+        }
+      };
+      
+      // Essayer immédiatement
+      requestAnimationFrame(attemptScroll);
+      // Réessayer après un délai pour s'assurer que le DOM est mis à jour
+      setTimeout(attemptScroll, 50);
+      return;
+    }
+    
+    // Sinon, scroller seulement si autoScroll est true ET que l'utilisateur est proche du bas
+    if (autoScroll && isNearBottom()) {
+      requestAnimationFrame(() => {
+        scrollToBottom("smooth");
+      });
+    }
+  }, [filteredMessages, autoScroll, isNearBottom, isInitialLoad, scrollToBottom]);
 
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
     const handleScroll = () => {
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setAutoScroll(distanceFromBottom < 120);
+      // Si l'utilisateur scroll manuellement et n'est plus proche du bas, désactiver autoScroll
+      // Cela "fige" le scroll automatique pour cette conversation
+      if (distanceFromBottom >= 120) {
+        setAutoScroll(false);
+      } else {
+        // Si l'utilisateur revient en bas, réactiver autoScroll
+        setAutoScroll(true);
+      }
     };
     el.addEventListener("scroll", handleScroll, { passive: true });
     return () => el.removeEventListener("scroll", handleScroll);
   }, []);
 
+  // Scroller en bas seulement au chargement initial d'une nouvelle conversation
   useEffect(() => {
+    // Réinitialiser autoScroll et isInitialLoad au changement de conversation
     setAutoScroll(true);
+    setIsInitialLoad(true);
+    // Réinitialiser la liste des messages supprimés
+    setRemovedMessageIds(new Set());
+    
+    // Forcer le scroll en bas après le changement de conversation
+    // Utiliser plusieurs tentatives pour s'assurer que ça fonctionne
+    const scrollAfterChange = () => {
+      if (messagesContainerRef.current && messagesEndRef.current) {
+        const container = messagesContainerRef.current;
+        // Forcer le scroll en bas immédiatement
+        container.scrollTop = container.scrollHeight;
+        
+        // Réessayer après un court délai
+        setTimeout(() => {
+          if (messagesEndRef.current) {
+            messagesEndRef.current.scrollIntoView({ behavior: "auto" });
+          }
+          if (container) {
+            container.scrollTop = container.scrollHeight;
+          }
+        }, 100);
+      }
+    };
+    
+    // Essayer après un court délai pour laisser le temps au DOM de se mettre à jour
+    setTimeout(scrollAfterChange, 50);
   }, [conversationId]);
 
   useEffect(() => {
@@ -426,6 +693,7 @@ export default function ChatWindow({
               onReactionChange={refreshMessages}
               forceReactionOpen={reactionTargetId === m.id}
               onContextMenu={(e) => handleContextMenu(e, m)}
+              onResend={resendMessage}
             />
           ))}
           {otherTyping && <TypingIndicator />}
@@ -459,6 +727,7 @@ export default function ChatWindow({
         conversation={conversation}
         onSend={onSend}
         disabled={!canSend || !conversationId}
+        accountId={conversation?.account_id}
       />
 
       {contextMenu.open && (

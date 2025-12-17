@@ -1,17 +1,19 @@
 import { useState, useRef, useEffect } from "react";
 import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
-import { sendMediaMessage, sendInteractiveMessage } from "../../api/messagesApi";
+import { sendMediaMessage, sendInteractiveMessage, getMessagePrice } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 import { useTheme } from "../../hooks/useTheme";
 
-export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit }) {
+export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null }) {
   const [text, setText] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [mode, setMode] = useState("text"); // text, media, buttons, list
   const [uploading, setUploading] = useState(false);
+  const [priceInfo, setPriceInfo] = useState(null);
+  const [loadingPrice, setLoadingPrice] = useState(false);
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -60,6 +62,31 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     }
   }, [editingMessage]);
 
+  // Charger le prix du message quand le texte change
+  useEffect(() => {
+    if (!conversation?.id || !text.trim() || mode !== "text") {
+      setPriceInfo(null);
+      return;
+    }
+
+    const loadPrice = async () => {
+      setLoadingPrice(true);
+      try {
+        const response = await getMessagePrice(conversation.id);
+        setPriceInfo(response.data);
+      } catch (error) {
+        console.error("Error loading price:", error);
+        setPriceInfo(null);
+      } finally {
+        setLoadingPrice(false);
+      }
+    };
+
+    // Debounce pour éviter trop de requêtes
+    const timeoutId = setTimeout(loadPrice, 500);
+    return () => clearTimeout(timeoutId);
+  }, [text, conversation?.id, mode]);
+
   const handleSend = () => {
     if (disabled || !text.trim()) return;
     onSend(text);
@@ -77,25 +104,49 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   }, [text]);
 
   const handleMediaSend = async (file) => {
-    if (!conversation?.id || !conversation?.account_id) return;
+    console.log("handleMediaSend called with file:", file?.name, file?.type);
+    
+    if (!conversation?.id) {
+      console.error("No conversation ID");
+      alert("Aucune conversation sélectionnée");
+      return;
+    }
+    
+    // Récupérer l'account_id depuis la prop ou depuis la conversation
+    const accountIdToUse = accountId || conversation?.account_id;
+    console.log("Account ID to use:", accountIdToUse, "from prop:", accountId, "from conversation:", conversation?.account_id);
+    
+    if (!accountIdToUse) {
+      console.error("Conversation object:", conversation);
+      console.error("AccountId prop:", accountId);
+      alert("Impossible de déterminer le compte WhatsApp. Veuillez recharger la page.");
+      return;
+    }
     
     setUploading(true);
     setShowMenu(false);
     try {
+      console.log("Uploading media to account:", accountIdToUse);
       // Upload le fichier
-      const uploadResult = await uploadMedia(conversation.account_id, file);
+      const uploadResult = await uploadMedia(accountIdToUse, file);
+      console.log("Upload result:", uploadResult);
       const mediaId = uploadResult.data?.id;
       
       if (!mediaId) {
-        alert("Erreur lors de l'upload du fichier");
+        console.error("No media ID returned from upload");
+        alert("Erreur lors de l'upload du fichier. Aucun ID média retourné.");
         return;
       }
+
+      console.log("Media uploaded successfully, media ID:", mediaId);
 
       // Détermine le type de média
       let mediaType = "document";
       if (file.type.startsWith("image/")) mediaType = "image";
       else if (file.type.startsWith("audio/")) mediaType = "audio";
       else if (file.type.startsWith("video/")) mediaType = "video";
+
+      console.log("Sending media message, type:", mediaType, "conversation:", conversation.id);
 
       // Envoie le message via notre API backend qui gère le stockage
       await sendMediaMessage({
@@ -105,13 +156,15 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         caption: text || undefined
       });
 
+      console.log("Media message sent successfully");
       setText("");
       setShowAdvanced(false);
       setMode("text");
       onSend?.(""); // Trigger refresh
     } catch (error) {
       console.error("Erreur envoi média:", error);
-      alert("Erreur lors de l'envoi du fichier");
+      console.error("Error details:", error.response?.data || error.message);
+      alert(`Erreur lors de l'envoi du fichier: ${error.response?.data?.detail || error.message || "Erreur inconnue"}`);
     } finally {
       setUploading(false);
     }
@@ -123,8 +176,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const openMediaPicker = () => {
+    console.log("openMediaPicker called");
     setShowMenu(false);
-    fileInputRef.current?.click();
+    if (fileInputRef.current) {
+      console.log("Clicking file input");
+      fileInputRef.current.click();
+    } else {
+      console.error("fileInputRef.current is null");
+    }
   };
 
   const openMode = (newMode) => {
@@ -487,6 +546,25 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       )}
 
       <div className="input-area">
+        {/* Input file caché - doit être en dehors du menu pour fonctionner */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            console.log("File input changed", e.target.files);
+            if (e.target.files && e.target.files[0]) {
+              console.log("File selected:", e.target.files[0].name, e.target.files[0].type);
+              handleMediaSend(e.target.files[0]);
+              // Réinitialiser l'input pour permettre de sélectionner le même fichier à nouveau
+              e.target.value = '';
+            } else {
+              console.log("No file selected");
+            }
+          }}
+          accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
+        />
+
         {/* Boutons à gauche */}
         <div className="left-buttons">
           {/* Bouton emoji */}
@@ -519,6 +597,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           <div className="menu-container" ref={menuRef}>
             <button
               onClick={() => {
+                console.log("Menu button clicked, current showMenu:", showMenu);
                 setShowMenu(!showMenu);
                 setShowEmojiPicker(false);
               }}
@@ -533,13 +612,6 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
             
             {showMenu && (
               <div className="dropdown-menu">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  style={{ display: "none" }}
-                  onChange={(e) => e.target.files[0] && handleMediaSend(e.target.files[0])}
-                  accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
-                />
                 <button className="menu-item" onClick={openMediaPicker}>
                   <div className="menu-icon menu-icon--document">
                     <FiFileText />
@@ -580,7 +652,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
             onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
             placeholder={
               discussionPrefs?.enterToSend
-                ? "Écrire un message... (Shift+Entrée pour une nouvelle ligne)"
+                ? "Écrire un message..."
                 : "Écrire un message... (Ctrl+Entrée pour envoyer)"
             }
             onKeyDown={(e) => {
@@ -600,6 +672,19 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           />
         </div>
         
+        {/* Affichage du prix */}
+        {priceInfo && mode === "text" && text.trim() && (
+          <div className="message-price-indicator">
+            {priceInfo.is_free ? (
+              <span className="price-free">🆓 Gratuit</span>
+            ) : (
+              <span className="price-paid">
+                💰 {priceInfo.price_eur?.toFixed(3) || priceInfo.price_usd?.toFixed(3)} {priceInfo.currency === "USD" ? "USD" : "EUR"}
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Bouton d'envoi */}
         <button
           className="btn-send-whatsapp btn-send-flat"
@@ -608,7 +693,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
             else if (mode === "list") handleListSend();
             else handleSend();
           }}
-          disabled={disabled || !text.trim() || uploading}
+          disabled={disabled || !text.trim() || uploading || loadingPrice}
           aria-label={editingMessage ? "Modifier" : "Envoyer"}
         >
           <FiSend />

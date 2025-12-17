@@ -233,7 +233,7 @@ function renderBody(message) {
   );
 }
 
-export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false }) {
+export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend }) {
   const mine = message.direction === "outbound";
   const timestamp = message.timestamp ? formatRelativeDateTime(message.timestamp) : "";
 
@@ -276,6 +276,8 @@ export default function MessageBubble({ message, conversation, onReactionChange,
             isOwnMessage={mine}
             conversation={conversation}
             messageTimestamp={message.timestamp}
+            message={message}
+            onResend={onResend}
           />
         )}
       </div>

@@ -659,6 +659,32 @@
   word-break: break-word;
 }
 
+/* Message price indicator */
+.message-price-indicator {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+.message-price-indicator .price-free {
+  color: #25d366;
+  background: rgba(37, 211, 102, 0.15);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+.message-price-indicator .price-paid {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.15);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
 .edit-banner {
   margin-top: 6px;
   display: flex;
