@@ -13,7 +13,7 @@ import { useAuth } from '../context/AuthContext';
  * Ne notifie que si l'utilisateur a accès au compte/conversation
  */
 export function useGlobalNotifications(selectedConversationId = null) {
-  const { hasPermission } = useAuth();
+  const { hasPermission, profile } = useAuth();
   const channelRef = useRef(null);
   const lastNotifiedRef = useRef(new Set()); // Éviter les doublons
 
@@ -79,8 +79,23 @@ export function useGlobalNotifications(selectedConversationId = null) {
               return;
             }
 
+            // Vérification explicite : si le profile n'est pas encore chargé, ne pas notifier
+            // (pour éviter les notifications avant que les permissions soient vérifiées)
+            if (!profile) {
+              return;
+            }
+
+            // Vérification explicite : si l'utilisateur a access_level = 'aucun' pour ce compte,
+            // ne pas envoyer de notification (même si hasPermission pourrait le gérer)
+            const accountAccessLevels = profile?.permissions?.account_access_levels || {};
+            if (accountAccessLevels[accountId] === "aucun") {
+              // L'utilisateur n'a aucun accès à ce compte, ne pas notifier
+              return;
+            }
+
             // Vérifier les permissions : l'utilisateur doit avoir conversations.view pour ce compte
             // Cela vérifie automatiquement si access_level = 'aucun' (via hasPermission)
+            // Mais on a déjà vérifié explicitement ci-dessus pour plus de sécurité
             if (!hasPermission || !hasPermission('conversations.view', accountId)) {
               return;
             }
@@ -128,6 +143,6 @@ export function useGlobalNotifications(selectedConversationId = null) {
       }
       lastNotifiedRef.current.clear();
     };
-  }, [selectedConversationId, hasPermission]);
+  }, [selectedConversationId, hasPermission, profile]);
 }
 
