@@ -30,6 +30,16 @@ export const api = axios.create({
 
 api.interceptors.request.use(
   async (config) => {
+    // Log pour les requêtes de template
+    if (config.url?.includes("send-template")) {
+      console.log("🌐 [AXIOS] Requête send-template interceptée:", {
+        url: config.url,
+        method: config.method,
+        baseURL: config.baseURL,
+        data: config.data
+      });
+    }
+    
     try {
       const {
         data: { session },
@@ -59,7 +69,9 @@ api.interceptors.request.use(
       
       // Token trouvé, l'ajouter
       config.headers.Authorization = `Bearer ${session.access_token}`;
-      console.debug("✅ Token added to request:", config.url);
+      if (config.url?.includes("send-template")) {
+        console.log("✅ [AXIOS] Token ajouté à la requête send-template");
+      }
       
     } catch (err) {
       console.error("❌ Error in axios request interceptor:", err);
@@ -68,14 +80,36 @@ api.interceptors.request.use(
     return config;
   },
   (error) => {
+    console.error("❌ [AXIOS] Erreur dans l'intercepteur de requête:", error);
     return Promise.reject(error);
   }
 );
 
 // Intercepteur de réponse pour gérer les erreurs 401
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // Log pour les réponses de template
+    if (response.config?.url?.includes("send-template")) {
+      console.log("✅ [AXIOS] Réponse reçue pour send-template:", {
+        status: response.status,
+        data: response.data
+      });
+    }
+    return response;
+  },
   async (error) => {
+    // Log pour les erreurs de template
+    if (error.config?.url?.includes("send-template")) {
+      console.error("❌ [AXIOS] Erreur pour send-template:", {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message,
+        url: error.config?.url,
+        baseURL: error.config?.baseURL
+      });
+    }
+    
     if (error.response?.status === 401) {
       console.warn("⚠️ 401 Unauthorized - Session may have expired");
       // Optionnel : rediriger vers la page de login

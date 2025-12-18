@@ -269,7 +269,7 @@ async def get_available_templates(
 ):
     """
     Récupère la liste des templates disponibles pour une conversation.
-    Retourne uniquement les templates UTILITY approuvés.
+    Retourne les templates UTILITY et MARKETING approuvés.
     """
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
@@ -288,14 +288,38 @@ async def get_available_templates(
         raise HTTPException(status_code=400, detail="account_not_configured")
     
     try:
-        templates_result = await whatsapp_api_service.list_message_templates(
-            waba_id=waba_id,
-            access_token=access_token,
-            limit=100
-        )
+        # Récupérer tous les templates avec pagination
+        all_templates = []
+        after = None
+        limit = 100
+        
+        while True:
+            templates_result = await whatsapp_api_service.list_message_templates(
+                waba_id=waba_id,
+                access_token=access_token,
+                limit=limit,
+                after=after
+            )
+            
+            templates_batch = templates_result.get("data", [])
+            if not templates_batch:
+                break
+            
+            all_templates.extend(templates_batch)
+            
+            # Vérifier s'il y a une page suivante
+            paging = templates_result.get("paging", {})
+            after = paging.get("cursors", {}).get("after")
+            if not after:
+                break
         
         # Filtrer uniquement les templates UTILITY approuvés
-        templates = templates_result.get("data", [])
+        templates = all_templates
+        
+        # Log pour déboguer : afficher tous les templates récupérés
+        logger.info(f"📋 Total templates récupérés depuis WhatsApp API: {len(templates)}")
+        for t in templates:
+            logger.info(f"  - Template: {t.get('name')}, Status: {t.get('status')}, Category: {t.get('category')}, Language: {t.get('language')}")
         
         def get_template_price(category):
             """Retourne le prix d'un template selon sa catégorie (prix Meta officiels)"""
@@ -303,16 +327,29 @@ async def get_available_templates(
             # https://developers.facebook.com/docs/whatsapp/pricing
             prices = {
                 "UTILITY": {"usd": 0.008, "eur": 0.007},  # ~0.005-0.01 USD
-                "MARKETING": {"usd": 0.02, "eur": 0.018},  # ~0.015-0.03 USD
+                "MARKETING": {"usd": 0.02, "eur": 0.18},  # 18 centimes EUR
                 "AUTHENTICATION": {"usd": 0.005, "eur": 0.004},  # Généralement moins cher
             }
-            return prices.get(category, {"usd": 0.008, "eur": 0.007})
+            # Normaliser la catégorie en majuscules pour la recherche
+            category_upper = (category or "").upper()
+            return prices.get(category_upper, {"usd": 0.008, "eur": 0.007})
         
-        approved_utility_templates = []
+        approved_templates = []
         for t in templates:
-            if t.get("status") == "APPROVED" and t.get("category") == "UTILITY":
-                price = get_template_price(t.get("category"))
-                approved_utility_templates.append({
+            # Comparaison insensible à la casse pour le statut et la catégorie
+            status = (t.get("status") or "").upper()
+            category = (t.get("category") or "").upper()
+            template_name = (t.get("name") or "").lower()
+            
+            # Exclure le template hello_world / hello-world
+            if template_name in ["hello_world", "hello-world"]:
+                logger.info(f"  ⏭️  Template exclu: {t.get('name')}")
+                continue
+            
+            # Filtrer les templates approuvés en catégorie UTILITY ou MARKETING
+            if status == "APPROVED" and category in ["UTILITY", "MARKETING"]:
+                price = get_template_price(category)
+                approved_templates.append({
                     "name": t.get("name"),
                     "status": t.get("status"),
                     "category": t.get("category"),
@@ -322,8 +359,12 @@ async def get_available_templates(
                     "price_eur": price["eur"]
                 })
         
+        logger.info(f"✅ Templates UTILITY et MARKETING approuvés filtrés: {len(approved_templates)}")
+        for t in approved_templates:
+            logger.info(f"  - {t.get('name')} ({t.get('category')}, {t.get('language')})")
+        
         return {
-            "templates": approved_utility_templates
+            "templates": approved_templates
         }
     except Exception as e:
         logger.error(f"Error fetching templates: {e}", exc_info=True)
@@ -345,69 +386,258 @@ async def send_template_message_api(
         "components": [{"type": "BODY", "text": "votre texte"}]
     }
     """
+    # Logs au tout début pour être sûr qu'on arrive ici
+    import sys
+    print("=" * 80, file=sys.stderr)
+    print(f"🚀🚀🚀 [TEMPLATE SEND] FONCTION APPELÉE - conversation_id={conversation_id}", file=sys.stderr)
+    print(f"🚀🚀🚀 [TEMPLATE SEND] payload={payload}", file=sys.stderr)
+    print("=" * 80, file=sys.stderr)
+    sys.stderr.flush()
+    
+    print(f"🚀 [TEMPLATE SEND] Début - conversation_id={conversation_id}, payload={payload}")
+    logger.info(f"🚀 [TEMPLATE SEND] Début - conversation_id={conversation_id}, payload={payload}")
+    
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
+        print(f"❌ [TEMPLATE SEND] Conversation non trouvée: {conversation_id}")
         raise HTTPException(status_code=404, detail="conversation_not_found")
     
+    print(f"✅ [TEMPLATE SEND] Conversation trouvée: {conversation.get('id')}")
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     
     template_name = payload.get("template_name")
-    components = payload.get("components", [])
+    components = payload.get("components")  # Optionnel, peut être None
+    language_code = payload.get("language_code", "fr")  # Par défaut "fr", mais peut être spécifié
+    
+    print(f"📋 [TEMPLATE SEND] Template name: {template_name}, language: {language_code}")
     
     if not template_name:
+        print(f"❌ [TEMPLATE SEND] template_name manquant")
         raise HTTPException(status_code=400, detail="template_name_required")
     
     account = await get_account_by_id(conversation["account_id"])
     if not account:
+        print(f"❌ [TEMPLATE SEND] Account non trouvé: {conversation['account_id']}")
         raise HTTPException(status_code=404, detail="account_not_found")
     
     phone_id = account.get("phone_number_id")
     token = account.get("access_token")
     to_number = conversation["client_number"]
     
+    print(f"📱 [TEMPLATE SEND] Account: {account.get('name')}, phone_id: {phone_id}, to: {to_number}")
+    
     if not phone_id or not token:
+        print(f"❌ [TEMPLATE SEND] WhatsApp non configuré - phone_id: {phone_id}, token: {'présent' if token else 'absent'}")
         raise HTTPException(status_code=400, detail="whatsapp_not_configured")
     
     try:
+        print(f"🔍 [TEMPLATE SEND] Début de la récupération des détails du template...")
+        # Récupérer les détails du template pour vérifier s'il a un header avec format
+        waba_id = account.get("waba_id")
+        template_details = None
+        if waba_id:
+            try:
+                # Récupérer tous les templates avec pagination pour être sûr de trouver le bon
+                all_templates = []
+                after = None
+                limit = 100
+                
+                while True:
+                    templates_result = await whatsapp_api_service.list_message_templates(
+                        waba_id=waba_id,
+                        access_token=token,
+                        limit=limit,
+                        after=after
+                    )
+                    
+                    templates_batch = templates_result.get("data", [])
+                    if not templates_batch:
+                        break
+                    
+                    all_templates.extend(templates_batch)
+                    
+                    # Vérifier s'il y a une page suivante
+                    paging = templates_result.get("paging", {})
+                    after = paging.get("cursors", {}).get("after")
+                    if not after:
+                        break
+                
+                # Chercher le template par nom (la langue peut varier, on cherche d'abord avec la langue exacte, puis sans)
+                template_details = next(
+                    (t for t in all_templates if t.get("name") == template_name and t.get("language") == language_code),
+                    None
+                )
+                
+                # Si pas trouvé avec la langue exacte, chercher juste par nom
+                if not template_details:
+                    template_details = next(
+                        (t for t in all_templates if t.get("name") == template_name),
+                        None
+                    )
+                    if template_details:
+                        logger.info(f"  Template trouvé avec une langue différente: {template_details.get('language')} au lieu de {language_code}")
+                
+                if template_details:
+                    logger.info(f"  ✅ Template trouvé: {template_details.get('name')}, language: {template_details.get('language')}")
+                else:
+                    logger.warning(f"  ⚠️ Template {template_name} non trouvé dans {len(all_templates)} templates")
+            except Exception as e:
+                logger.warning(f"Could not fetch template details: {e}", exc_info=True)
+        
+        # Log pour déboguer
+        logger.info(f"📤 Envoi template: name={template_name}, to={to_number}, components={components}")
+        if template_details:
+            logger.info(f"  Template details: {template_details.get('components', [])}")
+        
+        # Construire les composants nécessaires
+        final_components = []
+        
+        # Si le template a un header avec un format (IMAGE, VIDEO, DOCUMENT, etc.), 
+        # il faut envoyer un composant HEADER même vide
+        if template_details:
+            template_components = template_details.get("components", [])
+            header_component = next(
+                (c for c in template_components if c.get("type") == "HEADER"),
+                None
+            )
+            
+            if header_component:
+                header_format = header_component.get("format")
+                if header_format in ["IMAGE", "VIDEO", "DOCUMENT"]:
+                    # Le template a un header avec format, il faut envoyer un composant HEADER
+                    # Même si on n'a pas de variables à remplir, on doit envoyer un HEADER vide
+                    final_components.append({
+                        "type": "HEADER",
+                        "parameters": []  # Header vide car pas de variables
+                    })
+                    logger.info(f"  ✅ Ajout composant HEADER vide pour format {header_format}")
+        
+        # Ajouter les composants fournis par l'utilisateur s'ils sont valides
+        if components and len(components) > 0:
+            # Vérifier si les composants contiennent des paramètres valides
+            has_valid_parameters = any(
+                comp.get("parameters") and isinstance(comp.get("parameters"), list) and len(comp.get("parameters", [])) > 0
+                for comp in components
+            )
+            if has_valid_parameters:
+                final_components.extend(components)
+        
+        # Si pas de composants nécessaires, envoyer None
+        if len(final_components) == 0:
+            final_components = None
+        
+        logger.info(f"  Final components: {final_components}")
+        
         response = await whatsapp_api_service.send_template_message(
             phone_number_id=phone_id,
             access_token=token,
             to=to_number,
             template_name=template_name,
-            language_code="fr",
-            components=components
+            language_code=language_code,
+            components=final_components
         )
         
         message_id = response.get("messages", [{}])[0].get("id")
         timestamp_iso = datetime.now(timezone.utc).isoformat()
         
-        # Sauvegarder le message
-        import asyncio
+        # Récupérer le texte du template depuis les détails
+        template_text = ""
+        if template_details:
+            # Extraire le texte du BODY du template
+            template_components = template_details.get("components", [])
+            logger.info(f"  Template components: {template_components}")
+            body_component = next(
+                (c for c in template_components if c.get("type") == "BODY"),
+                None
+            )
+            if body_component:
+                template_text = body_component.get("text", "")
+                logger.info(f"  Template text from BODY: {template_text}")
+                # Remplacer les variables {{1}}, {{2}}, etc. par des espaces pour l'affichage
+                import re
+                template_text = re.sub(r'\{\{\d+\}\}', '', template_text).strip()
+                logger.info(f"  Template text after cleanup: {template_text}")
+            else:
+                logger.warning(f"  No BODY component found in template {template_name}")
+        else:
+            logger.warning(f"  Template details not found for {template_name}, language {language_code}")
+        
+        # Si pas de texte trouvé, utiliser le nom du template comme fallback
+        if not template_text:
+            template_text = f"[Template: {template_name}]"
+            logger.info(f"  Using fallback template text: {template_text}")
+        
+        logger.info(f"  Final template text to save: {template_text}")
+        print(f"💾 [TEMPLATE SEND] Texte final à sauvegarder: {template_text}")
+        
+        # Sauvegarder le message de manière synchrone pour éviter qu'il soit écrasé par le webhook
         from app.core.db import supabase_execute, supabase
         from app.services.message_service import _update_conversation_timestamp
         
         message_payload = {
             "conversation_id": conversation_id,
             "direction": "outbound",
-            "content_text": components[0].get("text", "") if components else "",
+            "content_text": template_text,
             "timestamp": timestamp_iso,
             "wa_message_id": message_id,
             "message_type": "template",
             "status": "sent",
         }
         
-        async def _save_message_async():
-            try:
-                await asyncio.gather(
-                    supabase_execute(
-                        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
-                    ),
-                    _update_conversation_timestamp(conversation_id, timestamp_iso)
-                )
-            except Exception as e:
-                logger.error("Error saving template message to database: %s", e, exc_info=True)
+        print(f"💾 [TEMPLATE SEND] Message payload: {message_payload}")
         
-        asyncio.create_task(_save_message_async())
+        try:
+            # Vérifier si le message existe déjà (créé par le webhook)
+            print(f"🔍 [TEMPLATE SEND] Vérification si le message existe déjà avec wa_message_id: {message_id}")
+            existing = await supabase_execute(
+                supabase.table("messages")
+                .select("id, content_text")
+                .eq("wa_message_id", message_id)
+                .limit(1)
+            )
+            
+            print(f"🔍 [TEMPLATE SEND] Résultat de la vérification: {existing.data}")
+            
+            if existing.data:
+                # Le message existe déjà, mettre à jour seulement si content_text est vide
+                existing_record = existing.data[0]
+                print(f"📝 [TEMPLATE SEND] Message existe déjà - ID: {existing_record.get('id')}, content_text actuel: '{existing_record.get('content_text')}'")
+                update_data = {
+                    "status": "sent",
+                    "timestamp": timestamp_iso,
+                }
+                # Ne mettre à jour le content_text que s'il est vide ou null
+                if not existing_record.get("content_text"):
+                    update_data["content_text"] = template_text
+                    logger.info(f"  📝 Mise à jour du content_text vide avec: {template_text[:50]}...")
+                    print(f"📝 [TEMPLATE SEND] Mise à jour du content_text vide avec: {template_text[:50]}...")
+                else:
+                    logger.info(f"  ℹ️  Le message a déjà un content_text, on ne l'écrase pas")
+                    print(f"ℹ️  [TEMPLATE SEND] Le message a déjà un content_text: '{existing_record.get('content_text')}', on ne l'écrase pas")
+                
+                print(f"💾 [TEMPLATE SEND] Données de mise à jour: {update_data}")
+                await supabase_execute(
+                    supabase.table("messages")
+                    .update(update_data)
+                    .eq("id", existing_record["id"])
+                )
+                print(f"✅ [TEMPLATE SEND] Message mis à jour avec succès")
+            else:
+                # Le message n'existe pas encore, créer avec tous les champs
+                print(f"🆕 [TEMPLATE SEND] Création d'un nouveau message avec tous les champs")
+                result = await supabase_execute(
+                    supabase.table("messages").insert(message_payload)
+                )
+                print(f"✅ [TEMPLATE SEND] Nouveau message créé: {result.data if result.data else 'pas de données retournées'}")
+                logger.info(f"  ✅ Nouveau message template créé avec texte: {template_text[:50]}...")
+            
+            await _update_conversation_timestamp(conversation_id, timestamp_iso)
+            print(f"✅ [TEMPLATE SEND] Timestamp de conversation mis à jour")
+        except Exception as e:
+            logger.error("Error saving template message to database: %s", e, exc_info=True)
+            print(f"❌ [TEMPLATE SEND] Erreur lors de la sauvegarde: {e}")
+            import traceback
+            print(f"❌ [TEMPLATE SEND] Traceback: {traceback.format_exc()}")
         
         price_info = await calculate_message_price(conversation_id, use_template=True)
         

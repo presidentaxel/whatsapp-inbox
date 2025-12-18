@@ -138,31 +138,61 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const handleSendTemplate = async (template) => {
-    if (disabled || !conversation?.id) return;
+    console.log("🎯 [FRONTEND] handleSendTemplate appelé", { 
+      disabled, 
+      conversationId: conversation?.id, 
+      template: template.name 
+    });
+    
+    if (disabled || !conversation?.id) {
+      console.log("❌ [FRONTEND] handleSendTemplate annulé - disabled:", disabled, "conversationId:", conversation?.id);
+      return;
+    }
     
     setUploading(true);
     try {
-      // Extraire le texte du template (premier composant BODY)
-      const bodyComponent = template.components?.find(c => c.type === "BODY");
-      const templateText = bodyComponent?.text || "";
-      
-      // Créer les composants pour l'envoi
-      const components = [];
-      if (bodyComponent) {
-        components.push({
-          type: "BODY",
-          text: templateText
-        });
-      }
-      
-      await sendTemplateMessage(conversation.id, {
+      const payload = {
         template_name: template.name,
-        components: components
+        language_code: template.language || "fr"
+        // Pas de components : l'API WhatsApp utilisera le template tel quel
+      };
+      
+      console.log("📤 [FRONTEND] Envoi du template:", {
+        conversationId: conversation.id,
+        payload
       });
       
-      onSend?.(""); // Trigger refresh
+      // Pour les templates WhatsApp, on ne doit PAS envoyer les composants avec le texte complet
+      // Si le template a des variables ({{1}}, {{2}}), il faut les remplir avec des paramètres
+      // Si le template n'a pas de variables, on n'envoie pas de composants du tout
+      // Pour l'instant, on n'envoie jamais de composants car on ne gère pas encore les variables dynamiques
+      
+      const response = await sendTemplateMessage(conversation.id, payload);
+      console.log("✅ [FRONTEND] Template envoyé avec succès:", response);
+      
+      // Attendre un peu pour que le message soit sauvegardé dans la base
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Vérifier si on est toujours hors fenêtre gratuite
+      // Après l'envoi du premier template, on devrait pouvoir envoyer des messages normaux
+      try {
+        const response = await getMessagePrice(conversation.id);
+        const isFree = response.data?.is_free ?? true;
+        setIsOutsideFreeWindow(!isFree);
+      } catch (error) {
+        console.error("Error checking free window after template:", error);
+      }
+      
+      // Rafraîchir les messages pour afficher le message template sauvegardé
+      onSend?.("", true); // Force refresh des messages
     } catch (error) {
-      console.error("Error sending template:", error);
+      console.error("❌ [FRONTEND] Erreur lors de l'envoi du template:", error);
+      console.error("❌ [FRONTEND] Détails de l'erreur:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url
+      });
       alert(`Erreur lors de l'envoi du template: ${error.response?.data?.detail || error.message}`);
     } finally {
       setUploading(false);
@@ -731,7 +761,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
               <div className="templates-selector__loading">Chargement des templates...</div>
             ) : templates.length === 0 ? (
               <div className="templates-selector__empty">
-                Aucun template UTILITY disponible. Créez-en un dans Meta Business Manager.
+                Aucun template UTILITY ou MARKETING disponible. Créez-en un dans Meta Business Manager.
               </div>
             ) : (
               <div className="templates-selector__list">
@@ -763,7 +793,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                             <small className="bubble__timestamp">Maintenant</small>
                           </div>
                           <div className="templates-selector__price">
-                            💰 {(template.price_eur || template.price_usd || 0.008).toFixed(3)} {template.price_eur ? 'EUR' : 'USD'}
+                            💰 {parseFloat(template.price_eur || template.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {template.price_eur ? 'EUR' : 'USD'}
                           </div>
                         </div>
                       </div>
@@ -812,7 +842,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
             {priceInfo && mode === "text" && text.trim() && !priceInfo.is_free && (
               <div className="message-price-indicator">
                 <span className="price-paid">
-                  💰 {priceInfo.price_eur?.toFixed(3) || priceInfo.price_usd?.toFixed(3)} {priceInfo.currency === "USD" ? "USD" : "EUR"}
+                  💰 {parseFloat(priceInfo.price_eur || priceInfo.price_usd || 0).toFixed(2).replace(/\.0+$/, '')} {priceInfo.currency === "USD" ? "USD" : "EUR"}
                 </span>
               </div>
             )}

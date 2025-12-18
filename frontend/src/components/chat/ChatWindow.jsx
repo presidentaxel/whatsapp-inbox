@@ -523,8 +523,14 @@ export default function ChatWindow({
     };
   }, [conversationId, sortMessages, removedMessageIds]);
 
-  const onSend = async (text) => {
+  const onSend = async (text, forceRefresh = false) => {
     if (!conversationId) return;
+
+    // Si forceRefresh est true, juste rafraîchir les messages sans envoyer
+    if (forceRefresh || text === "") {
+      refreshMessages();
+      return;
+    }
 
     const tempId = `temp-${Date.now()}`;
     const optimisticMessage = {

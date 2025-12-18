@@ -132,11 +132,22 @@ async def send_template_message(
         "template": template_payload
     }
     
+    # Log pour déboguer
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"📤 WhatsApp API - Envoi template: {template_name}, to: {to}, payload: {payload}")
+    
     response = await client.post(
         f"{GRAPH_API_BASE}/{phone_number_id}/messages",
         headers={"Authorization": f"Bearer {access_token}"},
         json=payload
     )
+    
+    # Log de la réponse en cas d'erreur
+    if response.status_code != 200:
+        error_detail = response.text
+        logger.error(f"❌ WhatsApp API Error {response.status_code}: {error_detail}")
+    
     response.raise_for_status()
     return response.json()
 

@@ -480,6 +480,7 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
 
     if existing.data:
         record = existing.data[0]
+        # Ne mettre à jour que le statut et le timestamp, ne pas toucher au content_text
         update_data = {"status": status_value, "timestamp": timestamp_iso}
         if error_message:
             update_data["error_message"] = error_message
@@ -508,20 +509,41 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
         contact = await _upsert_contact(recipient_id, None, None)
         conv = await _upsert_conversation(account["id"], contact["id"], recipient_id, timestamp_iso)
 
-    await supabase_execute(
-        supabase.table("messages").upsert(
-            {
-                "conversation_id": conv["id"],
-                "direction": "outbound",
-                "content_text": "[status update]",
-                "timestamp": timestamp_iso,
-                "wa_message_id": message_id,
-                "message_type": status_payload.get("type") or "status",
-                "status": status_value,
-            },
-            on_conflict="wa_message_id",
-        )
+    # Vérifier si un message avec ce wa_message_id existe déjà
+    existing_msg = await supabase_execute(
+        supabase.table("messages")
+        .select("id, content_text")
+        .eq("wa_message_id", message_id)
+        .limit(1)
     )
+    
+    # Si le message existe déjà, ne mettre à jour que le statut
+    if existing_msg.data:
+        existing_record = existing_msg.data[0]
+        update_data = {"status": status_value, "timestamp": timestamp_iso}
+        if error_message:
+            update_data["error_message"] = error_message
+        await supabase_execute(
+            supabase.table("messages")
+            .update(update_data)
+            .eq("id", existing_record["id"])
+        )
+    else:
+        # Si le message n'existe pas, créer un nouveau message de statut
+        await supabase_execute(
+            supabase.table("messages").upsert(
+                {
+                    "conversation_id": conv["id"],
+                    "direction": "outbound",
+                    "content_text": "[status update]",
+                    "timestamp": timestamp_iso,
+                    "wa_message_id": message_id,
+                    "message_type": status_payload.get("type") or "status",
+                    "status": status_value,
+                },
+                on_conflict="wa_message_id",
+            )
+        )
     await _update_conversation_timestamp(conv["id"], timestamp_iso)
 
 
