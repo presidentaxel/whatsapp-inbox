@@ -392,6 +392,12 @@
   border: none !important;
 }
 
+/* Masquer l'input-area quand le template selector est affiché */
+.input-area-advanced:has(.templates-selector) .input-area {
+  background: none !important;
+  box-shadow: none !important;
+}
+
 /* Groupe de boutons à gauche */
 .input-area-advanced .left-buttons {
   display: flex !important;
@@ -683,6 +689,110 @@
   background: rgba(250, 204, 21, 0.15);
   padding: 4px 8px;
   border-radius: 6px;
+}
+
+/* Templates selector - affiché quand hors fenêtre gratuite */
+.templates-selector {
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 16px;
+  background: rgba(255, 191, 36, 0.15);
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 12px;
+}
+
+.templates-selector__header {
+  margin-bottom: 16px;
+}
+
+.templates-selector__title {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fbbf24;
+  margin-bottom: 4px;
+}
+
+.templates-selector__subtitle {
+  display: block;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 4px;
+}
+
+.templates-selector__loading {
+  text-align: center;
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 14px;
+}
+
+.templates-selector__empty {
+  text-align: center;
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.templates-selector__list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  padding-left: 4px;
+}
+
+.templates-selector__bubble-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  margin: 0 -2px;
+  padding: 2px;
+}
+
+.templates-selector__bubble-wrapper:hover {
+  transform: translateX(-4px);
+}
+
+.templates-selector__bubble {
+  cursor: pointer;
+  position: relative;
+  max-width: 60%;
+  transition: all 0.2s ease;
+}
+
+.templates-selector__bubble-wrapper:hover .templates-selector__bubble {
+  opacity: 0.9;
+  transform: scale(1.02);
+}
+
+.templates-selector__bubble-header {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 6px;
+  color: #e9edef;
+}
+
+.templates-selector__bubble-footer {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.templates-selector__price {
+  font-size: 0.7rem;
+  color: #facc15;
+  font-weight: 600;
+  white-space: nowrap;
+  margin-left: 8px;
 }
 
 .edit-banner {

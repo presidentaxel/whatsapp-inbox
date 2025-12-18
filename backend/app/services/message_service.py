@@ -1078,8 +1078,10 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
     # Vérifier si on est dans la fenêtre gratuite
     is_free, last_inbound_time = await is_within_free_window(conv_id)
     
-    # Si force_send=False et hors fenêtre, utiliser le système avec fallback template
-    if not force_send and not is_free:
+    # Si hors fenêtre gratuite, essayer d'abord sans template
+    # Si WhatsApp refuse (erreur 131047), on utilisera un template en fallback
+    if not is_free and not force_send:
+        # Si force_send=False, utiliser le système avec fallback template
         return await send_message_with_template_fallback(payload, skip_bot_trigger=skip_bot_trigger)
 
     # Récupérer la conversation (avec cache)
@@ -1122,6 +1124,7 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         logger.error("WhatsApp API error after retries: %s", exc)
         error_details = str(exc)
         status_code = 0
+        error_code = None
         if hasattr(exc, "response") and exc.response:
             status_code = exc.response.status_code
             try:
@@ -1138,6 +1141,15 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
             except (ValueError, KeyError, AttributeError):
                 pass
         
+        # Si erreur 131047 (Re-engagement message), essayer avec un template
+        if error_code == 131047 or (isinstance(error_details, str) and "131047" in error_details):
+            logger.info(f"🔄 Erreur 131047 détectée dans exception - tentative avec template pour conversation {conv_id}")
+            # Essayer avec un template en fallback
+            template_result = await send_message_with_template_fallback(payload, skip_bot_trigger=skip_bot_trigger)
+            if not template_result.get("error"):
+                return template_result
+            # Si le template échoue aussi, continuer avec l'erreur originale
+        
         # Stocker le message échoué dans la base de données
         await _save_failed_message(conv_id, text, timestamp_iso, error_details)
         
@@ -1150,6 +1162,7 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
     if response.is_error:
         logger.error("WhatsApp send error: %s %s", response.status_code, response.text)
         error_details = response.text
+        error_code = None
         try:
             error_json = response.json()
             if isinstance(error_json, dict):
@@ -1169,6 +1182,15 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
                             error_details += f" [Subcode: {error_subcode}]"
         except (ValueError, KeyError):
             pass
+        
+        # Si erreur 131047 (Re-engagement message), essayer avec un template
+        if error_code == 131047 or (isinstance(error_details, str) and "131047" in error_details):
+            logger.info(f"🔄 Erreur 131047 détectée - tentative avec template pour conversation {conv_id}")
+            # Essayer avec un template en fallback
+            template_result = await send_message_with_template_fallback(payload, skip_bot_trigger=skip_bot_trigger)
+            if not template_result.get("error"):
+                return template_result
+            # Si le template échoue aussi, continuer avec l'erreur originale
         
         # Stocker le message échoué dans la base de données
         await _save_failed_message(conv_id, text, timestamp_iso, error_details)
@@ -1229,62 +1251,69 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
     Vérifie si on est dans la fenêtre de 24h pour envoyer un message gratuit.
     
     WhatsApp Cloud API permet d'envoyer des messages gratuits pendant 24h
-    après le dernier message entrant d'un utilisateur.
+    après la dernière interaction (message entrant ou sortant).
+    
+    Les messages échoués (status='failed') ne sont pas considérés comme des interactions valides.
     
     Returns:
         Tuple[bool, Optional[datetime]]: 
-        - (True, last_inbound_time) si dans la fenêtre gratuite
-        - (False, last_inbound_time) si hors fenêtre (nécessite un template payant)
-        - (False, None) si aucun message entrant trouvé
+        - (True, last_interaction_time) si dans la fenêtre gratuite
+        - (False, last_interaction_time) si hors fenêtre (nécessite un template payant)
+        - (False, None) si aucun message trouvé
     """
-    # Récupérer le dernier message entrant de la conversation
-    last_inbound = await supabase_execute(
+    # Récupérer le dernier message (entrant ou sortant) de la conversation
+    # Exclure les messages échoués car ils ne comptent pas comme interaction valide
+    # Note: .neq() inclut automatiquement les valeurs NULL, donc les messages sans statut sont inclus
+    last_message = await supabase_execute(
         supabase.table("messages")
-        .select("timestamp")
+        .select("timestamp, direction, status")
         .eq("conversation_id", conversation_id)
-        .eq("direction", "inbound")
+        .neq("status", "failed")  # Exclure uniquement les messages échoués (inclut NULL et autres statuts)
         .order("timestamp", desc=True)
         .limit(1)
     )
     
-    if not last_inbound.data or len(last_inbound.data) == 0:
-        logger.warning(f"⚠️ No inbound messages found for conversation {conversation_id}")
+    if not last_message.data or len(last_message.data) == 0:
+        logger.warning(f"⚠️ No valid messages found for conversation {conversation_id} (excluding failed messages)")
         return (False, None)
     
-    last_inbound_time_str = last_inbound.data[0]["timestamp"]
+    last_message_data = last_message.data[0]
+    last_interaction_time_str = last_message_data["timestamp"]
+    last_interaction_direction = last_message_data.get("direction", "unknown")
     
     # Parser le timestamp
     try:
-        if isinstance(last_inbound_time_str, str):
+        if isinstance(last_interaction_time_str, str):
             # Gérer différents formats de timestamp
-            if "T" in last_inbound_time_str:
-                last_inbound_time = datetime.fromisoformat(last_inbound_time_str.replace("Z", "+00:00"))
+            if "T" in last_interaction_time_str:
+                last_interaction_time = datetime.fromisoformat(last_interaction_time_str.replace("Z", "+00:00"))
             else:
-                last_inbound_time = datetime.fromisoformat(last_inbound_time_str)
+                last_interaction_time = datetime.fromisoformat(last_interaction_time_str)
         else:
-            last_inbound_time = last_inbound_time_str
+            last_interaction_time = last_interaction_time_str
         
         # S'assurer que c'est timezone-aware
-        if last_inbound_time.tzinfo is None:
-            last_inbound_time = last_inbound_time.replace(tzinfo=timezone.utc)
+        if last_interaction_time.tzinfo is None:
+            last_interaction_time = last_interaction_time.replace(tzinfo=timezone.utc)
         
         # Calculer la différence avec maintenant
         now = datetime.now(timezone.utc)
-        time_diff = now - last_inbound_time
+        time_diff = now - last_interaction_time
         hours_elapsed = time_diff.total_seconds() / 3600
         
-        # Fenêtre gratuite = 24 heures
+        # Fenêtre gratuite = 24 heures après la dernière interaction
         is_free = hours_elapsed < 24.0
         
         logger.info(
             f"🕐 Free window check for conversation {conversation_id}: "
-            f"last_inbound={last_inbound_time}, hours_elapsed={hours_elapsed:.2f}, is_free={is_free}"
+            f"last_interaction={last_interaction_time} ({last_interaction_direction}), "
+            f"hours_elapsed={hours_elapsed:.2f}, is_free={is_free}"
         )
         
-        return (is_free, last_inbound_time)
+        return (is_free, last_interaction_time)
         
     except Exception as e:
-        logger.error(f"❌ Error parsing timestamp {last_inbound_time_str}: {e}", exc_info=True)
+        logger.error(f"❌ Error parsing timestamp {last_interaction_time_str}: {e}", exc_info=True)
         return (False, None)
 
 
@@ -1306,18 +1335,20 @@ async def calculate_message_price(conversation_id: str, use_template: bool = Fal
         - category: str ("free", "utility", "conversational")
         - last_inbound_time: Optional[datetime]
     """
-    is_free, last_inbound_time = await is_within_free_window(conversation_id)
+    is_free, last_interaction_time = await is_within_free_window(conversation_id)
     
-    if is_free and not use_template and not use_conversational:
+    # Si on est dans la fenêtre gratuite, retourner gratuit peu importe les autres paramètres
+    if is_free:
         return {
             "is_free": True,
             "price_usd": 0.0,
             "price_eur": 0.0,
             "currency": "USD",
             "category": "free",
-            "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None
+            "last_inbound_time": last_interaction_time.isoformat() if last_interaction_time else None
         }
     
+    # Hors fenêtre gratuite - calculer le prix selon le type de message
     if use_template:
         # Prix des templates WhatsApp UTILITY (le moins cher)
         # Prix moyen en Europe : ~0.005-0.01 USD par message UTILITY
@@ -1329,7 +1360,7 @@ async def calculate_message_price(conversation_id: str, use_template: bool = Fal
             "price_eur": utility_price_eur,
             "currency": "USD",
             "category": "utility",
-            "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None,
+            "last_inbound_time": last_interaction_time.isoformat() if last_interaction_time else None,
             "template_required": True
         }
     
@@ -1344,7 +1375,7 @@ async def calculate_message_price(conversation_id: str, use_template: bool = Fal
         "price_eur": conversational_price_eur,
         "currency": "USD",
         "category": "conversational",
-        "last_inbound_time": last_inbound_time.isoformat() if last_inbound_time else None,
+        "last_inbound_time": last_interaction_time.isoformat() if last_interaction_time else None,
         "template_required": False
     }
 

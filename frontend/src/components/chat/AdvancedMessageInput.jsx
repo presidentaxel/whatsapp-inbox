@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
-import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic } from "react-icons/fi";
+import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
-import { sendMediaMessage, sendInteractiveMessage, getMessagePrice } from "../../api/messagesApi";
+import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 import { useTheme } from "../../hooks/useTheme";
 
@@ -14,6 +14,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [uploading, setUploading] = useState(false);
   const [priceInfo, setPriceInfo] = useState(null);
   const [loadingPrice, setLoadingPrice] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [isOutsideFreeWindow, setIsOutsideFreeWindow] = useState(false);
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -62,9 +65,48 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     }
   }, [editingMessage]);
 
+  // Vérifier si on est hors fenêtre gratuite et charger les templates si nécessaire
+  useEffect(() => {
+    if (!conversation?.id) {
+      setIsOutsideFreeWindow(false);
+      setTemplates([]);
+      return;
+    }
+
+    const checkFreeWindow = async () => {
+      try {
+        const response = await getMessagePrice(conversation.id);
+        const isFree = response.data?.is_free ?? true;
+        setIsOutsideFreeWindow(!isFree);
+        
+        // Si hors fenêtre, charger les templates
+        if (!isFree) {
+          setLoadingTemplates(true);
+          try {
+            const templatesResponse = await getAvailableTemplates(conversation.id);
+            setTemplates(templatesResponse.data?.templates || []);
+          } catch (error) {
+            console.error("Error loading templates:", error);
+            setTemplates([]);
+          } finally {
+            setLoadingTemplates(false);
+          }
+        } else {
+          setTemplates([]);
+        }
+      } catch (error) {
+        console.error("Error checking free window:", error);
+        setIsOutsideFreeWindow(false);
+        setTemplates([]);
+      }
+    };
+
+    checkFreeWindow();
+  }, [conversation?.id]);
+
   // Charger le prix du message quand le texte change
   useEffect(() => {
-    if (!conversation?.id || !text.trim() || mode !== "text") {
+    if (!conversation?.id || !text.trim() || mode !== "text" || isOutsideFreeWindow) {
       setPriceInfo(null);
       return;
     }
@@ -85,7 +127,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     // Debounce pour éviter trop de requêtes
     const timeoutId = setTimeout(loadPrice, 500);
     return () => clearTimeout(timeoutId);
-  }, [text, conversation?.id, mode]);
+  }, [text, conversation?.id, mode, isOutsideFreeWindow]);
 
   const handleSend = () => {
     if (disabled || !text.trim()) return;
@@ -93,6 +135,38 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setText("");
     setShowAdvanced(false);
     setMode("text");
+  };
+
+  const handleSendTemplate = async (template) => {
+    if (disabled || !conversation?.id) return;
+    
+    setUploading(true);
+    try {
+      // Extraire le texte du template (premier composant BODY)
+      const bodyComponent = template.components?.find(c => c.type === "BODY");
+      const templateText = bodyComponent?.text || "";
+      
+      // Créer les composants pour l'envoi
+      const components = [];
+      if (bodyComponent) {
+        components.push({
+          type: "BODY",
+          text: templateText
+        });
+      }
+      
+      await sendTemplateMessage(conversation.id, {
+        template_name: template.name,
+        components: components
+      });
+      
+      onSend?.(""); // Trigger refresh
+    } catch (error) {
+      console.error("Error sending template:", error);
+      alert(`Erreur lors de l'envoi du template: ${error.response?.data?.detail || error.message}`);
+    } finally {
+      setUploading(false);
+    }
   };
 
   // Ajuster la hauteur du textarea pour suivre le contenu
@@ -565,139 +639,199 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
         />
 
-        {/* Boutons à gauche */}
-        <div className="left-buttons">
-          {/* Bouton emoji */}
-          <div className="emoji-container" ref={emojiRef}>
-            <button
-              onClick={() => {
-                setShowEmojiPicker(!showEmojiPicker);
-                setShowMenu(false);
-              }}
-              className="btn-emoji"
-              disabled={disabled}
-              title="Émojis"
-            >
-              <FiSmile />
-            </button>
-            
-            {showEmojiPicker && (
-              <div className="emoji-picker-wrapper">
-                <EmojiPicker
-                  onEmojiClick={handleEmojiClick}
-                  theme="dark"
-                  width="350px"
-                  height="400px"
-                />
-              </div>
-            )}
-          </div>
+        {/* Boutons à gauche - cachés si hors fenêtre gratuite */}
+        {!isOutsideFreeWindow && (
+          <div className="left-buttons">
+            {/* Bouton emoji */}
+            <div className="emoji-container" ref={emojiRef}>
+              <button
+                onClick={() => {
+                  setShowEmojiPicker(!showEmojiPicker);
+                  setShowMenu(false);
+                }}
+                className="btn-emoji"
+                disabled={disabled}
+                title="Émojis"
+              >
+                <FiSmile />
+              </button>
+              
+              {showEmojiPicker && (
+                <div className="emoji-picker-wrapper">
+                  <EmojiPicker
+                    onEmojiClick={handleEmojiClick}
+                    theme="dark"
+                    width="350px"
+                    height="400px"
+                  />
+                </div>
+              )}
+            </div>
 
-          {/* Bouton + avec menu */}
-          <div className="menu-container" ref={menuRef}>
-            <button
-              onClick={() => {
-                console.log("Menu button clicked, current showMenu:", showMenu);
-                setShowMenu(!showMenu);
-                setShowEmojiPicker(false);
-              }}
-              className="btn-menu"
-              disabled={disabled}
-              title="Plus d'options"
-            >
-              <svg viewBox="0 0 24 24" width="24" height="24">
-                <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
-              </svg>
-            </button>
-            
-            {showMenu && (
-              <div className="dropdown-menu">
-                <button className="menu-item" onClick={openMediaPicker}>
-                  <div className="menu-icon menu-icon--document">
-                    <FiFileText />
-                  </div>
-                  <span>Document</span>
-                </button>
-                <button className="menu-item" onClick={openMediaPicker}>
-                  <div className="menu-icon menu-icon--media">
-                    <FiImage />
-                  </div>
-                  <span>Photos et vidéos</span>
-                </button>
-                <button className="menu-item" onClick={() => openMode("buttons")}>
-                  <div className="menu-icon menu-icon--buttons">
-                    <FiGrid />
-                  </div>
-                  <span>Boutons interactifs</span>
-                </button>
-                <button className="menu-item" onClick={() => openMode("list")}>
-                  <div className="menu-icon menu-icon--list">
-                    <FiList />
-                  </div>
-                  <span>Liste interactive</span>
-                </button>
-              </div>
-            )}
+            {/* Bouton + avec menu */}
+            <div className="menu-container" ref={menuRef}>
+              <button
+                onClick={() => {
+                  console.log("Menu button clicked, current showMenu:", showMenu);
+                  setShowMenu(!showMenu);
+                  setShowEmojiPicker(false);
+                }}
+                className="btn-menu"
+                disabled={disabled}
+                title="Plus d'options"
+              >
+                <svg viewBox="0 0 24 24" width="24" height="24">
+                  <path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+                </svg>
+              </button>
+              
+              {showMenu && (
+                <div className="dropdown-menu">
+                  <button className="menu-item" onClick={openMediaPicker}>
+                    <div className="menu-icon menu-icon--document">
+                      <FiFileText />
+                    </div>
+                    <span>Document</span>
+                  </button>
+                  <button className="menu-item" onClick={openMediaPicker}>
+                    <div className="menu-icon menu-icon--media">
+                      <FiImage />
+                    </div>
+                    <span>Photos et vidéos</span>
+                  </button>
+                  <button className="menu-item" onClick={() => openMode("buttons")}>
+                    <div className="menu-icon menu-icon--buttons">
+                      <FiGrid />
+                    </div>
+                    <span>Boutons interactifs</span>
+                  </button>
+                  <button className="menu-item" onClick={() => openMode("list")}>
+                    <div className="menu-icon menu-icon--list">
+                      <FiList />
+                    </div>
+                    <span>Liste interactive</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        {/* Champ de saisie */}
-        <div className="input-wrapper input-wrapper--flat">
-          <textarea
-            ref={textAreaRef}
-            rows={1}
-            value={text}
-            spellCheck={discussionPrefs?.spellCheck ?? true}
-            lang="fr"
-            onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
-            placeholder={
-              discussionPrefs?.enterToSend
-                ? "Écrire un message..."
-                : "Écrire un message... (Ctrl+Entrée pour envoyer)"
-            }
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                if (discussionPrefs?.enterToSend) {
-                  if (!e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                } else if (e.metaKey || e.ctrlKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }
-            }}
-            disabled={disabled}
-          />
-        </div>
-        
-        {/* Affichage du prix */}
-        {priceInfo && mode === "text" && text.trim() && (
-          <div className="message-price-indicator">
-            {priceInfo.is_free ? (
-              <span className="price-free">🆓 Gratuit</span>
-            ) : (
-              <span className="price-paid">
-                💰 {priceInfo.price_eur?.toFixed(3) || priceInfo.price_usd?.toFixed(3)} {priceInfo.currency === "USD" ? "USD" : "EUR"}
+        {/* Affichage des templates si hors fenêtre gratuite */}
+        {isOutsideFreeWindow && (
+          <div className="templates-selector">
+            <div className="templates-selector__header">
+              <span className="templates-selector__title">
+                <FiClock style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                Plus de 24h depuis la dernière interaction
               </span>
+              <span className="templates-selector__subtitle">Sélectionnez un template pour envoyer un message</span>
+            </div>
+            {loadingTemplates ? (
+              <div className="templates-selector__loading">Chargement des templates...</div>
+            ) : templates.length === 0 ? (
+              <div className="templates-selector__empty">
+                Aucun template UTILITY disponible. Créez-en un dans Meta Business Manager.
+              </div>
+            ) : (
+              <div className="templates-selector__list">
+                {templates.map((template, index) => {
+                  const bodyComponent = template.components?.find(c => c.type === "BODY");
+                  const headerComponent = template.components?.find(c => c.type === "HEADER");
+                  const footerComponent = template.components?.find(c => c.type === "FOOTER");
+                  const templateText = bodyComponent?.text || template.name;
+                  return (
+                    <div
+                      key={index}
+                      className="templates-selector__bubble-wrapper"
+                      onClick={() => !disabled && !uploading && handleSendTemplate(template)}
+                    >
+                      <div className="bubble me templates-selector__bubble">
+                        {headerComponent && (
+                          <div className="templates-selector__bubble-header">
+                            {headerComponent.text}
+                          </div>
+                        )}
+                        <span className="bubble__text">{templateText}</span>
+                        {footerComponent && (
+                          <div className="templates-selector__bubble-footer">
+                            {footerComponent.text}
+                          </div>
+                        )}
+                        <div className="bubble__footer">
+                          <div className="bubble__footer-left">
+                            <small className="bubble__timestamp">Maintenant</small>
+                          </div>
+                          <div className="templates-selector__price">
+                            💰 {(template.price_eur || template.price_usd || 0.008).toFixed(3)} {template.price_eur ? 'EUR' : 'USD'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
 
-        {/* Bouton d'envoi */}
-        <button
-          className="btn-send-whatsapp btn-send-flat"
-          onClick={() => {
-            if (mode === "buttons") handleButtonsSend();
-            else if (mode === "list") handleListSend();
-            else handleSend();
-          }}
-          disabled={disabled || !text.trim() || uploading || loadingPrice}
-          aria-label={editingMessage ? "Modifier" : "Envoyer"}
-        >
-          <FiSend />
-        </button>
+        {/* Champ de saisie - caché si hors fenêtre gratuite */}
+        {!isOutsideFreeWindow && (
+          <>
+            <div className="input-wrapper input-wrapper--flat">
+              <textarea
+                ref={textAreaRef}
+                rows={1}
+                value={text}
+                spellCheck={discussionPrefs?.spellCheck ?? true}
+                lang="fr"
+                onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
+                placeholder={
+                  discussionPrefs?.enterToSend
+                    ? "Écrire un message..."
+                    : "Écrire un message... (Ctrl+Entrée pour envoyer)"
+                }
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    if (discussionPrefs?.enterToSend) {
+                      if (!e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    } else if (e.metaKey || e.ctrlKey) {
+                      e.preventDefault();
+                      handleSend();
+                    }
+                  }
+                }}
+                disabled={disabled}
+              />
+            </div>
+            
+            {/* Affichage du prix - seulement si le message n'est pas gratuit */}
+            {priceInfo && mode === "text" && text.trim() && !priceInfo.is_free && (
+              <div className="message-price-indicator">
+                <span className="price-paid">
+                  💰 {priceInfo.price_eur?.toFixed(3) || priceInfo.price_usd?.toFixed(3)} {priceInfo.currency === "USD" ? "USD" : "EUR"}
+                </span>
+              </div>
+            )}
+
+            {/* Bouton d'envoi */}
+            <button
+              className="btn-send-whatsapp btn-send-flat"
+              onClick={() => {
+                if (mode === "buttons") handleButtonsSend();
+                else if (mode === "list") handleListSend();
+                else handleSend();
+              }}
+              disabled={disabled || !text.trim() || uploading || loadingPrice}
+              aria-label={editingMessage ? "Modifier" : "Envoyer"}
+            >
+              <FiSend />
+            </button>
+          </>
+        )}
       </div>
 
       {editingMessage && (

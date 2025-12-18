@@ -38,6 +38,7 @@ from app.services.message_service import (
     update_message_content,
     delete_message_scope,
 )
+from app.services import whatsapp_api_service
 
 router = APIRouter()
 
@@ -103,8 +104,9 @@ async def fetch_message_media(
 @router.post("/send")
 async def send_api_message(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
     """
-    Envoie un message WhatsApp. Envoie toujours le message texte normalement, même hors fenêtre.
-    Affiche toujours le prix du message (gratuit si dans fenêtre de 24h, payant sinon).
+    Envoie un message WhatsApp. 
+    - Si dans la fenêtre gratuite de 24h : envoie un message conversationnel gratuit
+    - Si hors fenêtre : utilise automatiquement un template UTILITY (payant mais fonctionne sans erreur)
     """
     print(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
     logger.info(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
@@ -258,6 +260,169 @@ async def get_message_price(
     # Calculer le prix avec message conversationnel (pas de template)
     price_info = await calculate_message_price(conversation_id, use_conversational=True)
     return price_info
+
+
+@router.get("/templates/{conversation_id}")
+async def get_available_templates(
+    conversation_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Récupère la liste des templates disponibles pour une conversation.
+    Retourne uniquement les templates UTILITY approuvés.
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    account = await get_account_by_id(conversation["account_id"])
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    
+    waba_id = account.get("waba_id")
+    access_token = account.get("access_token")
+    
+    if not waba_id or not access_token:
+        raise HTTPException(status_code=400, detail="account_not_configured")
+    
+    try:
+        templates_result = await whatsapp_api_service.list_message_templates(
+            waba_id=waba_id,
+            access_token=access_token,
+            limit=100
+        )
+        
+        # Filtrer uniquement les templates UTILITY approuvés
+        templates = templates_result.get("data", [])
+        
+        def get_template_price(category):
+            """Retourne le prix d'un template selon sa catégorie (prix Meta officiels)"""
+            # Prix selon la documentation Meta WhatsApp Business API
+            # https://developers.facebook.com/docs/whatsapp/pricing
+            prices = {
+                "UTILITY": {"usd": 0.008, "eur": 0.007},  # ~0.005-0.01 USD
+                "MARKETING": {"usd": 0.02, "eur": 0.018},  # ~0.015-0.03 USD
+                "AUTHENTICATION": {"usd": 0.005, "eur": 0.004},  # Généralement moins cher
+            }
+            return prices.get(category, {"usd": 0.008, "eur": 0.007})
+        
+        approved_utility_templates = []
+        for t in templates:
+            if t.get("status") == "APPROVED" and t.get("category") == "UTILITY":
+                price = get_template_price(t.get("category"))
+                approved_utility_templates.append({
+                    "name": t.get("name"),
+                    "status": t.get("status"),
+                    "category": t.get("category"),
+                    "language": t.get("language"),
+                    "components": t.get("components", []),
+                    "price_usd": price["usd"],
+                    "price_eur": price["eur"]
+                })
+        
+        return {
+            "templates": approved_utility_templates
+        }
+    except Exception as e:
+        logger.error(f"Error fetching templates: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/send-template/{conversation_id}")
+async def send_template_message_api(
+    conversation_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Envoie un message via template pour une conversation.
+    
+    Payload:
+    {
+        "template_name": "nom_du_template",
+        "components": [{"type": "BODY", "text": "votre texte"}]
+    }
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+    
+    template_name = payload.get("template_name")
+    components = payload.get("components", [])
+    
+    if not template_name:
+        raise HTTPException(status_code=400, detail="template_name_required")
+    
+    account = await get_account_by_id(conversation["account_id"])
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    
+    phone_id = account.get("phone_number_id")
+    token = account.get("access_token")
+    to_number = conversation["client_number"]
+    
+    if not phone_id or not token:
+        raise HTTPException(status_code=400, detail="whatsapp_not_configured")
+    
+    try:
+        response = await whatsapp_api_service.send_template_message(
+            phone_number_id=phone_id,
+            access_token=token,
+            to=to_number,
+            template_name=template_name,
+            language_code="fr",
+            components=components
+        )
+        
+        message_id = response.get("messages", [{}])[0].get("id")
+        timestamp_iso = datetime.now(timezone.utc).isoformat()
+        
+        # Sauvegarder le message
+        import asyncio
+        from app.core.db import supabase_execute, supabase
+        from app.services.message_service import _update_conversation_timestamp
+        
+        message_payload = {
+            "conversation_id": conversation_id,
+            "direction": "outbound",
+            "content_text": components[0].get("text", "") if components else "",
+            "timestamp": timestamp_iso,
+            "wa_message_id": message_id,
+            "message_type": "template",
+            "status": "sent",
+        }
+        
+        async def _save_message_async():
+            try:
+                await asyncio.gather(
+                    supabase_execute(
+                        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+                    ),
+                    _update_conversation_timestamp(conversation_id, timestamp_iso)
+                )
+            except Exception as e:
+                logger.error("Error saving template message to database: %s", e, exc_info=True)
+        
+        asyncio.create_task(_save_message_async())
+        
+        price_info = await calculate_message_price(conversation_id, use_template=True)
+        
+        return {
+            "status": "sent",
+            "message_id": message_id,
+            "is_free": False,
+            "price_usd": price_info["price_usd"],
+            "price_eur": price_info["price_eur"],
+            "category": "utility",
+            "template_name": template_name
+        }
+    except Exception as e:
+        logger.error(f"Error sending template message: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/send-media")
