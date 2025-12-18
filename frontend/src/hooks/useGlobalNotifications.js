@@ -24,7 +24,6 @@ export function useGlobalNotifications(selectedConversationId = null) {
     }
     lastNotifiedRef.current.clear();
 
-    console.log('🔔 Initialisation des notifications globales - Écoute de TOUS les messages');
 
     // Écouter TOUS les nouveaux messages sans aucune restriction
     // On écoute tous les INSERT sur messages et on notifie tout sauf si la conversation est ouverte
@@ -42,17 +41,12 @@ export function useGlobalNotifications(selectedConversationId = null) {
           
           // Ignorer UNIQUEMENT les messages sortants (de nous)
           if (newMessage.direction === 'outbound') {
-            console.debug('🔕 Skip notify (outbound message)', {
-              messageId: newMessage.id,
-              conversationId: newMessage.conversation_id,
-            });
             return;
           }
 
           // Éviter les doublons (notifications multiples pour le même message)
           const messageKey = `${newMessage.id}-${newMessage.conversation_id}`;
           if (lastNotifiedRef.current.has(messageKey)) {
-            console.debug('🔕 Skip notify (duplicate)', { messageKey });
             return;
           }
           lastNotifiedRef.current.add(messageKey);
@@ -71,25 +65,18 @@ export function useGlobalNotifications(selectedConversationId = null) {
               .single();
 
             if (error || !conversation) {
-              console.warn('⚠️ Conversation non trouvée pour le message:', newMessage.id);
               return;
             }
 
             // Vérifier que l'utilisateur a accès à ce compte/conversation
             const accountId = conversation.account_id;
             if (!accountId) {
-              console.warn('⚠️ Conversation sans account_id:', conversation.id);
               return;
             }
 
             // Vérifier les permissions : l'utilisateur doit avoir conversations.view pour ce compte
             // Cela vérifie automatiquement si access_level = 'aucun' (via hasPermission)
             if (!hasPermission || !hasPermission('conversations.view', accountId)) {
-              console.debug('🔕 Skip notify (no access to account)', {
-                messageId: newMessage.id,
-                conversationId: conversation.id,
-                accountId: accountId,
-              });
               return;
             }
 
@@ -104,40 +91,20 @@ export function useGlobalNotifications(selectedConversationId = null) {
             
             if (isForeground && isConversationOpen) {
               // L'utilisateur regarde déjà cette conversation dans une fenêtre active
-              console.debug('🔕 Skip notify (foreground & open conversation)', {
-                messageId: newMessage.id,
-                conversationId: conversation.id,
-              });
               return;
             }
 
             // Afficher la notification seulement si l'utilisateur a accès
-            console.log('🔔 Notification pour message:', {
-              messageId: newMessage.id,
-              conversationId: conversation.id,
-              accountId: accountId,
-              contact: conversation.contacts?.display_name || conversation.client_number,
-              isAppVisible: isVisible,
-              hasFocus,
-              isConversationOpen
-            });
-
             await notifyNewMessage(newMessage, conversation, {
               checkConversationOpen: false,
               force: false
             });
           } catch (error) {
-            console.error('❌ Erreur lors de la notification:', error);
+            // Erreur silencieuse
           }
         }
       )
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log('✅ Notifications globales activées - Écoute de TOUS les messages entrants');
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error('❌ Erreur de connexion aux notifications');
-        }
-      });
+      .subscribe(() => {});
 
     channelRef.current = channel;
 
@@ -148,7 +115,6 @@ export function useGlobalNotifications(selectedConversationId = null) {
         channelRef.current = null;
       }
       lastNotifiedRef.current.clear();
-      console.log('🔕 Notifications globales désactivées');
     };
   }, [selectedConversationId, hasPermission]);
 }

@@ -14,7 +14,6 @@ import {
  */
 export async function askForNotificationPermission() {
   if (!('Notification' in window)) {
-    console.warn('⚠️ Les notifications ne sont pas supportées par ce navigateur');
     return false;
   }
 
@@ -25,7 +24,6 @@ export async function askForNotificationPermission() {
 
   // Si déjà refusé, ne pas redemander
   if (Notification.permission === 'denied') {
-    console.log('⚠️ Les notifications ont été refusées par l\'utilisateur');
     return false;
   }
 
@@ -71,7 +69,6 @@ export async function notifyNewMessage(message, conversation, options = {}) {
   if (!areNotificationsEnabled()) {
     const granted = await askForNotificationPermission();
     if (!granted) {
-      console.warn('🔕 Notification skip: permission not granted');
       return;
     }
   }
@@ -87,7 +84,6 @@ export async function notifyNewMessage(message, conversation, options = {}) {
   if (!force && !document.hidden && checkConversationOpen) {
     // Vérifier si la conversation est actuellement ouverte
     // Cette vérification se fait maintenant dans le hook useGlobalNotifications
-    console.debug('🔕 Notification skip: app visible and conversation check active');
     return;
   }
 
@@ -135,23 +131,7 @@ export async function notifyNewMessage(message, conversation, options = {}) {
   // Si non disponible, on assume qu'il y a au moins 1 message non lu (le message actuel)
   const unreadCount = conversation?.unread_count || 1;
   
-  console.log('🔔 About to show notification', {
-    messageId: message.id,
-    conversationId: conversation.id,
-    contactName,
-    preview: messagePreview,
-    hasImage: !!contactImage,
-    unreadCount
-  });
-  
   await showMessageNotification(contactName, messagePreview, conversation.id, contactImage, unreadCount);
-  console.log('✅ Notification shown', {
-    messageId: message.id,
-    conversationId: conversation.id,
-    contactName,
-    preview: messagePreview,
-    unreadCount
-  });
 }
 
 /**

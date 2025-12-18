@@ -12,16 +12,13 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     supabaseClient.auth.getSession().then(({ data, error }) => {
       if (error) {
-        console.warn("⚠️ Error getting session in AuthContext:", error);
         setSession(null);
       } else if (data.session) {
-        console.log("✅ Session found in AuthContext:", data.session.user?.id);
         if (!data.session.access_token) {
-          console.warn("⚠️ Session exists but no access_token in AuthContext!");
+          // Session sans access_token
         }
         setSession(data.session);
       } else {
-        console.log("ℹ️ No session found in AuthContext");
         setSession(null);
       }
       setLoading(false);
@@ -29,7 +26,6 @@ export function AuthProvider({ children }) {
     const {
       data: { subscription },
     } = supabaseClient.auth.onAuthStateChange((_event, sess) => {
-      console.log("🔄 Auth state changed:", _event, sess?.user?.id);
       setSession(sess);
     });
     return () => subscription.unsubscribe();
@@ -43,7 +39,6 @@ export function AuthProvider({ children }) {
     
     // Vérifier que le token existe avant d'appeler l'API
     if (!session.access_token) {
-      console.warn("⚠️ Session exists but no access_token in AuthContext");
       setProfile(null);
       return;
     }
@@ -51,11 +46,7 @@ export function AuthProvider({ children }) {
     api
       .get("/auth/me")
       .then((res) => setProfile(res.data))
-      .catch((error) => {
-        console.error("❌ Error fetching profile in AuthContext:", error);
-        if (error.response?.status === 401) {
-          console.warn("⚠️ 401 Unauthorized - Session may have expired, clearing profile");
-        }
+      .catch(() => {
         setProfile(null);
       });
   }, [session]);

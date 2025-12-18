@@ -65,7 +65,6 @@ export default function InboxPage() {
         return payload[0]?.id ?? null;
       });
     } catch (error) {
-      console.error("Failed to load accounts", error);
       setAccounts([]);
       setActiveAccount(null);
     }
@@ -102,7 +101,6 @@ export default function InboxPage() {
             cursor = lastConversation.updated_at;
           }
         } catch (error) {
-          console.error("Error loading conversations:", error);
           hasMore = false;
         }
       }
@@ -304,18 +302,6 @@ export default function InboxPage() {
   // On vérifie si l'utilisateur a au moins un rôle parmi admin, dev, manager
   const canAccessGemini = canViewPermissions || canManagePermissions || canViewAccounts; // DEV, Admin, ou Manager
 
-  // Debug: afficher les permissions dans la console
-  useEffect(() => {
-    if (profile?.permissions) {
-      console.log("🔐 User permissions:", {
-        global: profile.permissions.global,
-        accounts: profile.permissions.accounts,
-        canViewPermissions,
-        canManagePermissions,
-        canManageRoles,
-      });
-    }
-  }, [profile, canViewPermissions, canManagePermissions, canManageRoles]);
 
   const allowedNavItems = useMemo(() => {
     const items = ["chat"];
@@ -458,7 +444,6 @@ export default function InboxPage() {
                             refreshConversations(activeAccount);
                           }
                         } catch (error) {
-                          console.error("Erreur lors de la création de la conversation:", error);
                           const errorMsg = error.response?.data?.detail || error.message || "Erreur inconnue";
                           alert(`Impossible de créer la conversation: ${errorMsg}`);
                         }

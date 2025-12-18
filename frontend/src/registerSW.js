@@ -10,15 +10,13 @@ export function registerServiceWorker() {
       navigator.serviceWorker
         .register('/sw.js', { scope: '/' })
         .then((registration) => {
-          console.log('✅ Service Worker enregistré:', registration.scope);
-          
           // Sur macOS, s'assurer que le Service Worker est actif
           if (registration.active) {
-            console.log('✅ Service Worker actif (prêt pour les notifications)');
+            // Service Worker actif
           } else if (registration.installing) {
             registration.installing.addEventListener('statechange', () => {
               if (registration.installing.state === 'activated') {
-                console.log('✅ Service Worker activé (prêt pour les notifications)');
+                // Service Worker activé
               }
             });
           } else if (registration.waiting) {
@@ -41,9 +39,7 @@ export function registerServiceWorker() {
             registration.update();
           }, 60 * 60 * 1000);
         })
-        .catch((error) => {
-          console.error('❌ Erreur lors de l\'enregistrement du Service Worker:', error);
-        });
+        .catch(() => {});
     };
 
     // Enregistrer immédiatement si la page est déjà chargée
@@ -57,7 +53,6 @@ export function registerServiceWorker() {
 
     // Écouter les mises à jour du SW
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      console.log('🔄 Service Worker mis à jour');
       // Recharger automatiquement pour forcer la mise à jour
       window.location.reload();
     });
@@ -65,13 +60,10 @@ export function registerServiceWorker() {
     // Écouter les messages du Service Worker
     navigator.serviceWorker.addEventListener('message', (event) => {
       if (event.data && event.data.type === 'SW_UPDATED') {
-        console.log('🔄 Service Worker mis à jour:', event.data.version);
         // Recharger automatiquement pour forcer la mise à jour
         window.location.reload();
       }
     });
-  } else {
-    console.warn('⚠️ Service Worker non supporté par ce navigateur');
   }
 }
 
@@ -81,14 +73,7 @@ export function registerServiceWorker() {
 export async function requestNotificationPermission() {
   if ('Notification' in window && 'serviceWorker' in navigator) {
     const permission = await Notification.requestPermission();
-    
-    if (permission === 'granted') {
-      console.log('✅ Notifications autorisées');
-      return true;
-    } else {
-      console.log('❌ Notifications refusées');
-      return false;
-    }
+    return permission === 'granted';
   }
   return false;
 }
@@ -113,23 +98,16 @@ export function setupInstallPrompt() {
     // Empêcher le prompt automatique
     e.preventDefault();
     deferredPrompt = e;
-    
-    console.log('💾 PWA peut être installée');
-    
-    // Vous pouvez maintenant afficher votre propre bouton d'installation
-    // et appeler showInstallPrompt() quand l'utilisateur clique dessus
   });
 
   // Détecter quand l'app est installée
   window.addEventListener('appinstalled', () => {
-    console.log('✅ PWA installée avec succès');
     deferredPrompt = null;
   });
 }
 
 export async function showInstallPrompt() {
   if (!deferredPrompt) {
-    console.log('❌ Prompt d\'installation non disponible');
     return false;
   }
 
@@ -139,7 +117,6 @@ export async function showInstallPrompt() {
   // Attendre le choix de l'utilisateur
   const { outcome } = await deferredPrompt.userChoice;
   
-  console.log(`Installation: ${outcome}`);
   deferredPrompt = null;
   
   return outcome === 'accepted';
@@ -165,13 +142,11 @@ export async function showNotification(title, options = {}) {
   if (Notification.permission === 'default') {
     const granted = await requestNotificationPermission();
     if (!granted) {
-      console.log('❌ Permission de notification refusée');
       return;
     }
   }
   
   if (Notification.permission !== 'granted') {
-    console.log('❌ Permission de notification non accordée');
     return;
   }
 
@@ -216,7 +191,6 @@ export async function showNotification(title, options = {}) {
   // Pas de fallback avec new Notification()
   if (isMac) {
     if (!('serviceWorker' in navigator)) {
-      console.warn('⚠️ Service Worker requis pour les notifications sur macOS');
       return;
     }
     
@@ -224,15 +198,13 @@ export async function showNotification(title, options = {}) {
       const registration = await navigator.serviceWorker.ready;
       
       if (!registration) {
-        console.warn('⚠️ Service Worker non prêt sur macOS');
         return;
       }
       
       // Afficher la notification via le service worker (obligatoire sur macOS)
       await registration.showNotification(title, cleanOptions);
-      console.log('✅ Notification affichée via Service Worker (macOS)');
     } catch (error) {
-      console.error('❌ Erreur lors de l\'affichage de la notification sur macOS:', error);
+      // Erreur silencieuse
     }
   } else {
     // Sur les autres plateformes, essayer d'abord le Service Worker, puis fallback
@@ -241,12 +213,11 @@ export async function showNotification(title, options = {}) {
         const registration = await navigator.serviceWorker.ready;
         await registration.showNotification(title, cleanOptions);
       } catch (error) {
-        console.warn('⚠️ Erreur Service Worker, fallback vers Notification API:', error);
         // Fallback : notification simple sans service worker
         try {
           new Notification(title, cleanOptions);
         } catch (fallbackError) {
-          console.error('❌ Erreur avec le fallback Notification:', fallbackError);
+          // Erreur silencieuse
         }
       }
     } else {
@@ -254,7 +225,7 @@ export async function showNotification(title, options = {}) {
       try {
         new Notification(title, cleanOptions);
       } catch (error) {
-        console.error('❌ Erreur lors de l\'affichage de la notification:', error);
+        // Erreur silencieuse
       }
     }
   }
@@ -282,7 +253,6 @@ function getStoredConversations() {
     const stored = localStorage.getItem(NOTIFICATION_STORAGE_KEY);
     return stored ? JSON.parse(stored) : {};
   } catch (error) {
-    console.warn('⚠️ Erreur lecture notifications:', error);
     return {};
   }
 }
@@ -291,7 +261,7 @@ function storeConversations(conversations) {
   try {
     localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(conversations));
   } catch (error) {
-    console.warn('⚠️ Erreur écriture notifications:', error);
+    // Erreur silencieuse
   }
 }
 
@@ -387,7 +357,7 @@ export async function showMessageNotification(contactName, messagePreview, conve
         existingNotification = notifications[0];
       }
     } catch (error) {
-      console.warn('⚠️ Impossible de récupérer les notifications existantes:', error);
+      // Erreur silencieuse
     }
   }
   

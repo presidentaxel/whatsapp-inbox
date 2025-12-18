@@ -86,10 +86,114 @@ export default function ChatWindow({
       // Mettre à jour les messages : fusionner avec les messages existants
       // en gardant les plus récents et en évitant les doublons
       setMessages((prev) => {
-        const existingIds = new Set(prev.map(m => m.id));
-        const newMessages = filtered.filter(m => !existingIds.has(m.id));
-        const combined = [...prev, ...newMessages];
-        return sortMessages(combined);
+        
+        // Créer une Map des nouveaux messages par ID pour accès rapide
+        const newMessagesById = new Map();
+        const newMessagesByWaId = new Map();
+        filtered.forEach(msg => {
+          if (msg.id) newMessagesById.set(msg.id, msg);
+          if (msg.wa_message_id) newMessagesByWaId.set(msg.wa_message_id, msg);
+        });
+        
+        // Construire la liste finale
+        const result = [];
+        const seenIds = new Set();
+        const seenWaIds = new Set();
+        
+        // ÉTAPE 1: Supprimer TOUS les messages optimistes (temp-*)
+        // Soit s'ils ont un correspondant réel, soit s'ils sont trop anciens (plus de 3 secondes)
+        const optimisticToRemove = new Set();
+        const now = Date.now();
+        
+        prev.forEach((msg) => {
+          if (msg.id && msg.id.startsWith("temp-")) {
+            const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
+            const age = now - msgTime;
+            
+            // Chercher un message réel correspondant
+            const msgContent = (msg.content_text || "").trim();
+            const matching = filtered.find((newMsg) => {
+              const newMsgContent = (newMsg.content_text || "").trim();
+              if (msgContent !== newMsgContent || msgContent.length === 0) {
+                return false;
+              }
+              
+              const newMsgTime = new Date(newMsg.timestamp || newMsg.created_at).getTime();
+              const timeDiff = Math.abs(msgTime - newMsgTime);
+              
+              // Fenêtre de 10 secondes
+              return timeDiff < 10000;
+            });
+            
+            // Supprimer si correspondant trouvé OU si trop ancien (plus de 3 secondes)
+            if (matching || age > 3000) {
+              optimisticToRemove.add(msg.id);
+            }
+          }
+        });
+        
+        // ÉTAPE 2: Traiter les messages existants (en excluant les optimistes à supprimer)
+        prev.forEach((msg) => {
+          // Supprimer tous les messages optimistes identifiés
+          if (msg.id && msg.id.startsWith("temp-") && optimisticToRemove.has(msg.id)) {
+            return; // Ne pas ajouter ce message optimiste
+          }
+          
+          // Ne JAMAIS garder les messages optimistes qui n'ont pas été identifiés pour suppression
+          // (ils seront supprimés au prochain refresh)
+          if (msg.id && msg.id.startsWith("temp-")) {
+            return; // Ne pas garder les messages optimistes
+          }
+          
+          // Si le message existe dans les nouveaux messages, utiliser la version du serveur
+          if (msg.id && newMessagesById.has(msg.id)) {
+            const serverVersion = newMessagesById.get(msg.id);
+            if (!seenIds.has(serverVersion.id)) {
+              result.push(serverVersion);
+              seenIds.add(serverVersion.id);
+              if (serverVersion.wa_message_id) seenWaIds.add(serverVersion.wa_message_id);
+            }
+            return; // Ne pas ajouter l'ancienne version
+          }
+          
+          // Si le message existe par wa_message_id dans les nouveaux messages, utiliser la version du serveur
+          if (msg.wa_message_id && newMessagesByWaId.has(msg.wa_message_id)) {
+            const serverVersion = newMessagesByWaId.get(msg.wa_message_id);
+            if (!seenIds.has(serverVersion.id)) {
+              result.push(serverVersion);
+              seenIds.add(serverVersion.id);
+              if (serverVersion.wa_message_id) seenWaIds.add(serverVersion.wa_message_id);
+            }
+            return; // Ne pas ajouter l'ancienne version
+          }
+          
+          // Garder le message existant s'il n'est pas dans les nouveaux messages
+          // Ne JAMAIS garder les messages optimistes (temp-*) - ils sont supprimés automatiquement
+          if (msg.id && !seenIds.has(msg.id)) {
+            // Supprimer tous les messages optimistes
+            if (msg.id.startsWith("temp-")) {
+              return; // Ne pas garder les messages optimistes
+            }
+            result.push(msg);
+            seenIds.add(msg.id);
+            if (msg.wa_message_id) seenWaIds.add(msg.wa_message_id);
+          }
+        });
+        
+        // Ensuite, ajouter les nouveaux messages qui n'ont pas encore été ajoutés
+        filtered.forEach((msg) => {
+          if (msg.id && !seenIds.has(msg.id)) {
+            result.push(msg);
+            seenIds.add(msg.id);
+            if (msg.wa_message_id) seenWaIds.add(msg.wa_message_id);
+          } else if (msg.wa_message_id && !seenWaIds.has(msg.wa_message_id)) {
+            result.push(msg);
+            if (msg.id) seenIds.add(msg.id);
+            seenWaIds.add(msg.wa_message_id);
+          }
+        });
+        
+        return sortMessages(result);
       });
       
       return filtered;
@@ -183,9 +287,7 @@ export default function ChatWindow({
     if (conversationId && isWindowActive && conversation) {
       // Marquer comme lue après un court délai pour éviter les appels trop fréquents
       const markReadTimeout = setTimeout(() => {
-        markConversationRead(conversationId).catch((err) => {
-          console.error("Failed to mark conversation as read:", err);
-        });
+      markConversationRead(conversationId).catch(() => {});
       }, 1000);
 
       return () => clearTimeout(markReadTimeout);
@@ -313,10 +415,58 @@ export default function ChatWindow({
             if (removedMessageIds.has(incoming.id) || removedMessageIds.has(incoming.wa_message_id)) {
               return prev;
             }
-            const exists = prev.some((msg) => msg.id === incoming.id);
-            if (exists) {
-              return sortMessages(prev.map((msg) => (msg.id === incoming.id ? incoming : msg)));
+            
+            // Vérifier si le message existe déjà (par ID ou wa_message_id)
+            const existsById = prev.some((msg) => msg.id === incoming.id);
+            const existsByWaId = incoming.wa_message_id && prev.some((msg) => msg.wa_message_id === incoming.wa_message_id);
+            
+            if (existsById || existsByWaId) {
+              // Mettre à jour le message existant avec les données du serveur (qui ont le bon statut)
+              const updated = prev.map((msg) => {
+                if (msg.id === incoming.id || (incoming.wa_message_id && msg.wa_message_id === incoming.wa_message_id)) {
+                  return incoming; // Utiliser la version du serveur qui a le bon statut
+                }
+                return msg;
+              });
+              return sortMessages(updated);
             }
+            
+            // Si c'est un message sortant (qu'on vient d'envoyer), supprimer les messages optimistes correspondants
+            if (incoming.direction === "outbound" || incoming.from_me) {
+              // Trouver et supprimer tous les messages optimistes qui correspondent
+              const cleaned = prev.filter((msg) => {
+                // Supprimer les messages optimistes (temp-*) qui correspondent au nouveau message
+                if (msg.id && msg.id.startsWith("temp-")) {
+                  const contentMatch = msg.content_text === incoming.content_text;
+                  const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
+                  const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
+                  const timeDiff = Math.abs(msgTime - incomingTime);
+                  
+                  // Si le contenu correspond et que c'est dans les 60 secondes, c'est le même message
+                  if (contentMatch && timeDiff < 60000) {
+                    return false; // Supprimer ce message optimiste
+                  }
+                }
+                // Supprimer aussi les messages réels qui ont le même contenu et timestamp proche (doublons)
+                if (msg.id && !msg.id.startsWith("temp-") && msg.direction === "outbound") {
+                  const contentMatch = msg.content_text === incoming.content_text;
+                  const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
+                  const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
+                  const timeDiff = Math.abs(msgTime - incomingTime);
+                  
+                  // Si le contenu correspond exactement et que c'est dans les 10 secondes, c'est un doublon
+                  if (contentMatch && timeDiff < 10000 && msg.id !== incoming.id) {
+                    return false; // Supprimer le doublon
+                  }
+                }
+                return true; // Garder les autres messages
+              });
+              
+              // Ajouter le nouveau message avec le bon statut depuis le serveur
+              return sortMessages([...cleaned, incoming]);
+            }
+            
+            // Pour les messages entrants, ajouter simplement
             return sortMessages([...prev, incoming]);
           });
         }
@@ -333,9 +483,20 @@ export default function ChatWindow({
           const updated = payload.new;
           // Si le statut d'un message sortant a changé (sent → delivered → read),
           // mettre à jour la liste pour afficher le nouveau statut
-          setMessages((prev) =>
-            sortMessages(prev.map((msg) => (msg.id === updated.id ? updated : msg)))
-          );
+          setMessages((prev) => {
+            const updatedList = prev.map((msg) => {
+              // Mettre à jour par ID
+              if (msg.id === updated.id) {
+                return updated; // Utiliser la version complète du serveur
+              }
+              // Mettre à jour par wa_message_id aussi
+              if (updated.wa_message_id && msg.wa_message_id === updated.wa_message_id) {
+                return updated;
+              }
+              return msg;
+            });
+            return sortMessages(updatedList);
+          });
         }
       )
       .on(
@@ -370,12 +531,23 @@ export default function ChatWindow({
       status: "pending",
       timestamp: new Date().toISOString(),
     };
+    
     setMessages((prev) => sortMessages([...prev, optimisticMessage]));
+    
     // Forcer le scroll en bas quand l'utilisateur envoie un message
     setAutoScroll(true);
     try {
       await sendMessage({ conversation_id: conversationId, content: text });
-    } finally {
+      
+      // Le webhook Supabase devrait ajouter le message automatiquement
+      // On fait un refresh après un délai pour s'assurer que le statut est à jour
+      // et pour récupérer le message si le webhook n'a pas fonctionné
+      setTimeout(() => {
+        refreshMessages();
+      }, 1000);
+    } catch (error) {
+      // En cas d'erreur, supprimer le message optimiste et rafraîchir immédiatement
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
       refreshMessages();
     }
   };
@@ -394,7 +566,6 @@ export default function ChatWindow({
         await permanentlyDeleteMessage(messageId);
       }
     } catch (error) {
-      console.error("Erreur lors de la suppression du message:", error);
       // Continuer quand même le renvoi même si la suppression échoue
     }
     
@@ -417,7 +588,6 @@ export default function ChatWindow({
       await sendMessage({ conversation_id: conversationId, content: messageContent });
       // Ne pas appeler refreshMessages() ici car le nouveau message sera ajouté via le webhook Supabase
     } catch (error) {
-      console.error("Erreur lors du renvoi du message:", error);
       // En cas d'erreur, retirer de la liste des supprimés et rafraîchir
       setRemovedMessageIds((prev) => {
         const newSet = new Set(prev);
