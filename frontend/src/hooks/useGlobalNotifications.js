@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { supabaseClient } from '../api/supabaseClient';
-import { notifyNewMessage, askForNotificationPermission } from '../utils/notifications';
+import { 
+  notifyNewMessage, 
+  askForNotificationPermission,
+  isNotificationEnabledForAccount 
+} from '../utils/notifications';
 import { useAuth } from '../context/AuthContext';
 
 /**
@@ -71,12 +75,20 @@ export function useGlobalNotifications(selectedConversationId = null) {
             // Vérifier que l'utilisateur a accès à ce compte/conversation
             const accountId = conversation.account_id;
             if (!accountId) {
+              // Pas de compte associé, ne pas notifier
               return;
             }
 
             // Vérifier les permissions : l'utilisateur doit avoir conversations.view pour ce compte
             // Cela vérifie automatiquement si access_level = 'aucun' (via hasPermission)
             if (!hasPermission || !hasPermission('conversations.view', accountId)) {
+              return;
+            }
+
+            // IMPORTANT: Vérifier les préférences de notifications pour ce compte spécifique
+            // Ne pasifier que si l'utilisateur a activé les notifications pour ce compte
+            if (!isNotificationEnabledForAccount(accountId, 'messages')) {
+              // Les notifications sont désactivées pour ce compte, ne pas envoyer de notification
               return;
             }
 
@@ -94,7 +106,7 @@ export function useGlobalNotifications(selectedConversationId = null) {
               return;
             }
 
-            // Afficher la notification seulement si l'utilisateur a accès
+            // Afficher la notification seulement si l'utilisateur a accès ET les notifications sont activées pour ce compte
             await notifyNewMessage(newMessage, conversation, {
               checkConversationOpen: false,
               force: false

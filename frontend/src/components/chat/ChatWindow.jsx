@@ -8,7 +8,7 @@ import AdvancedMessageInput from "./AdvancedMessageInput";
 import TypingIndicator from "./TypingIndicator";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
-import { notifyNewMessage } from "../../utils/notifications";
+import { notifyNewMessage, isNotificationEnabledForAccount } from "../../utils/notifications";
 import { useAuth } from "../../context/AuthContext";
 
 export default function ChatWindow({
@@ -405,9 +405,14 @@ export default function ChatWindow({
           // l'indicateur "en train d'écrire" sera géré par le useEffect qui surveille les messages
           
           // Afficher une notification si c'est un message entrant et que la fenêtre n'est pas au premier plan
+          // Vérifier aussi que les notifications sont activées pour ce compte
           const hasFocus = document.hasFocus?.() === true;
+          const accountId = conversation?.account_id;
           if (!incoming.from_me && (!isWindowActive || !hasFocus)) {
-            notifyNewMessage(incoming, conversation);
+            // Vérifier les préférences de notifications pour ce compte avant d'envoyer
+            if (accountId && isNotificationEnabledForAccount(accountId, 'messages')) {
+              notifyNewMessage(incoming, conversation);
+            }
           }
           
           setMessages((prev) => {

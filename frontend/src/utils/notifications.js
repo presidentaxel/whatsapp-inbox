@@ -9,6 +9,49 @@ import {
 } from '../registerSW';
 
 /**
+ * Clé de stockage pour les préférences de notifications
+ */
+const NOTIFICATION_PREFS_STORAGE_KEY = 'notif_prefs_v1';
+
+/**
+ * Charger les préférences de notifications depuis localStorage
+ * @returns {Object} Préférences par compte: { [accountId]: { messages: boolean, previews: boolean, ... } }
+ */
+export function loadNotificationPrefs() {
+  try {
+    const raw = localStorage.getItem(NOTIFICATION_PREFS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Vérifier si les notifications sont activées pour un compte spécifique
+ * @param {string} accountId - ID du compte WhatsApp
+ * @param {string} type - Type de notification ('messages', 'reactions', 'status')
+ * @returns {boolean} true si activé, false sinon (par défaut: true si aucune préférence)
+ */
+export function isNotificationEnabledForAccount(accountId, type = 'messages') {
+  if (!accountId) {
+    // Si pas de compte, ne pas notifier par sécurité
+    return false;
+  }
+  
+  const prefs = loadNotificationPrefs();
+  const accountPrefs = prefs[accountId];
+  
+  // Si aucune préférence pour ce compte, retourner true par défaut (comportement actuel)
+  // Mais on pourrait aussi retourner false pour être plus strict
+  if (!accountPrefs) {
+    return true; // Par défaut activé si pas de préférence définie
+  }
+  
+  // Retourner la préférence spécifique, ou true par défaut si non définie
+  return accountPrefs[type] !== false; // true si activé ou non défini
+}
+
+/**
  * Demander la permission de notification à l'utilisateur
  * Avec un message personnalisé
  */
