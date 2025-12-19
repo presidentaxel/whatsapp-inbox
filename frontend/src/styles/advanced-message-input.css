@@ -817,6 +817,49 @@
   margin-left: 8px;
 }
 
+/* État d'attente après l'envoi d'un template */
+.templates-selector__waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  gap: 16px;
+}
+
+.templates-selector__waiting-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+  text-align: center;
+}
+
+.templates-selector__reactivate-btn {
+  background: rgba(251, 191, 36, 0.2);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  color: #fbbf24;
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.templates-selector__reactivate-btn:hover:not(:disabled) {
+  background: rgba(251, 191, 36, 0.3);
+  border-color: rgba(251, 191, 36, 0.5);
+  transform: translateY(-1px);
+}
+
+.templates-selector__reactivate-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .edit-banner {
   margin-top: 6px;
   display: flex;

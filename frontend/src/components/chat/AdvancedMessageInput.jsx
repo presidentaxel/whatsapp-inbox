@@ -1,11 +1,11 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
 import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 import { useTheme } from "../../hooks/useTheme";
 
-export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null }) {
+export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null, messages = [] }) {
   const [text, setText] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -17,6 +17,10 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [templates, setTemplates] = useState([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [isOutsideFreeWindow, setIsOutsideFreeWindow] = useState(false);
+  const [templateSent, setTemplateSent] = useState(false); // État pour savoir si un template a été envoyé récemment
+  const [lastInboundMessageId, setLastInboundMessageId] = useState(null); // Pour détecter les nouveaux messages clients
+  const lastCheckedOutboundMessageIdRef = useRef(null); // Pour éviter de vérifier plusieurs fois le même message sortant
+  const previousIsOutsideFreeWindowRef = useRef(false); // Pour suivre l'état précédent de isOutsideFreeWindow
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -65,11 +69,92 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     }
   }, [editingMessage]);
 
+  // Calculer dynamiquement si un template a été envoyé récemment
+  // Un template est considéré comme "récent" s'il a été envoyé après le dernier message client
+  const hasRecentTemplate = useMemo(() => {
+    if (!messages || messages.length === 0) return false;
+    
+    // Trouver le dernier message client
+    const lastInboundMessage = messages
+      .filter(msg => msg.direction === 'inbound')
+      .sort((a, b) => {
+        const aTime = new Date(a.timestamp || a.created_at).getTime();
+        const bTime = new Date(b.timestamp || b.created_at).getTime();
+        return bTime - aTime;
+      })[0];
+    
+    if (!lastInboundMessage) return false;
+    
+    const lastInboundTime = new Date(lastInboundMessage.timestamp || lastInboundMessage.created_at).getTime();
+    
+    // Trouver le dernier template envoyé (peu importe ce qui s'est passé après)
+    const lastTemplateMessage = messages
+      .filter(msg => msg.direction === 'outbound' && msg.message_type === 'template' && !msg.id?.startsWith('temp-'))
+      .sort((a, b) => {
+        const aTime = new Date(a.timestamp || a.created_at).getTime();
+        const bTime = new Date(b.timestamp || b.created_at).getTime();
+        return bTime - aTime;
+      })[0];
+    
+    if (!lastTemplateMessage) return false;
+    
+    const lastTemplateTime = new Date(lastTemplateMessage.timestamp || lastTemplateMessage.created_at).getTime();
+    
+    // Un template est "récent" s'il a été envoyé après le dernier message client
+    return lastTemplateTime > lastInboundTime;
+  }, [messages]);
+
+  // Détecter les nouveaux messages clients pour réinitialiser templateSent si nécessaire
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    
+    // Trouver le dernier message entrant (client)
+    const lastInboundMessage = messages
+      .filter(msg => msg.direction === 'inbound')
+      .sort((a, b) => {
+        const aTime = new Date(a.timestamp || a.created_at).getTime();
+        const bTime = new Date(b.timestamp || b.created_at).getTime();
+        return bTime - aTime;
+      })[0];
+    
+    if (lastInboundMessage) {
+      const currentLastId = lastInboundMessage.id;
+      
+      // Si c'est un nouveau message client (différent du précédent), réinitialiser templateSent
+      // Car un nouveau message client signifie qu'on peut repasser en mode normal
+      if (lastInboundMessageId !== null && currentLastId !== lastInboundMessageId) {
+        console.log("✅ Nouveau message client détecté, réinitialisation de templateSent");
+        setTemplateSent(false);
+      }
+      
+      setLastInboundMessageId(currentLastId);
+    }
+  }, [messages, lastInboundMessageId]);
+
+  // Réinitialiser les états quand on change de conversation
+  useEffect(() => {
+    if (!conversation?.id) {
+      setIsOutsideFreeWindow(false);
+      setTemplates([]);
+      setTemplateSent(false);
+      setLastInboundMessageId(null);
+      lastCheckedOutboundMessageIdRef.current = null;
+      previousIsOutsideFreeWindowRef.current = false;
+      return;
+    }
+    
+    // Réinitialiser lastInboundMessageId et les refs quand on change de conversation
+    setLastInboundMessageId(null);
+    lastCheckedOutboundMessageIdRef.current = null;
+    previousIsOutsideFreeWindowRef.current = false;
+  }, [conversation?.id]);
+
   // Vérifier si on est hors fenêtre gratuite et charger les templates si nécessaire
   useEffect(() => {
     if (!conversation?.id) {
       setIsOutsideFreeWindow(false);
       setTemplates([]);
+      setTemplateSent(false);
       return;
     }
 
@@ -77,7 +162,11 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       try {
         const response = await getMessagePrice(conversation.id);
         const isFree = response.data?.is_free ?? true;
-        setIsOutsideFreeWindow(!isFree);
+        const wasOutsideFreeWindow = previousIsOutsideFreeWindowRef.current;
+        const isNowOutsideFreeWindow = !isFree;
+        
+        setIsOutsideFreeWindow(isNowOutsideFreeWindow);
+        previousIsOutsideFreeWindowRef.current = isNowOutsideFreeWindow;
         
         // Si hors fenêtre, charger les templates
         if (!isFree) {
@@ -91,13 +180,26 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           } finally {
             setLoadingTemplates(false);
           }
+          
+          // Si on est toujours hors fenêtre, NE PAS réinitialiser templateSent
+          // templateSent sera réinitialisé uniquement par :
+          // 1. Un nouveau message client (dans le useEffect de détection)
+          // 2. Un message libre réussi (dans handleSend ou le useEffect de détection des messages sortants)
         } else {
           setTemplates([]);
+          // Si on passe de "hors fenêtre" à "dans la fenêtre", c'est qu'un nouveau message client est arrivé
+          // Dans ce cas, on peut réinitialiser templateSent
+          if (wasOutsideFreeWindow && templateSent) {
+            console.log("✅ Passage de 'hors fenêtre' à 'dans la fenêtre' (nouveau message client), réinitialisation de templateSent");
+            setTemplateSent(false);
+          }
         }
       } catch (error) {
         console.error("Error checking free window:", error);
         setIsOutsideFreeWindow(false);
+        previousIsOutsideFreeWindowRef.current = false;
         setTemplates([]);
+        // Ne pas réinitialiser templateSent en cas d'erreur si on était en mode template
       }
     };
 
@@ -129,12 +231,26 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     return () => clearTimeout(timeoutId);
   }, [text, conversation?.id, mode, isOutsideFreeWindow]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (disabled || !text.trim()) return;
-    onSend(text);
+    
+    const messageText = text;
     setText("");
     setShowAdvanced(false);
     setMode("text");
+    
+    try {
+      // Envoyer le message
+      await onSend(messageText);
+      
+      // Ne pas réinitialiser templateSent ici
+      // templateSent sera calculé dynamiquement à partir des messages
+      // Il sera réinitialisé uniquement si un nouveau message client arrive
+    } catch (error) {
+      // En cas d'erreur d'envoi, remettre le texte pour que l'utilisateur puisse réessayer
+      setText(messageText);
+      console.error("Error sending message:", error);
+    }
   };
 
   const handleSendTemplate = async (template) => {
@@ -169,6 +285,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       
       const response = await sendTemplateMessage(conversation.id, payload);
       console.log("✅ [FRONTEND] Template envoyé avec succès:", response);
+      
+      // Ne pas utiliser setTemplateSent car hasRecentTemplate est calculé dynamiquement
+      // Le template sera détecté automatiquement dans les messages
       
       // Attendre un peu pour que le message soit sauvegardé dans la base
       await new Promise(resolve => setTimeout(resolve, 1500));
@@ -750,74 +869,98 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         {/* Affichage des templates si hors fenêtre gratuite */}
         {isOutsideFreeWindow && (
           <div className="templates-selector">
-            <div className="templates-selector__header">
-              <span className="templates-selector__title">
-                <FiClock style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                Plus de 24h depuis la dernière interaction
-              </span>
-              <span className="templates-selector__subtitle">Sélectionnez un template pour envoyer un message</span>
-            </div>
-            {loadingTemplates ? (
-              <div className="templates-selector__loading">Chargement des templates...</div>
-            ) : templates.length === 0 ? (
-              <div className="templates-selector__empty">
-                Aucun template UTILITY, MARKETING ou AUTHENTICATION disponible. Créez-en un dans Meta Business Manager.
+            {hasRecentTemplate && !templateSent ? (
+              // État "En attente d'une réponse client" après l'envoi d'un template
+              <div className="templates-selector__waiting">
+                <div className="templates-selector__waiting-message">
+                  <FiClock style={{ marginRight: '8px', verticalAlign: 'middle' }} />
+                  En attente d'une réponse client
+                </div>
+                <button
+                  className="templates-selector__reactivate-btn"
+                  onClick={() => {
+                    // Forcer l'affichage des templates en mettant templateSent à true
+                    // Cela masquera le mode "en attente" et affichera les templates
+                    setTemplateSent(true);
+                  }}
+                  disabled={disabled || uploading}
+                >
+                  Réactiver le mode template
+                </button>
               </div>
             ) : (
-              <div className="templates-selector__list">
-                {templates.map((template, index) => {
-                  const bodyComponent = template.components?.find(c => c.type === "BODY");
-                  const headerComponent = template.components?.find(c => c.type === "HEADER");
-                  const footerComponent = template.components?.find(c => c.type === "FOOTER");
-                  const templateText = bodyComponent?.text || template.name;
-                  const headerImageUrl = template.header_media_url || 
-                    (headerComponent?.example?.header_handle?.[0]) ||
-                    (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
-                  return (
-                    <div
-                      key={index}
-                      className="templates-selector__bubble-wrapper"
-                      onClick={() => !disabled && !uploading && handleSendTemplate(template)}
-                    >
-                      <div className="bubble me templates-selector__bubble">
-                        {headerImageUrl && (
-                          <div className="templates-selector__bubble-image">
-                            <img 
-                              src={headerImageUrl} 
-                              alt={headerComponent?.text || template.name}
-                            />
-                          </div>
-                        )}
-                        {headerComponent && headerComponent.text && !headerImageUrl && (
-                          <div className="templates-selector__bubble-header">
-                            {headerComponent.text}
-                          </div>
-                        )}
-                        <span className="bubble__text">{templateText}</span>
-                        {footerComponent && (
-                          <div className="templates-selector__bubble-footer">
-                            {footerComponent.text}
-                          </div>
-                        )}
-                        <div className="bubble__footer">
-                          <div className="bubble__footer-left">
-                            <small className="bubble__timestamp">Maintenant</small>
-                          </div>
-                          <div className="templates-selector__price">
-                            💰 {parseFloat(template.price_eur || template.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {template.price_eur ? 'EUR' : 'USD'}
+              // Affichage normal des templates
+              <>
+                <div className="templates-selector__header">
+                  <span className="templates-selector__title">
+                    <FiClock style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                    Plus de 24h depuis la dernière interaction client
+                  </span>
+                  <span className="templates-selector__subtitle">Sélectionnez un template pour envoyer un message</span>
+                </div>
+                {loadingTemplates ? (
+                  <div className="templates-selector__loading">Chargement des templates...</div>
+                ) : templates.length === 0 ? (
+                  <div className="templates-selector__empty">
+                    Aucun template UTILITY, MARKETING ou AUTHENTICATION disponible. Créez-en un dans Meta Business Manager.
+                  </div>
+                ) : (
+                  <div className="templates-selector__list">
+                    {templates.map((template, index) => {
+                      const bodyComponent = template.components?.find(c => c.type === "BODY");
+                      const headerComponent = template.components?.find(c => c.type === "HEADER");
+                      const footerComponent = template.components?.find(c => c.type === "FOOTER");
+                      const templateText = bodyComponent?.text || template.name;
+                      const headerImageUrl = template.header_media_url || 
+                        (headerComponent?.example?.header_handle?.[0]) ||
+                        (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
+                      return (
+                        <div
+                          key={index}
+                          className="templates-selector__bubble-wrapper"
+                          onClick={() => !disabled && !uploading && handleSendTemplate(template)}
+                        >
+                          <div className="bubble me templates-selector__bubble">
+                            {headerImageUrl && (
+                              <div className="templates-selector__bubble-image">
+                                <img 
+                                  src={headerImageUrl} 
+                                  alt={headerComponent?.text || template.name}
+                                />
+                              </div>
+                            )}
+                            {headerComponent && headerComponent.text && !headerImageUrl && (
+                              <div className="templates-selector__bubble-header">
+                                {headerComponent.text}
+                              </div>
+                            )}
+                            <span className="bubble__text">{templateText}</span>
+                            {footerComponent && (
+                              <div className="templates-selector__bubble-footer">
+                                {footerComponent.text}
+                              </div>
+                            )}
+                            <div className="bubble__footer">
+                              <div className="bubble__footer-left">
+                                <small className="bubble__timestamp">Maintenant</small>
+                              </div>
+                              <div className="templates-selector__price">
+                                💰 {parseFloat(template.price_eur || template.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {template.price_eur ? 'EUR' : 'USD'}
+                              </div>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
 
-        {/* Champ de saisie - caché si hors fenêtre gratuite */}
-        {!isOutsideFreeWindow && (
+        {/* Champ de saisie - caché si hors fenêtre gratuite ou si template envoyé récemment */}
+        {!isOutsideFreeWindow && !hasRecentTemplate && (
           <>
             <div className="input-wrapper input-wrapper--flat">
               <textarea

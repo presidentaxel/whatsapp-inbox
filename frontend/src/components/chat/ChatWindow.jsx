@@ -909,6 +909,7 @@ export default function ChatWindow({
         onSend={onSend}
         disabled={!canSend || !conversationId}
         accountId={conversation?.account_id}
+        messages={messages}
       />
 
       {contextMenu.open && (

@@ -1273,8 +1273,9 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
     Vérifie si on est dans la fenêtre de 24h pour envoyer un message gratuit.
     
     WhatsApp Cloud API permet d'envoyer des messages gratuits pendant 24h
-    après la dernière interaction (message entrant ou sortant).
+    après la dernière interaction CLIENT (message entrant uniquement).
     
+    Les messages sortants (notre part) ne comptent pas pour réinitialiser la fenêtre.
     Les messages échoués (status='failed') ne sont pas considérés comme des interactions valides.
     
     Returns:
@@ -1283,13 +1284,15 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
         - (False, last_interaction_time) si hors fenêtre (nécessite un template payant)
         - (False, None) si aucun message trouvé
     """
-    # Récupérer le dernier message (entrant ou sortant) de la conversation
+    # Récupérer le dernier message ENTRANT (client) de la conversation
+    # Seuls les messages entrants comptent pour la fenêtre gratuite
     # Exclure les messages échoués car ils ne comptent pas comme interaction valide
     # Note: .neq() inclut automatiquement les valeurs NULL, donc les messages sans statut sont inclus
     last_message = await supabase_execute(
         supabase.table("messages")
         .select("timestamp, direction, status")
         .eq("conversation_id", conversation_id)
+        .eq("direction", "inbound")  # Seulement les messages entrants (clients)
         .neq("status", "failed")  # Exclure uniquement les messages échoués (inclut NULL et autres statuts)
         .order("timestamp", desc=True)
         .limit(1)
