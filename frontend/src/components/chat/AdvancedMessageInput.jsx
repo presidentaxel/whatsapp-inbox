@@ -25,6 +25,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const previousIsOutsideFreeWindowRef = useRef(false); // Pour suivre l'état précédent de isOutsideFreeWindow
   const [selectedTemplate, setSelectedTemplate] = useState(null); // Template sélectionné pour remplir les variables
   const [showTemplateModal, setShowTemplateModal] = useState(false); // Afficher la modale de variables
+  const [forceTemplateMode, setForceTemplateMode] = useState(false); // État pour forcer l'affichage des templates
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -201,6 +202,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       if (lastInboundMessageId !== null && currentLastId !== lastInboundMessageId) {
         console.log("✅ Nouveau message client détecté, réinitialisation de templateSent et vérification immédiate de la fenêtre gratuite");
         setTemplateSent(false);
+        setForceTemplateMode(false); // Réinitialiser aussi forceTemplateMode
         
         // Vérifier IMMÉDIATEMENT si on est toujours hors fenêtre gratuite
         // Cela permet une transition plus rapide vers la barre de saisie normale
@@ -231,6 +233,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       setTemplates([]);
       setTemplateSent(false);
       setLastInboundMessageId(null);
+      setForceTemplateMode(false);
       lastCheckedOutboundMessageIdRef.current = null;
       previousIsOutsideFreeWindowRef.current = false;
       return;
@@ -238,6 +241,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     
     // Réinitialiser lastInboundMessageId et les refs quand on change de conversation
     setLastInboundMessageId(null);
+    setForceTemplateMode(false);
     lastCheckedOutboundMessageIdRef.current = null;
     previousIsOutsideFreeWindowRef.current = false;
   }, [conversation?.id]);
@@ -494,6 +498,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       
       const response = await sendTemplateMessage(conversation.id, payload);
       console.log("✅ [FRONTEND] Template envoyé avec succès:", response);
+      
+      // Réinitialiser forceTemplateMode car un nouveau template a été envoyé
+      setForceTemplateMode(false);
       
       // Attendre un peu pour que le message soit sauvegardé dans la base
       // Puis rafraîchir plusieurs fois pour s'assurer que le message est bien chargé
@@ -1100,7 +1107,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         {/* Affichage des templates si hors fenêtre gratuite */}
         {isOutsideFreeWindow && (
           <div className="templates-selector">
-            {hasRecentTemplate ? (
+            {hasRecentTemplate && !forceTemplateMode ? (
               // État "En attente d'une réponse client" après l'envoi d'un template
               <div className="templates-selector__waiting">
                 <div className="templates-selector__waiting-message">
@@ -1110,14 +1117,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                 <button
                   className="templates-selector__reactivate-btn"
                   onClick={() => {
-                    // Note: hasRecentTemplate est calculé dynamiquement à partir des messages
-                    // Pour forcer l'affichage des templates, on pourrait ajouter un état local
-                    // mais pour l'instant, on laisse la logique automatique gérer cela
-                    // Le mode sera réactivé automatiquement quand un nouveau message client arrivera
-                    // On pourrait forcer un refresh des messages ici si nécessaire
-                    if (onSend) {
-                      onSend("", true); // Force refresh
-                    }
+                    // Forcer l'affichage des templates en activant forceTemplateMode
+                    setForceTemplateMode(true);
                   }}
                   disabled={disabled || uploading}
                 >
