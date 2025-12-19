@@ -239,13 +239,14 @@ async def get_message_price(
 ):
     """
     Calcule le prix d'un message pour une conversation.
-    Utilise un message conversationnel normal (pas de template) si hors fenêtre.
+    L'assistance classique 24h est gratuite (dans la fenêtre de 24h).
+    Hors fenêtre, utilise un message conversationnel normal (0,0248 €).
     
     Returns:
     {
         "is_free": true/false,
-        "price_usd": 0.02,
-        "price_eur": 0.018,
+        "price_usd": 0.0248 (ou 0.0 si gratuit),
+        "price_eur": 0.0248 (ou 0.0 si gratuit),
         "currency": "USD",
         "category": "free" ou "conversational",
         "last_inbound_time": "2024-01-01T12:00:00Z" ou null
@@ -269,7 +270,7 @@ async def get_available_templates(
 ):
     """
     Récupère la liste des templates disponibles pour une conversation.
-    Retourne les templates UTILITY et MARKETING approuvés.
+    Retourne les templates UTILITY, MARKETING et AUTHENTICATION approuvés.
     """
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
@@ -283,9 +284,39 @@ async def get_available_templates(
     
     waba_id = account.get("waba_id")
     access_token = account.get("access_token")
+    phone_number_id = account.get("phone_number_id")
     
-    if not waba_id or not access_token:
-        raise HTTPException(status_code=400, detail="account_not_configured")
+    # Si waba_id n'est pas configuré, essayer de le récupérer depuis phone_number_id
+    if not waba_id and phone_number_id and access_token:
+        try:
+            from app.services.whatsapp_api_service import get_phone_number_details
+            phone_details = await get_phone_number_details(phone_number_id, access_token)
+            waba_id = phone_details.get("waba_id") or phone_details.get("whatsapp_business_account_id")
+            
+            # Sauvegarder le waba_id dans le compte si trouvé
+            if waba_id:
+                from app.core.db import supabase_execute, supabase
+                await supabase_execute(
+                    supabase.table("whatsapp_accounts")
+                    .update({"waba_id": waba_id})
+                    .eq("id", account["id"])
+                )
+                account["waba_id"] = waba_id
+                logger.info(f"✅ WABA ID récupéré et sauvegardé pour le compte {account.get('name')}: {waba_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ Impossible de récupérer le WABA ID depuis phone_number_id: {e}")
+    
+    if not access_token:
+        raise HTTPException(
+            status_code=400, 
+            detail="account_not_configured: access_token is missing. Please configure the WhatsApp account."
+        )
+    
+    if not waba_id:
+        raise HTTPException(
+            status_code=400, 
+            detail="account_not_configured: waba_id is missing. Please configure the WhatsApp Business Account ID in the account settings."
+        )
     
     try:
         # Récupérer tous les templates avec pagination
@@ -326,13 +357,13 @@ async def get_available_templates(
             # Prix selon la documentation Meta WhatsApp Business API
             # https://developers.facebook.com/docs/whatsapp/pricing
             prices = {
-                "UTILITY": {"usd": 0.008, "eur": 0.007},  # ~0.005-0.01 USD
-                "MARKETING": {"usd": 0.02, "eur": 0.18},  # 18 centimes EUR
-                "AUTHENTICATION": {"usd": 0.005, "eur": 0.004},  # Généralement moins cher
+                "UTILITY": {"usd": 0.0248, "eur": 0.0248},  # 0,0248 €
+                "MARKETING": {"usd": 0.1186, "eur": 0.1186},  # 0,1186 €
+                "AUTHENTICATION": {"usd": 0.0248, "eur": 0.0248},  # 0,0248 €
             }
             # Normaliser la catégorie en majuscules pour la recherche
             category_upper = (category or "").upper()
-            return prices.get(category_upper, {"usd": 0.008, "eur": 0.007})
+            return prices.get(category_upper, {"usd": 0.0248, "eur": 0.0248})
         
         approved_templates = []
         for t in templates:
@@ -346,28 +377,186 @@ async def get_available_templates(
                 logger.info(f"  ⏭️  Template exclu: {t.get('name')}")
                 continue
             
-            # Filtrer les templates approuvés en catégorie UTILITY ou MARKETING
-            if status == "APPROVED" and category in ["UTILITY", "MARKETING"]:
+            # Filtrer les templates approuvés en catégorie UTILITY, MARKETING ou AUTHENTICATION
+            if status == "APPROVED" and category in ["UTILITY", "MARKETING", "AUTHENTICATION"]:
                 price = get_template_price(category)
-                approved_templates.append({
+                
+                # Détecter si le template a un HEADER avec média (IMAGE, VIDEO, DOCUMENT)
+                template_components = t.get("components", [])
+                header_component = next(
+                    (c for c in template_components if c.get("type") == "HEADER"),
+                    None
+                )
+                
+                header_media_url = None
+                header_media_type = None
+                
+                if header_component:
+                    header_format = header_component.get("format")
+                    if header_format in ["IMAGE", "VIDEO", "DOCUMENT"]:
+                        # Extraire l'URL de l'image depuis example.header_handle
+                        example = header_component.get("example", {})
+                        header_handle = example.get("header_handle", [])
+                        example_url = header_handle[0] if isinstance(header_handle, list) and len(header_handle) > 0 else None
+                        
+                        # Vérifier si l'image existe déjà en base
+                        try:
+                            from app.services.storage_service import get_template_media_url, download_and_store_template_media
+                            header_media_url = await get_template_media_url(
+                                template_name=t.get("name"),
+                                template_language=t.get("language", "fr"),
+                                account_id=account["id"],
+                                media_type=header_format
+                            )
+                            
+                            # Si l'image n'existe pas encore mais qu'on a une URL d'exemple, la télécharger automatiquement
+                            if not header_media_url and example_url:
+                                try:
+                                    logger.info(f"  📥 Téléchargement automatique de l'image pour template {t.get('name')}")
+                                    # Détecter le content-type depuis l'URL
+                                    import httpx
+                                    async with httpx.AsyncClient(timeout=10.0) as client:
+                                        head_response = await client.head(example_url)
+                                        content_type = head_response.headers.get("content-type", "image/jpeg")
+                                    
+                                    # Télécharger et stocker le média
+                                    header_media_url = await download_and_store_template_media(
+                                        template_name=t.get("name"),
+                                        template_language=t.get("language", "fr"),
+                                        account_id=account["id"],
+                                        media_url=example_url,
+                                        media_type=header_format,
+                                        content_type=content_type
+                                    )
+                                    if header_media_url:
+                                        logger.info(f"  ✅ Image téléchargée et stockée pour template {t.get('name')}: {header_media_url}")
+                                except Exception as download_error:
+                                    logger.warning(f"  ⚠️  Erreur lors du téléchargement de l'image pour template {t.get('name')}: {download_error}")
+                                    # Utiliser l'URL d'exemple directement en fallback
+                                    header_media_url = example_url
+                            
+                            # Si toujours pas d'URL mais qu'on a une URL d'exemple, l'utiliser directement
+                            if not header_media_url and example_url:
+                                header_media_url = example_url
+                                logger.info(f"  📷 Utilisation de l'URL d'exemple pour template {t.get('name')}")
+                            
+                            header_media_type = header_format
+                        except Exception as media_error:
+                            # Si la table n'existe pas encore ou autre erreur, utiliser l'URL d'exemple si disponible
+                            logger.warning(f"  ⚠️  Erreur lors de la récupération du média pour template {t.get('name')}: {media_error}")
+                            if example_url:
+                                header_media_url = example_url
+                                header_media_type = header_format
+                            else:
+                                header_media_url = None
+                                header_media_type = None
+                
+                template_data = {
                     "name": t.get("name"),
                     "status": t.get("status"),
                     "category": t.get("category"),
                     "language": t.get("language"),
-                    "components": t.get("components", []),
+                    "components": template_components,
                     "price_usd": price["usd"],
                     "price_eur": price["eur"]
-                })
+                }
+                
+                # Ajouter l'URL du média si disponible
+                if header_media_url:
+                    template_data["header_media_url"] = header_media_url
+                    template_data["header_media_type"] = header_media_type
+                
+                approved_templates.append(template_data)
         
-        logger.info(f"✅ Templates UTILITY et MARKETING approuvés filtrés: {len(approved_templates)}")
+        logger.info(f"✅ Templates UTILITY, MARKETING et AUTHENTICATION approuvés filtrés: {len(approved_templates)}")
         for t in approved_templates:
             logger.info(f"  - {t.get('name')} ({t.get('category')}, {t.get('language')})")
         
         return {
             "templates": approved_templates
         }
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error(f"Error fetching templates: {e}", exc_info=True)
+        error_msg = str(e)
+        logger.error(f"Error fetching templates: {error_msg}", exc_info=True)
+        # Retourner un message d'erreur plus détaillé
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Error fetching templates: {error_msg}. Check backend logs for details."
+        )
+
+
+@router.post("/templates/{conversation_id}/download-media")
+async def download_template_media(
+    conversation_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Télécharge et stocke l'image d'un template depuis une URL.
+    
+    Payload:
+    {
+        "template_name": "nom_du_template",
+        "template_language": "fr",
+        "media_url": "https://example.com/image.jpg",
+        "media_type": "IMAGE"  # ou "VIDEO", "DOCUMENT"
+    }
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    account = await get_account_by_id(conversation["account_id"])
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    
+    template_name = payload.get("template_name")
+    template_language = payload.get("template_language", "fr")
+    media_url = payload.get("media_url")
+    media_type = payload.get("media_type", "IMAGE")
+    
+    if not template_name or not media_url:
+        raise HTTPException(status_code=400, detail="template_name and media_url are required")
+    
+    if media_type not in ["IMAGE", "VIDEO", "DOCUMENT"]:
+        raise HTTPException(status_code=400, detail="media_type must be IMAGE, VIDEO, or DOCUMENT")
+    
+    try:
+        from app.services.storage_service import download_and_store_template_media
+        import httpx
+        
+        # Détecter le content-type depuis l'URL
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            head_response = await client.head(media_url)
+            content_type = head_response.headers.get("content-type", "image/jpeg")
+        
+        # Télécharger et stocker le média
+        storage_url = await download_and_store_template_media(
+            template_name=template_name,
+            template_language=template_language,
+            account_id=account["id"],
+            media_url=media_url,
+            media_type=media_type,
+            content_type=content_type
+        )
+        
+        if not storage_url:
+            raise HTTPException(status_code=500, detail="Failed to download and store template media")
+        
+        return {
+            "status": "success",
+            "storage_url": storage_url,
+            "template_name": template_name,
+            "template_language": template_language,
+            "media_type": media_type
+        }
+    except Exception as e:
+        logger.error(f"Error downloading template media: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -491,6 +680,7 @@ async def send_template_message_api(
         
         # Construire les composants nécessaires
         final_components = []
+        template_header_image_url = None  # Pour sauvegarder l'URL de l'image du template
         
         # Si le template a un header avec un format (IMAGE, VIDEO, DOCUMENT, etc.), 
         # il faut envoyer un composant HEADER même vide
@@ -504,13 +694,86 @@ async def send_template_message_api(
             if header_component:
                 header_format = header_component.get("format")
                 if header_format in ["IMAGE", "VIDEO", "DOCUMENT"]:
-                    # Le template a un header avec format, il faut envoyer un composant HEADER
-                    # Même si on n'a pas de variables à remplir, on doit envoyer un HEADER vide
-                    final_components.append({
-                        "type": "HEADER",
-                        "parameters": []  # Header vide car pas de variables
-                    })
-                    logger.info(f"  ✅ Ajout composant HEADER vide pour format {header_format}")
+                    # Pour les templates avec média dans le header, il faut uploader le média et obtenir un media_id
+                    example = header_component.get("example", {})
+                    header_handle = example.get("header_handle", [])
+                    example_url = header_handle[0] if isinstance(header_handle, list) and len(header_handle) > 0 else None
+                    
+                    if example_url:
+                        # Sauvegarder l'URL pour l'afficher dans le chat
+                        template_header_image_url = example_url
+                        
+                        try:
+                            # Télécharger l'image depuis l'URL
+                            import httpx
+                            from app.core.http_client import get_http_client_for_media
+                            
+                            logger.info(f"  📥 Téléchargement de l'image pour le header: {example_url[:100]}...")
+                            client = await get_http_client_for_media()
+                            media_response = await client.get(example_url)
+                            media_response.raise_for_status()
+                            
+                            # Détecter le content-type
+                            content_type = media_response.headers.get("content-type", "image/jpeg")
+                            media_data = media_response.content
+                            
+                            # Déterminer le nom de fichier selon le type
+                            extension_map = {
+                                "image/jpeg": ".jpg",
+                                "image/png": ".png",
+                                "image/gif": ".gif",
+                                "image/webp": ".webp",
+                                "video/mp4": ".mp4",
+                                "application/pdf": ".pdf"
+                            }
+                            extension = extension_map.get(content_type, ".jpg")
+                            filename = f"template_{template_name}_{header_format.lower()}{extension}"
+                            
+                            # Upload vers WhatsApp pour obtenir un media_id
+                            from app.services.whatsapp_api_service import upload_media_from_bytes
+                            logger.info(f"  📤 Upload de l'image vers WhatsApp...")
+                            upload_result = await upload_media_from_bytes(
+                                phone_number_id=phone_id,
+                                access_token=token,
+                                file_content=media_data,
+                                filename=filename,
+                                mime_type=content_type
+                            )
+                            
+                            media_id = upload_result.get("id")
+                            if media_id:
+                                logger.info(f"  ✅ Media uploadé avec succès, media_id: {media_id}")
+                                # Ajouter le composant HEADER avec le media_id
+                                final_components.append({
+                                    "type": "HEADER",
+                                    "parameters": [{
+                                        "type": header_format.lower(),  # "image", "video", "document"
+                                        header_format.lower(): {
+                                            "id": media_id
+                                        }
+                                    }]
+                                })
+                            else:
+                                logger.warning(f"  ⚠️ Upload réussi mais pas de media_id dans la réponse: {upload_result}")
+                                # Fallback : header vide (peut échouer mais on essaie)
+                                final_components.append({
+                                    "type": "HEADER",
+                                    "parameters": []
+                                })
+                        except Exception as media_error:
+                            logger.error(f"  ❌ Erreur lors de l'upload du média pour le header: {media_error}", exc_info=True)
+                            # Fallback : header vide (peut échouer mais on essaie)
+                            final_components.append({
+                                "type": "HEADER",
+                                "parameters": []
+                            })
+                    else:
+                        # Pas d'URL d'exemple, header vide
+                        logger.warning(f"  ⚠️ Pas d'URL d'exemple pour le header {header_format}")
+                        final_components.append({
+                            "type": "HEADER",
+                            "parameters": []
+                        })
         
         # Ajouter les composants fournis par l'utilisateur s'ils sont valides
         if components and len(components) > 0:
@@ -540,16 +803,21 @@ async def send_template_message_api(
         message_id = response.get("messages", [{}])[0].get("id")
         timestamp_iso = datetime.now(timezone.utc).isoformat()
         
-        # Récupérer le texte du template depuis les détails
+        # Récupérer le texte du template depuis les détails (BODY + FOOTER)
         template_text = ""
         if template_details:
-            # Extraire le texte du BODY du template
+            # Extraire le texte du BODY et du FOOTER du template
             template_components = template_details.get("components", [])
             logger.info(f"  Template components: {template_components}")
             body_component = next(
                 (c for c in template_components if c.get("type") == "BODY"),
                 None
             )
+            footer_component = next(
+                (c for c in template_components if c.get("type") == "FOOTER"),
+                None
+            )
+            
             if body_component:
                 template_text = body_component.get("text", "")
                 logger.info(f"  Template text from BODY: {template_text}")
@@ -557,8 +825,19 @@ async def send_template_message_api(
                 import re
                 template_text = re.sub(r'\{\{\d+\}\}', '', template_text).strip()
                 logger.info(f"  Template text after cleanup: {template_text}")
-            else:
-                logger.warning(f"  No BODY component found in template {template_name}")
+            
+            # Ajouter le footer si présent
+            if footer_component:
+                footer_text = footer_component.get("text", "")
+                if footer_text:
+                    if template_text:
+                        template_text = f"{template_text}\n\n{footer_text}"
+                    else:
+                        template_text = footer_text
+                    logger.info(f"  Template text with footer: {template_text}")
+            
+            if not template_text:
+                logger.warning(f"  No BODY or FOOTER component found in template {template_name}")
         else:
             logger.warning(f"  Template details not found for {template_name}, language {language_code}")
         
@@ -574,15 +853,55 @@ async def send_template_message_api(
         from app.core.db import supabase_execute, supabase
         from app.services.message_service import _update_conversation_timestamp
         
+        # Déterminer le message_type : si le template a une image, utiliser "image" pour l'affichage
+        message_type = "template"
+        if template_header_image_url:
+            # Si le template a une image dans le header, utiliser "image" comme type pour l'affichage
+            message_type = "image"
+        
         message_payload = {
             "conversation_id": conversation_id,
             "direction": "outbound",
             "content_text": template_text,
             "timestamp": timestamp_iso,
             "wa_message_id": message_id,
-            "message_type": "template",
+            "message_type": message_type,
             "status": "sent",
         }
+        
+        # Si le template a une image, sauvegarder l'URL pour l'affichage
+        if template_header_image_url:
+            # Télécharger et stocker l'image dans Supabase Storage
+            try:
+                from app.services.storage_service import download_and_store_template_media
+                import httpx
+                
+                # Détecter le content-type depuis l'URL
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    head_response = await client.head(template_header_image_url)
+                    content_type = head_response.headers.get("content-type", "image/jpeg")
+                
+                # Télécharger et stocker le média
+                storage_url = await download_and_store_template_media(
+                    template_name=template_name,
+                    template_language=language_code,
+                    account_id=account["id"],
+                    media_url=template_header_image_url,
+                    media_type="IMAGE",
+                    content_type=content_type
+                )
+                
+                if storage_url:
+                    message_payload["storage_url"] = storage_url
+                    logger.info(f"  ✅ Image du template stockée: {storage_url}")
+                else:
+                    # Fallback : utiliser l'URL WhatsApp directement
+                    message_payload["storage_url"] = template_header_image_url
+                    logger.info(f"  ⚠️ Stockage échoué, utilisation de l'URL WhatsApp directement")
+            except Exception as storage_error:
+                logger.warning(f"  ⚠️ Erreur lors du stockage de l'image du template: {storage_error}")
+                # Fallback : utiliser l'URL WhatsApp directement
+                message_payload["storage_url"] = template_header_image_url
         
         print(f"💾 [TEMPLATE SEND] Message payload: {message_payload}")
         

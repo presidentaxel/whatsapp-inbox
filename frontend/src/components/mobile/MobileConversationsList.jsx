@@ -109,9 +109,11 @@ export default function MobileConversationsList({
     const messageDate = new Date(date);
     messageDate.setHours(0, 0, 0, 0);
     
+    const timeZone = 'Europe/Paris';
+    
     // Aujourd'hui : afficher l'heure (comme WhatsApp)
     if (messageDate.getTime() === today.getTime()) {
-      return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', timeZone });
     }
     
     // Hier : afficher "Hier"
@@ -131,11 +133,11 @@ export default function MobileConversationsList({
     
     // Cette année : afficher le jour et le mois
     if (date.getFullYear() === now.getFullYear()) {
-      return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+      return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', timeZone });
     }
     
     // Sinon : afficher la date complète
-    return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' });
+    return date.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone });
   };
 
   return (

@@ -1372,10 +1372,10 @@ async def calculate_message_price(conversation_id: str, use_template: bool = Fal
     
     # Hors fenêtre gratuite - calculer le prix selon le type de message
     if use_template:
-        # Prix des templates WhatsApp UTILITY (le moins cher)
-        # Prix moyen en Europe : ~0.005-0.01 USD par message UTILITY
-        utility_price_usd = 0.008
-        utility_price_eur = 0.007
+        # Prix des templates WhatsApp UTILITY
+        # Prix en Europe : 0,0248 € par message UTILITY
+        utility_price_usd = 0.0248
+        utility_price_eur = 0.0248
         return {
             "is_free": False,
             "price_usd": utility_price_usd,
@@ -1387,9 +1387,10 @@ async def calculate_message_price(conversation_id: str, use_template: bool = Fal
         }
     
     # Message conversationnel normal (hors fenêtre, sans template)
-    # Plus cher que les templates : ~0.015-0.03 USD en Europe
-    conversational_price_usd = 0.02
-    conversational_price_eur = 0.018
+    # L'assistance classique 24h est gratuite (géré par is_free ci-dessus)
+    # Pour les messages hors fenêtre, utiliser le prix UTILITY
+    conversational_price_usd = 0.0248
+    conversational_price_eur = 0.0248
     
     return {
         "is_free": False,

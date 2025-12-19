@@ -606,7 +606,14 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
                               <div className="mobile-chat__media-item-text">{msg.content_text}</div>
                             )}
                             <div className="mobile-chat__media-item-time">
-                              {new Date(msg.timestamp || msg.created_at).toLocaleString('fr-FR')}
+                              {new Date(msg.timestamp || msg.created_at).toLocaleString('fr-FR', {
+                                timeZone: 'Europe/Paris',
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
                             </div>
                           </div>
                         </div>
@@ -620,7 +627,14 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
                               {msg.content_text.match(/https?:\/\/[^\s]+/)?.[0]}
                             </div>
                             <div className="mobile-chat__media-item-time">
-                              {new Date(msg.timestamp || msg.created_at).toLocaleString('fr-FR')}
+                              {new Date(msg.timestamp || msg.created_at).toLocaleString('fr-FR', {
+                                timeZone: 'Europe/Paris',
+                                year: 'numeric',
+                                month: '2-digit',
+                                day: '2-digit',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              })}
                             </div>
                           </div>
                         </div>

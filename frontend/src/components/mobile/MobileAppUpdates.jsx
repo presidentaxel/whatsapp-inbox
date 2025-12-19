@@ -89,7 +89,7 @@ export default function MobileAppUpdates({ onBack }) {
     if (days < 7) return `Il y a ${days} jours`;
     if (days < 30) return `Il y a ${Math.floor(days / 7)} semaines`;
     if (days < 365) return `Il y a ${Math.floor(days / 30)} mois`;
-    return d.toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric' });
+    return d.toLocaleDateString('fr-FR', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'Europe/Paris' });
   };
 
   if (loading) {

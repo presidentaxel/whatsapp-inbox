@@ -151,7 +151,7 @@ export default function MobileInviteUser({ onBack }) {
                   <div className="mobile-invite-user__item-info">
                     <div className="mobile-invite-user__item-email">{invite.email}</div>
                     <div className="mobile-invite-user__item-date">
-                      Invité le {new Date(invite.invited_at).toLocaleDateString('fr-FR')}
+                      Invité le {new Date(invite.invited_at).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' })}
                     </div>
                   </div>
                   <button

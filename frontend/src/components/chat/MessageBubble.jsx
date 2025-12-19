@@ -209,8 +209,15 @@ function renderBody(message) {
   const typeEntry = TYPE_MAP[messageType];
 
   // Afficher le média si on a un media_id OU un storage_url (média stocké dans Supabase)
-  if (FETCHABLE_MEDIA.has(messageType) && (message.media_id || message.storage_url)) {
-    return <RichMediaBubble message={message} messageType={messageType} />;
+  // Pour les templates avec image, le message_type peut être "image" ou "template" avec storage_url
+  const hasMedia = message.media_id || message.storage_url;
+  const isMediaType = FETCHABLE_MEDIA.has(messageType);
+  const isTemplateWithImage = messageType === "template" && hasMedia;
+  
+  if ((isMediaType || isTemplateWithImage) && hasMedia) {
+    // Utiliser "image" comme type pour l'affichage si c'est un template avec image
+    const displayType = isTemplateWithImage ? "image" : messageType;
+    return <RichMediaBubble message={message} messageType={displayType} />;
   }
 
   // Messages interactifs
@@ -218,8 +225,20 @@ function renderBody(message) {
     return <InteractiveBubble message={message} />;
   }
 
-  if (!typeEntry || messageType === "text") {
-    return <span className="bubble__text">{message.content_text}</span>;
+  if (!typeEntry || messageType === "text" || messageType === "template") {
+    // Préserver les retours à la ligne pour les templates et textes
+    const text = message.content_text || "";
+    const lines = text.split('\n');
+    return (
+      <span className="bubble__text">
+        {lines.map((line, index) => (
+          <span key={index}>
+            {line}
+            {index < lines.length - 1 && <br />}
+          </span>
+        ))}
+      </span>
+    );
   }
 
   return (
@@ -238,7 +257,8 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   const timestamp = message.timestamp ? formatRelativeDateTime(message.timestamp) : "";
 
   const messageType = (message.message_type || "text").toLowerCase();
-  const isMedia = FETCHABLE_MEDIA.has(messageType) && (message.media_id || message.storage_url);
+  const hasMedia = message.media_id || message.storage_url;
+  const isMedia = (FETCHABLE_MEDIA.has(messageType) || (messageType === "template" && hasMedia)) && hasMedia;
   const isDeletedForAll = !!message.deleted_for_all_at;
   const isEdited = !!message.edited_at;
 

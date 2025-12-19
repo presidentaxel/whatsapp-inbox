@@ -47,7 +47,14 @@ export default function ContactsPanel({
               <span>Créé le</span>
               <strong>
                 {selected.created_at
-                  ? new Date(selected.created_at).toLocaleString()
+                  ? new Date(selected.created_at).toLocaleString("fr-FR", {
+                      timeZone: "Europe/Paris",
+                      year: "numeric",
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit"
+                    })
                   : "—"}
               </strong>
             </div>

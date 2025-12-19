@@ -761,7 +761,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
               <div className="templates-selector__loading">Chargement des templates...</div>
             ) : templates.length === 0 ? (
               <div className="templates-selector__empty">
-                Aucun template UTILITY ou MARKETING disponible. Créez-en un dans Meta Business Manager.
+                Aucun template UTILITY, MARKETING ou AUTHENTICATION disponible. Créez-en un dans Meta Business Manager.
               </div>
             ) : (
               <div className="templates-selector__list">
@@ -770,6 +770,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                   const headerComponent = template.components?.find(c => c.type === "HEADER");
                   const footerComponent = template.components?.find(c => c.type === "FOOTER");
                   const templateText = bodyComponent?.text || template.name;
+                  const headerImageUrl = template.header_media_url || 
+                    (headerComponent?.example?.header_handle?.[0]) ||
+                    (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
                   return (
                     <div
                       key={index}
@@ -777,7 +780,15 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                       onClick={() => !disabled && !uploading && handleSendTemplate(template)}
                     >
                       <div className="bubble me templates-selector__bubble">
-                        {headerComponent && (
+                        {headerImageUrl && (
+                          <div className="templates-selector__bubble-image">
+                            <img 
+                              src={headerImageUrl} 
+                              alt={headerComponent?.text || template.name}
+                            />
+                          </div>
+                        )}
+                        {headerComponent && headerComponent.text && !headerImageUrl && (
                           <div className="templates-selector__bubble-header">
                             {headerComponent.text}
                           </div>

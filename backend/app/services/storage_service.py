@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 PROFILE_PICTURES_BUCKET = "profile-pictures"
 # Nom du bucket pour les médias de messages (images, vidéos, documents)
 MESSAGE_MEDIA_BUCKET = "message-media"
+# Nom du bucket pour les images de templates
+TEMPLATE_MEDIA_BUCKET = "template-media"
 
 
 async def upload_profile_picture(
@@ -357,4 +359,220 @@ async def cleanup_old_media(days: int = 60) -> int:
     except Exception as e:
         logger.error(f"❌ Error cleaning up old media: {e}", exc_info=True)
         return 0
+
+
+# ============================================================================
+# TEMPLATE MEDIA STORAGE
+# ============================================================================
+
+async def upload_template_media(
+    template_name: str,
+    template_language: str,
+    account_id: str,
+    media_data: bytes,
+    media_type: str,  # "IMAGE", "VIDEO", "DOCUMENT"
+    content_type: str,
+    filename: Optional[str] = None
+) -> Optional[str]:
+    """
+    Upload un média de template dans Supabase Storage et enregistre les métadonnées
+    
+    Args:
+        template_name: Nom du template
+        template_language: Langue du template
+        account_id: ID du compte WhatsApp
+        media_data: Données binaires du média
+        media_type: Type de média ("IMAGE", "VIDEO", "DOCUMENT")
+        content_type: Type MIME du média
+        filename: Nom de fichier original (optionnel)
+    
+    Returns:
+        URL publique du média ou None en cas d'erreur
+    """
+    try:
+        from app.core.db import supabase_execute
+        
+        # Déterminer l'extension selon le content-type
+        extension_map = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+            "video/mp4": ".mp4",
+            "video/quicktime": ".mov",
+            "application/pdf": ".pdf",
+        }
+        
+        extension = extension_map.get(content_type, "")
+        if filename:
+            if "." in filename:
+                extension = "." + filename.rsplit(".", 1)[1]
+        
+        # Nom du fichier : template_name_language_type + extension
+        safe_template_name = template_name.replace(" ", "_").replace("/", "_")
+        file_name = f"{safe_template_name}_{template_language}_{media_type.lower()}{extension}"
+        file_path = file_name
+        
+        # Upload dans Supabase Storage
+        logger.info(f"📤 Uploading template media to bucket '{TEMPLATE_MEDIA_BUCKET}': path={file_path}, size={len(media_data)} bytes")
+        
+        def _upload():
+            try:
+                result = supabase.storage.from_(TEMPLATE_MEDIA_BUCKET).upload(
+                    path=file_path,
+                    file=media_data,
+                    file_options={
+                        "content-type": content_type,
+                        "upsert": "true"  # Remplacer si existe déjà
+                    }
+                )
+                return result
+            except Exception as upload_error:
+                logger.error(f"❌ Upload error in thread: {upload_error}", exc_info=True)
+                raise
+        
+        result = await run_in_threadpool(_upload)
+        
+        if result:
+            # Récupérer l'URL publique
+            public_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/{TEMPLATE_MEDIA_BUCKET}/{file_path}"
+            
+            # Enregistrer les métadonnées dans la table template_media
+            try:
+                await supabase_execute(
+                    supabase.table("template_media")
+                    .upsert({
+                        "template_name": template_name,
+                        "template_language": template_language,
+                        "account_id": account_id,
+                        "media_type": media_type,
+                        "storage_url": public_url,
+                        "storage_path": file_path,
+                        "mime_type": content_type,
+                        "file_size": len(media_data)
+                    }, on_conflict="template_name,template_language,account_id,media_type")
+                )
+                logger.info(f"✅ Template media uploaded and metadata saved: {public_url}")
+            except Exception as db_error:
+                logger.warning(f"⚠️ Error saving template media metadata: {db_error}")
+            
+            return public_url
+        else:
+            logger.warning(f"⚠️ Upload returned None or empty result")
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Error uploading template media to Supabase Storage: template={template_name}, error={e}", exc_info=True)
+        return None
+
+
+async def get_template_media_url(
+    template_name: str,
+    template_language: str,
+    account_id: str,
+    media_type: str = "IMAGE"
+) -> Optional[str]:
+    """
+    Récupère l'URL du média stocké pour un template
+    
+    Args:
+        template_name: Nom du template
+        template_language: Langue du template
+        account_id: ID du compte WhatsApp
+        media_type: Type de média ("IMAGE", "VIDEO", "DOCUMENT")
+    
+    Returns:
+        URL publique du média ou None si non trouvé ou si la table n'existe pas
+    """
+    try:
+        from app.core.db import supabase_execute
+        
+        result = await supabase_execute(
+            supabase.table("template_media")
+            .select("storage_url")
+            .eq("template_name", template_name)
+            .eq("template_language", template_language)
+            .eq("account_id", account_id)
+            .eq("media_type", media_type)
+            .limit(1)
+        )
+        
+        if result.data and len(result.data) > 0:
+            return result.data[0].get("storage_url")
+        
+        return None
+        
+    except Exception as e:
+        # Si la table n'existe pas encore (erreur 42P01), retourner None silencieusement
+        error_str = str(e).lower()
+        if "does not exist" in error_str or "42p01" in error_str:
+            logger.debug(f"Table template_media does not exist yet, skipping media URL lookup")
+            return None
+        # Pour les autres erreurs, logger mais retourner None pour ne pas faire planter l'endpoint
+        logger.warning(f"⚠️ Error getting template media URL: {e}")
+        return None
+
+
+async def download_and_store_template_media(
+    template_name: str,
+    template_language: str,
+    account_id: str,
+    media_url: str,
+    media_type: str,  # "IMAGE", "VIDEO", "DOCUMENT"
+    content_type: str,
+    filename: Optional[str] = None
+) -> Optional[str]:
+    """
+    Télécharge un média depuis une URL et le stocke pour un template
+    
+    Args:
+        template_name: Nom du template
+        template_language: Langue du template
+        account_id: ID du compte WhatsApp
+        media_url: URL du média à télécharger
+        media_type: Type de média ("IMAGE", "VIDEO", "DOCUMENT")
+        content_type: Type MIME du média
+        filename: Nom de fichier original (optionnel)
+    
+    Returns:
+        URL publique Supabase du média ou None en cas d'erreur
+    """
+    try:
+        import httpx
+        from app.core.http_client import get_http_client_for_media
+        
+        logger.info(f"📥 Downloading template media: template={template_name}, url_length={len(media_url)}")
+        
+        # Vérifier d'abord si le média existe déjà
+        existing_url = await get_template_media_url(template_name, template_language, account_id, media_type)
+        if existing_url:
+            logger.info(f"✅ Template media already exists: {existing_url}")
+            return existing_url
+        
+        # Télécharger le média
+        client = await get_http_client_for_media()
+        response = await client.get(media_url)
+        response.raise_for_status()
+        
+        # Utiliser le content-type fourni ou celui de la réponse
+        detected_content_type = response.headers.get("content-type", content_type)
+        media_data = response.content
+        
+        logger.info(f"✅ Template media downloaded: template={template_name}, size={len(media_data)} bytes, content_type={detected_content_type}")
+        
+        # Upload dans Supabase Storage
+        return await upload_template_media(
+            template_name=template_name,
+            template_language=template_language,
+            account_id=account_id,
+            media_data=media_data,
+            media_type=media_type,
+            content_type=detected_content_type,
+            filename=filename
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error downloading and storing template media: template={template_name}, error={e}", exc_info=True)
+        return None
 
