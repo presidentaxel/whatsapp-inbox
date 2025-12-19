@@ -144,6 +144,34 @@
     font-size: 0.875rem;
   }
 
+  /* Boutons en dehors de la bulle pour mobile */
+  .mobile-chat__messages .bubble-buttons-wrapper {
+    max-width: calc(100vw - 80px);
+    gap: 0.5rem;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .mobile-chat__messages .bubble-media__buttons-container {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .mobile-chat__messages .bubble-media__button {
+    border-radius: 18px;
+    padding: 0.625rem 1rem;
+    font-size: 0.875rem;
+    /* Prendre 50% du conteneur, ou s'adapter au texte si plus grand */
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: calc(50% - 4px);
+  }
+
+  .mobile-chat__messages .bubble-media__buttons-container:has(.bubble-media__button:only-child) .bubble-media__button {
+    flex: 1 1 auto;
+    max-width: 100%;
+  }
+
   .mobile-chat__messages .interactive-bubble__footer {
     font-size: 0.813rem;
     color: rgba(255, 255, 255, 0.6);

@@ -523,7 +523,7 @@ export default function ChatWindow({
     };
   }, [conversationId, sortMessages, removedMessageIds]);
 
-  const onSend = async (text, forceRefresh = false) => {
+  const onSend = async (text, forceRefresh = false, optimisticMessageOverride = null) => {
     if (!conversationId) return;
 
     // Si forceRefresh est true, juste rafraîchir les messages sans envoyer
@@ -532,10 +532,10 @@ export default function ChatWindow({
       return;
     }
 
-    const tempId = `temp-${Date.now()}`;
-    const optimisticMessage = {
-      id: tempId,
-      client_temp_id: tempId,
+    // Si un message optimiste est fourni (pour les templates), l'utiliser
+    const optimisticMessage = optimisticMessageOverride || {
+      id: `temp-${Date.now()}`,
+      client_temp_id: `temp-${Date.now()}`,
       conversation_id: conversationId,
       direction: "outbound",
       content_text: text,
@@ -547,6 +547,14 @@ export default function ChatWindow({
     
     // Forcer le scroll en bas quand l'utilisateur envoie un message
     setAutoScroll(true);
+    
+    // Si c'est un template (optimisticMessageOverride fourni), ne pas envoyer via sendMessage
+    // car l'envoi est géré dans handleSendTemplate
+    if (optimisticMessageOverride) {
+      // Le message optimiste est déjà ajouté, l'envoi sera géré par handleSendTemplate
+      return;
+    }
+    
     try {
       await sendMessage({ conversation_id: conversationId, content: text });
       
@@ -558,7 +566,7 @@ export default function ChatWindow({
       }, 1000);
     } catch (error) {
       // En cas d'erreur, supprimer le message optimiste et rafraîchir immédiatement
-      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+      setMessages((prev) => prev.filter((msg) => msg.id !== optimisticMessage.id));
       refreshMessages();
     }
   };

@@ -2350,9 +2350,9 @@ body {
 
 /* Images dans les messages */
 .bubble-media__image {
-  max-width: 400px;
+  max-width: min(400px, 100%);
   max-height: 400px;
-  width: 100%;
+  width: auto;
   height: auto;
   border-radius: var(--radius-md);
   display: block;
@@ -2362,6 +2362,17 @@ body {
   border: none;
   outline: none;
   background: transparent;
+}
+
+/* Images dans les bulles média - s'adapter à la taille de la bulle */
+.bubble--media .bubble-media__image {
+  max-width: min(350px, calc(100vw - 120px));
+  max-height: 350px;
+}
+
+.bubble.me.bubble--media .bubble-media__image {
+  max-width: min(350px, calc(100vw - 120px));
+  max-height: 350px;
 }
 
 .bubble-media__image:hover {
@@ -2407,6 +2418,124 @@ body {
   font-size: 0.95rem;
   color: rgba(255, 255, 255, 0.9);
   line-height: 1.4;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+/* Pour les bulles avec média, le texte doit s'adapter à la largeur de l'image */
+.bubble--media .bubble-media__caption {
+  max-width: min(350px, calc(100vw - 140px));
+  width: 100%;
+}
+
+/* Wrapper pour les messages avec boutons */
+.message-with-buttons-wrapper {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  align-items: flex-start;
+}
+
+.message-with-buttons-wrapper .bubble.me {
+  align-self: flex-end;
+}
+
+.message-with-buttons-wrapper .bubble.them {
+  align-self: flex-start;
+}
+
+/* Boutons en dehors de la bulle (style WhatsApp) */
+.bubble-buttons-wrapper {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  max-width: min(350px, calc(100vw - 140px));
+  /* La largeur sera définie par JavaScript pour correspondre à la bulle */
+  min-width: 0;
+}
+
+.bubble-buttons-wrapper--me {
+  align-items: flex-end;
+  align-self: flex-end;
+  justify-content: flex-end;
+}
+
+.bubble-buttons-wrapper--them {
+  align-items: flex-start;
+  align-self: flex-start;
+  justify-content: flex-start;
+}
+
+.bubble-media__buttons-container {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.bubble-buttons-wrapper--me .bubble-media__buttons-container {
+  justify-content: flex-end;
+  /* Prendre 100% de la largeur du wrapper (qui correspond à la bulle) */
+  width: 100%;
+}
+
+.bubble-buttons-wrapper--them .bubble-media__buttons-container {
+  justify-content: flex-start;
+  /* Prendre 100% de la largeur du wrapper (qui correspond à la bulle) */
+  width: 100%;
+}
+
+.bubble-media__button {
+  background: rgba(255, 255, 255, 0.95);
+  border: none;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 0.9rem;
+  color: #075e54;
+  text-align: center;
+  cursor: default;
+  transition: all 0.2s;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  font-weight: 500;
+  /* Prendre 50% du conteneur, ou s'adapter au texte si plus grand */
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: calc(50% - 4px);
+  word-break: break-word;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+/* Si un seul bouton, il prend toute la largeur */
+.bubble-media__buttons-container:has(.bubble-media__button:only-child) .bubble-media__button {
+  flex: 1 1 0;
+  max-width: 100%;
+}
+
+.bubble-buttons-wrapper--me .bubble-media__button {
+  background: #005c4b;
+  color: #ffffff;
+}
+
+.bubble-buttons-wrapper--them .bubble-media__button {
+  background: rgba(255, 255, 255, 0.95);
+  color: #075e54;
+}
+
+.bubble-media__button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.bubble-buttons-wrapper--them .bubble-media__button:hover {
+  background: rgba(255, 255, 255, 1);
 }
 
 /* États de chargement */
@@ -2424,13 +2553,35 @@ body {
 /* Container des médias riches (avec icône conditionnelle) */
 .bubble-media--rich {
   display: flex;
-  gap: 12px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 0;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
 }
 
 .bubble-media--rich .bubble-media__content {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* S'assurer que l'image dans bubble-media--rich s'adapte à la taille de la bulle */
+.bubble-media--rich .bubble-media__image {
+  max-width: min(350px, calc(100% - 16px));
+  max-height: 350px;
+  width: auto;
+  height: auto;
+  align-self: flex-start;
+  margin-bottom: 8px;
+}
+
+/* Pour les bulles avec média, s'assurer que l'image ne dépasse pas */
+.bubble--media .bubble-media--rich .bubble-media__image {
+  max-width: min(300px, calc(100vw - 140px));
+  max-height: 300px;
 }
 
 /* Cacher l'icône quand l'image est chargée */

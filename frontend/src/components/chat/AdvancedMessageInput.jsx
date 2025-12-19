@@ -1,9 +1,11 @@
-import { useState, useRef, useEffect, useMemo } from "react";
-import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock } from "react-icons/fi";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock, FiLink, FiPhone, FiEdit, FiDollarSign } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
 import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 import { useTheme } from "../../hooks/useTheme";
+import TemplateVariablesModal from "./TemplateVariablesModal";
+import { hasTemplateVariables } from "../../utils/templateVariables";
 
 export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null, messages = [] }) {
   const [text, setText] = useState("");
@@ -21,6 +23,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [lastInboundMessageId, setLastInboundMessageId] = useState(null); // Pour détecter les nouveaux messages clients
   const lastCheckedOutboundMessageIdRef = useRef(null); // Pour éviter de vérifier plusieurs fois le même message sortant
   const previousIsOutsideFreeWindowRef = useRef(false); // Pour suivre l'état précédent de isOutsideFreeWindow
+  const [selectedTemplate, setSelectedTemplate] = useState(null); // Template sélectionné pour remplir les variables
+  const [showTemplateModal, setShowTemplateModal] = useState(false); // Afficher la modale de variables
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -69,51 +73,123 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     }
   }, [editingMessage]);
 
+  // Fonction helper pour obtenir le timestamp d'un message de manière robuste
+  const getMessageTimestamp = useCallback((msg) => {
+    const ts = msg.timestamp || msg.created_at;
+    if (!ts) return 0;
+    if (typeof ts === 'number') return ts;
+    const date = new Date(ts);
+    return isNaN(date.getTime()) ? 0 : date.getTime();
+  }, []);
+
   // Calculer dynamiquement si un template a été envoyé récemment
-  // Un template est considéré comme "récent" s'il a été envoyé après le dernier message client
+  // Un template est considéré comme "récent" s'il a été envoyé et qu'on attend une réponse client
+  // On affiche "en attente de réponse client" si :
+  // 1. Un template a été envoyé (avec ou sans boutons)
+  // 2. Le template est plus récent que le dernier message client (ou il n'y a pas de message client)
   const hasRecentTemplate = useMemo(() => {
-    if (!messages || messages.length === 0) return false;
+    if (!messages || messages.length === 0) {
+      return false;
+    }
     
-    // Trouver le dernier message client
-    const lastInboundMessage = messages
-      .filter(msg => msg.direction === 'inbound')
+    // Trouver le dernier message client (inbound)
+    const inboundMessages = messages
+      .filter(msg => {
+        const isInbound = msg.direction === 'inbound';
+        const isNotTemp = !msg.id?.startsWith('temp-');
+        const isNotStatus = msg.message_type !== 'status';
+        return isInbound && isNotTemp && isNotStatus;
+      });
+    
+    const lastInboundMessage = inboundMessages
       .sort((a, b) => {
-        const aTime = new Date(a.timestamp || a.created_at).getTime();
-        const bTime = new Date(b.timestamp || b.created_at).getTime();
+        const aTime = getMessageTimestamp(a);
+        const bTime = getMessageTimestamp(b);
         return bTime - aTime;
       })[0];
     
-    if (!lastInboundMessage) return false;
+    // Trouver le dernier template envoyé (outbound)
+    // Un template est identifié par :
+    // - template_name présent (peu importe le message_type)
+    // - message_type === 'template'
+    // - message_type === 'image' avec template_name (template avec image dans le header)
+    const templateMessages = messages
+      .filter(msg => {
+        if (msg.direction !== 'outbound') return false;
+        if (msg.id?.startsWith('temp-')) return false;
+        if (msg.message_type === 'status') return false;
+        
+        // Vérifier si c'est un template
+        const hasTemplateName = msg.template_name && msg.template_name.trim() !== '';
+        const isTemplateType = msg.message_type === 'template';
+        const isImageWithTemplate = msg.message_type === 'image' && hasTemplateName;
+        const isTextWithTemplate = msg.message_type === 'text' && hasTemplateName;
+        
+        return hasTemplateName || isTemplateType || isImageWithTemplate || isTextWithTemplate;
+      });
     
-    const lastInboundTime = new Date(lastInboundMessage.timestamp || lastInboundMessage.created_at).getTime();
-    
-    // Trouver le dernier template envoyé (peu importe ce qui s'est passé après)
-    const lastTemplateMessage = messages
-      .filter(msg => msg.direction === 'outbound' && msg.message_type === 'template' && !msg.id?.startsWith('temp-'))
+    const lastTemplateMessage = templateMessages
       .sort((a, b) => {
-        const aTime = new Date(a.timestamp || a.created_at).getTime();
-        const bTime = new Date(b.timestamp || b.created_at).getTime();
+        const aTime = getMessageTimestamp(a);
+        const bTime = getMessageTimestamp(b);
         return bTime - aTime;
       })[0];
     
-    if (!lastTemplateMessage) return false;
+    if (!lastTemplateMessage) {
+      return false;
+    }
     
-    const lastTemplateTime = new Date(lastTemplateMessage.timestamp || lastTemplateMessage.created_at).getTime();
+    const lastTemplateTime = getMessageTimestamp(lastTemplateMessage);
+    
+    // Vérifier si le template a des boutons interactifs (QUICK_REPLY, URL, PHONE_NUMBER)
+    let hasInteractiveButtons = false;
+    if (lastTemplateMessage.interactive_data) {
+      try {
+        const interactiveData = typeof lastTemplateMessage.interactive_data === 'string' 
+          ? JSON.parse(lastTemplateMessage.interactive_data) 
+          : lastTemplateMessage.interactive_data;
+        
+        if (interactiveData && interactiveData.buttons && Array.isArray(interactiveData.buttons)) {
+          hasInteractiveButtons = interactiveData.buttons.some(btn => 
+            btn.type === 'QUICK_REPLY' || btn.type === 'URL' || btn.type === 'PHONE_NUMBER'
+          );
+        }
+      } catch (e) {
+        console.warn("⚠️ [TEMPLATE] Erreur lors du parsing de interactive_data:", e);
+      }
+    }
+    
+    // Si il n'y a pas de message client, considérer le template comme récent
+    // (on attend toujours une réponse si aucun message client n'est arrivé)
+    if (!lastInboundMessage) {
+      return true;
+    }
+    
+    const lastInboundTime = getMessageTimestamp(lastInboundMessage);
     
     // Un template est "récent" s'il a été envoyé après le dernier message client
-    return lastTemplateTime > lastInboundTime;
-  }, [messages]);
+    // Cela signifie qu'on attend toujours une réponse du client
+    const isRecent = lastTemplateTime > lastInboundTime;
+    
+    return isRecent;
+  }, [messages, getMessageTimestamp]);
 
   // Détecter les nouveaux messages clients pour réinitialiser templateSent si nécessaire
+  // ET vérifier immédiatement si on est toujours hors fenêtre gratuite
   useEffect(() => {
-    if (!messages || messages.length === 0) return;
+    if (!messages || messages.length === 0 || !conversation?.id) return;
     
     // Trouver le dernier message entrant (client)
     const lastInboundMessage = messages
-      .filter(msg => msg.direction === 'inbound')
+      .filter(msg => {
+        const isInbound = msg.direction === 'inbound';
+        const isNotTemp = !msg.id?.startsWith('temp-');
+        const isNotStatus = msg.message_type !== 'status';
+        return isInbound && isNotTemp && isNotStatus;
+      })
       .sort((a, b) => {
-        const aTime = new Date(a.timestamp || a.created_at).getTime();
-        const bTime = new Date(b.timestamp || b.created_at).getTime();
+        const aTime = getMessageTimestamp(a);
+        const bTime = getMessageTimestamp(b);
         return bTime - aTime;
       })[0];
     
@@ -123,13 +199,30 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       // Si c'est un nouveau message client (différent du précédent), réinitialiser templateSent
       // Car un nouveau message client signifie qu'on peut repasser en mode normal
       if (lastInboundMessageId !== null && currentLastId !== lastInboundMessageId) {
-        console.log("✅ Nouveau message client détecté, réinitialisation de templateSent");
+        console.log("✅ Nouveau message client détecté, réinitialisation de templateSent et vérification immédiate de la fenêtre gratuite");
         setTemplateSent(false);
+        
+        // Vérifier IMMÉDIATEMENT si on est toujours hors fenêtre gratuite
+        // Cela permet une transition plus rapide vers la barre de saisie normale
+        getMessagePrice(conversation.id)
+          .then(response => {
+            const isFree = response.data?.is_free ?? true;
+            setIsOutsideFreeWindow(!isFree);
+            previousIsOutsideFreeWindowRef.current = !isFree;
+            
+            // Si on est maintenant dans la fenêtre gratuite, charger les templates n'est plus nécessaire
+            if (isFree) {
+              setTemplates([]);
+            }
+          })
+          .catch(error => {
+            console.error("Error checking free window after new message:", error);
+          });
       }
       
       setLastInboundMessageId(currentLastId);
     }
-  }, [messages, lastInboundMessageId]);
+  }, [messages, lastInboundMessageId, conversation?.id, getMessageTimestamp]);
 
   // Réinitialiser les états quand on change de conversation
   useEffect(() => {
@@ -150,6 +243,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   }, [conversation?.id]);
 
   // Vérifier si on est hors fenêtre gratuite et charger les templates si nécessaire
+  // Cette vérification se fait au changement de conversation, pas à chaque nouveau message
+  // (les nouveaux messages sont gérés dans le useEffect de détection des messages clients)
   useEffect(() => {
     if (!conversation?.id) {
       setIsOutsideFreeWindow(false);
@@ -253,11 +348,12 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     }
   };
 
-  const handleSendTemplate = async (template) => {
+  const handleSendTemplate = async (template, components = null) => {
     console.log("🎯 [FRONTEND] handleSendTemplate appelé", { 
       disabled, 
       conversationId: conversation?.id, 
-      template: template.name 
+      template: template.name,
+      hasComponents: !!components
     });
     
     if (disabled || !conversation?.id) {
@@ -265,45 +361,163 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       return;
     }
     
+    // Si le template a des variables et qu'on n'a pas encore de components, ouvrir la modale
+    if (hasTemplateVariables(template) && !components) {
+      setSelectedTemplate(template);
+      setShowTemplateModal(true);
+      return;
+    }
+    
+    // Construire le texte du template avec variables remplies pour l'affichage optimiste
+    const bodyComponent = template.components?.find(c => c.type === "BODY");
+    const headerComponent = template.components?.find(c => c.type === "HEADER");
+    const footerComponent = template.components?.find(c => c.type === "FOOTER");
+    const buttonsComponent = template.components?.find(c => c.type === "BUTTONS");
+    
+    // Fonction pour remplacer les variables dans un texte
+    const replaceVariablesInText = (text, components) => {
+      if (!text || !components) return text;
+      let result = text;
+      components.forEach(comp => {
+        if (comp.parameters) {
+          comp.parameters.forEach((param, idx) => {
+            if (param.type === "text" && param.text) {
+              // Remplacer {{idx+1}} par la valeur
+              result = result.replace(new RegExp(`\\{\\{${idx + 1}\\}\\}`, 'g'), param.text);
+            }
+          });
+        }
+      });
+      return result;
+    };
+    
+    let templateText = "";
+    
+    // Header (texte seulement, pas les images)
+    if (headerComponent?.text && headerComponent.format !== "IMAGE" && headerComponent.format !== "VIDEO" && headerComponent.format !== "DOCUMENT") {
+      const headerText = replaceVariablesInText(headerComponent.text, components);
+      if (headerText) {
+        templateText = headerText + "\n\n";
+      }
+    }
+    
+    // Body
+    if (bodyComponent?.text) {
+      const bodyText = replaceVariablesInText(bodyComponent.text, components);
+      templateText += bodyText;
+    } else {
+      templateText += template.name;
+    }
+    
+    // Footer
+    if (footerComponent?.text) {
+      const footerText = replaceVariablesInText(footerComponent.text, components);
+      if (footerText) {
+        templateText = templateText ? `${templateText}\n\n${footerText}` : footerText;
+      }
+    }
+    
+    // Créer un message optimiste
+    const tempId = `temp-template-${Date.now()}`;
+    const headerImageUrl = template.header_media_url || 
+      (headerComponent?.example?.header_handle?.[0]) ||
+      (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
+    
+    const optimisticMessage = {
+      id: tempId,
+      client_temp_id: tempId,
+      conversation_id: conversation.id,
+      direction: "outbound",
+      content_text: templateText,
+      status: "pending",
+      timestamp: new Date().toISOString(),
+      message_type: headerImageUrl ? "image" : "template",
+      template_name: template.name,
+      template_language: template.language || "fr",
+      storage_url: headerImageUrl || null,
+    };
+    
+    // Ajouter les boutons dans interactive_data si présents
+    if (buttonsComponent?.buttons) {
+      const buttons = buttonsComponent.buttons.slice(0, 5).map(btn => ({
+        type: btn.type || "QUICK_REPLY",
+        text: btn.text || "",
+        url: btn.url || "",
+        phone_number: btn.phone_number || ""
+      }));
+      optimisticMessage.interactive_data = JSON.stringify({
+        type: "button",
+        buttons: buttons
+      });
+    }
+    
+    // Ajouter les variables si components fournis
+    if (components) {
+      const variables = {};
+      components.forEach(comp => {
+        if (comp.parameters) {
+          comp.parameters.forEach((param, idx) => {
+            if (param.type === "text" && param.text) {
+              variables[String(idx + 1)] = param.text;
+            }
+          });
+        }
+      });
+      if (Object.keys(variables).length > 0) {
+        optimisticMessage.template_variables = JSON.stringify(variables);
+      }
+    }
+    
+    // Ajouter le message optimiste à la liste
+    if (onSend) {
+      // Utiliser une fonction callback pour ajouter le message optimiste
+      // On va passer le message optimiste via un paramètre spécial
+      onSend(templateText, false, optimisticMessage);
+    }
+    
     setUploading(true);
     try {
       const payload = {
         template_name: template.name,
         language_code: template.language || "fr"
-        // Pas de components : l'API WhatsApp utilisera le template tel quel
       };
+      
+      // Ajouter les components si fournis (variables remplies)
+      if (components && components.length > 0) {
+        payload.components = components;
+      }
       
       console.log("📤 [FRONTEND] Envoi du template:", {
         conversationId: conversation.id,
         payload
       });
       
-      // Pour les templates WhatsApp, on ne doit PAS envoyer les composants avec le texte complet
-      // Si le template a des variables ({{1}}, {{2}}), il faut les remplir avec des paramètres
-      // Si le template n'a pas de variables, on n'envoie pas de composants du tout
-      // Pour l'instant, on n'envoie jamais de composants car on ne gère pas encore les variables dynamiques
-      
       const response = await sendTemplateMessage(conversation.id, payload);
       console.log("✅ [FRONTEND] Template envoyé avec succès:", response);
       
-      // Ne pas utiliser setTemplateSent car hasRecentTemplate est calculé dynamiquement
-      // Le template sera détecté automatiquement dans les messages
-      
       // Attendre un peu pour que le message soit sauvegardé dans la base
-      await new Promise(resolve => setTimeout(resolve, 1500));
+      // Puis rafraîchir plusieurs fois pour s'assurer que le message est bien chargé
+      // Rafraîchir immédiatement les messages pour détecter le nouveau template
+      // Le webhook Supabase devrait ajouter le message rapidement
+      onSend?.("", true); // Refresh immédiat
       
       // Vérifier si on est toujours hors fenêtre gratuite
       // Après l'envoi du premier template, on devrait pouvoir envoyer des messages normaux
-      try {
-        const response = await getMessagePrice(conversation.id);
-        const isFree = response.data?.is_free ?? true;
-        setIsOutsideFreeWindow(!isFree);
-      } catch (error) {
-        console.error("Error checking free window after template:", error);
-      }
+      // Faire cette vérification en parallèle pour ne pas bloquer
+      getMessagePrice(conversation.id)
+        .then(response => {
+          const isFree = response.data?.is_free ?? true;
+          setIsOutsideFreeWindow(!isFree);
+          previousIsOutsideFreeWindowRef.current = !isFree;
+        })
+        .catch(error => {
+          console.error("Error checking free window after template:", error);
+        });
       
-      // Rafraîchir les messages pour afficher le message template sauvegardé
-      onSend?.("", true); // Force refresh des messages
+      // Un seul refresh supplémentaire après un court délai pour s'assurer que tout est à jour
+      setTimeout(() => {
+        onSend?.("", true);
+      }, 500);
     } catch (error) {
       console.error("❌ [FRONTEND] Erreur lors de l'envoi du template:", error);
       console.error("❌ [FRONTEND] Détails de l'erreur:", {
@@ -313,9 +527,26 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         url: error.config?.url
       });
       alert(`Erreur lors de l'envoi du template: ${error.response?.data?.detail || error.message}`);
+      // Supprimer le message optimiste en cas d'erreur
+      if (onSend) {
+        onSend("", true); // Force refresh pour supprimer le message optimiste
+      }
     } finally {
       setUploading(false);
     }
+  };
+  
+  const handleTemplateModalSend = (components) => {
+    if (selectedTemplate) {
+      handleSendTemplate(selectedTemplate, components);
+    }
+    setShowTemplateModal(false);
+    setSelectedTemplate(null);
+  };
+  
+  const handleTemplateModalClose = () => {
+    setShowTemplateModal(false);
+    setSelectedTemplate(null);
   };
 
   // Ajuster la hauteur du textarea pour suivre le contenu
@@ -869,7 +1100,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         {/* Affichage des templates si hors fenêtre gratuite */}
         {isOutsideFreeWindow && (
           <div className="templates-selector">
-            {hasRecentTemplate && !templateSent ? (
+            {hasRecentTemplate ? (
               // État "En attente d'une réponse client" après l'envoi d'un template
               <div className="templates-selector__waiting">
                 <div className="templates-selector__waiting-message">
@@ -879,9 +1110,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                 <button
                   className="templates-selector__reactivate-btn"
                   onClick={() => {
-                    // Forcer l'affichage des templates en mettant templateSent à true
-                    // Cela masquera le mode "en attente" et affichera les templates
-                    setTemplateSent(true);
+                    // Note: hasRecentTemplate est calculé dynamiquement à partir des messages
+                    // Pour forcer l'affichage des templates, on pourrait ajouter un état local
+                    // mais pour l'instant, on laisse la logique automatique gérer cela
+                    // Le mode sera réactivé automatiquement quand un nouveau message client arrivera
+                    // On pourrait forcer un refresh des messages ici si nécessaire
+                    if (onSend) {
+                      onSend("", true); // Force refresh
+                    }
                   }}
                   disabled={disabled || uploading}
                 >
@@ -889,7 +1125,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                 </button>
               </div>
             ) : (
-              // Affichage normal des templates
+              // Affichage normal des templates (hors fenêtre gratuite et pas de template récent)
               <>
                 <div className="templates-selector__header">
                   <span className="templates-selector__title">
@@ -910,10 +1146,13 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                       const bodyComponent = template.components?.find(c => c.type === "BODY");
                       const headerComponent = template.components?.find(c => c.type === "HEADER");
                       const footerComponent = template.components?.find(c => c.type === "FOOTER");
+                      const buttonsComponent = template.components?.find(c => c.type === "BUTTONS");
                       const templateText = bodyComponent?.text || template.name;
                       const headerImageUrl = template.header_media_url || 
                         (headerComponent?.example?.header_handle?.[0]) ||
                         (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
+                      const hasVariables = hasTemplateVariables(template);
+                      const buttons = buttonsComponent?.buttons || [];
                       return (
                         <div
                           key={index}
@@ -940,12 +1179,31 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                                 {footerComponent.text}
                               </div>
                             )}
+                            {buttons.length > 0 && (
+                              <div className="templates-selector__bubble-buttons">
+                                {buttons.map((button, btnIndex) => (
+                                  <div key={btnIndex} className="templates-selector__bubble-button">
+                                    {button.type === "URL" && <FiLink style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                    {button.type === "QUICK_REPLY" && <FiSend style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                    {button.type === "PHONE_NUMBER" && <FiPhone style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                    {button.text || button.url || button.phone_number}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                             <div className="bubble__footer">
                               <div className="bubble__footer-left">
                                 <small className="bubble__timestamp">Maintenant</small>
+                                {hasVariables && (
+                                  <small className="templates-selector__has-variables" title="Ce template contient des variables à remplir">
+                                    <FiEdit style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                    Variables
+                                  </small>
+                                )}
                               </div>
                               <div className="templates-selector__price">
-                                💰 {parseFloat(template.price_eur || template.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {template.price_eur ? 'EUR' : 'USD'}
+                                <FiDollarSign style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                {parseFloat(template.price_eur || template.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {template.price_eur ? 'EUR' : 'USD'}
                               </div>
                             </div>
                           </div>
@@ -1026,6 +1284,13 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           </button>
         </div>
       )}
+      
+      <TemplateVariablesModal
+        template={selectedTemplate}
+        isOpen={showTemplateModal}
+        onClose={handleTemplateModalClose}
+        onSend={handleTemplateModalSend}
+      />
     </div>
   );
 }

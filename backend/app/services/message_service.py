@@ -348,6 +348,10 @@ async def _process_incoming_message(
         content_text = _extract_content_text(message)
         media_meta = _extract_media_metadata(message)
 
+        # Pour les réponses de boutons, traiter comme un message texte normal
+        # car le contenu est maintenant extrait dans content_text
+        stored_message_type = "text" if msg_type == "button" else msg_type
+
         # Insérer le message d'abord
         message_payload = {
             "conversation_id": conversation["id"],
@@ -355,7 +359,7 @@ async def _process_incoming_message(
             "content_text": content_text,
             "timestamp": timestamp_iso,
             "wa_message_id": message.get("id"),
-            "message_type": msg_type,
+            "message_type": stored_message_type,
             "status": "received",
             "media_id": media_meta.get("media_id"),
             "media_mime_type": media_meta.get("media_mime_type"),
@@ -616,6 +620,12 @@ def _extract_content_text(message: Dict[str, Any]) -> str:
             return interactive.get("button_reply", {}).get("title", "")
         if interactive.get("type") == "list_reply":
             return interactive.get("list_reply", {}).get("title", "")
+
+    if msg_type == "button":
+        # Gérer les réponses de boutons de template WhatsApp
+        button_data = message.get("button", {})
+        # Préférer "text" qui est le texte affiché, sinon utiliser "payload"
+        return button_data.get("text") or button_data.get("payload", "")
 
     if msg_type == "image":
         caption = message.get("image", {}).get("caption")

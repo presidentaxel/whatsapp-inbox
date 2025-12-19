@@ -347,11 +347,6 @@ async def get_available_templates(
         # Filtrer uniquement les templates UTILITY approuvés
         templates = all_templates
         
-        # Log pour déboguer : afficher tous les templates récupérés
-        logger.info(f"📋 Total templates récupérés depuis WhatsApp API: {len(templates)}")
-        for t in templates:
-            logger.info(f"  - Template: {t.get('name')}, Status: {t.get('status')}, Category: {t.get('category')}, Language: {t.get('language')}")
-        
         def get_template_price(category):
             """Retourne le prix d'un template selon sa catégorie (prix Meta officiels)"""
             # Prix selon la documentation Meta WhatsApp Business API
@@ -374,7 +369,6 @@ async def get_available_templates(
             
             # Exclure le template hello_world / hello-world
             if template_name in ["hello_world", "hello-world"]:
-                logger.info(f"  ⏭️  Template exclu: {t.get('name')}")
                 continue
             
             # Filtrer les templates approuvés en catégorie UTILITY, MARKETING ou AUTHENTICATION
@@ -467,10 +461,6 @@ async def get_available_templates(
                     template_data["header_media_type"] = header_media_type
                 
                 approved_templates.append(template_data)
-        
-        logger.info(f"✅ Templates UTILITY, MARKETING et AUTHENTICATION approuvés filtrés: {len(approved_templates)}")
-        for t in approved_templates:
-            logger.info(f"  - {t.get('name')} ({t.get('category')}, {t.get('language')})")
         
         return {
             "templates": approved_templates
@@ -804,7 +794,22 @@ async def send_template_message_api(
         timestamp_iso = datetime.now(timezone.utc).isoformat()
         
         # Récupérer le texte du template depuis les détails (BODY + FOOTER)
+        # Et extraire les boutons si présents
         template_text = ""
+        template_buttons = []
+        template_variables_dict = {}
+        
+        # Extraire les variables depuis les components envoyés
+        if components:
+            import re
+            for comp in components:
+                if comp.get("type") in ["BODY", "HEADER", "FOOTER"] and comp.get("parameters"):
+                    # Les paramètres sont dans l'ordre des variables {{1}}, {{2}}, etc.
+                    parameters = comp.get("parameters", [])
+                    for idx, param in enumerate(parameters, start=1):
+                        if param.get("type") == "text":
+                            template_variables_dict[str(idx)] = param.get("text", "")
+        
         if template_details:
             # Extraire le texte du BODY et du FOOTER du template
             template_components = template_details.get("components", [])
@@ -813,22 +818,59 @@ async def send_template_message_api(
                 (c for c in template_components if c.get("type") == "BODY"),
                 None
             )
+            header_component = next(
+                (c for c in template_components if c.get("type") == "HEADER"),
+                None
+            )
             footer_component = next(
                 (c for c in template_components if c.get("type") == "FOOTER"),
                 None
             )
+            buttons_component = next(
+                (c for c in template_components if c.get("type") == "BUTTONS"),
+                None
+            )
             
+            # Extraire les boutons si présents
+            if buttons_component and buttons_component.get("buttons"):
+                template_buttons = buttons_component.get("buttons", [])
+                logger.info(f"  Template buttons found: {len(template_buttons)} buttons")
+            
+            # Construire le texte avec les variables remplacées
+            import re
+            
+            def replace_variables(text, variables):
+                """Remplace les variables {{1}}, {{2}}, etc. par leurs valeurs"""
+                if not text or not variables:
+                    return text
+                result = text
+                # Remplacer dans l'ordre décroissant pour éviter les conflits ({{10}} avant {{1}})
+                for var_num in sorted(variables.keys(), key=lambda x: int(x), reverse=True):
+                    var_value = variables[var_num]
+                    # Remplacer {{var_num}} par la valeur
+                    # Pattern: {{1}}, {{2}}, etc.
+                    pattern = r'\{\{' + str(var_num) + r'\}\}'
+                    result = re.sub(pattern, var_value, result)
+                return result
+            
+            # Header
+            if header_component and header_component.get("text"):
+                header_text = header_component.get("text", "")
+                header_text = replace_variables(header_text, template_variables_dict)
+                if header_text:
+                    template_text = header_text + "\n\n"
+            
+            # Body
             if body_component:
-                template_text = body_component.get("text", "")
-                logger.info(f"  Template text from BODY: {template_text}")
-                # Remplacer les variables {{1}}, {{2}}, etc. par des espaces pour l'affichage
-                import re
-                template_text = re.sub(r'\{\{\d+\}\}', '', template_text).strip()
-                logger.info(f"  Template text after cleanup: {template_text}")
+                body_text = body_component.get("text", "")
+                body_text = replace_variables(body_text, template_variables_dict)
+                template_text += body_text
+                logger.info(f"  Template text from BODY (with variables): {body_text}")
             
-            # Ajouter le footer si présent
+            # Footer
             if footer_component:
                 footer_text = footer_component.get("text", "")
+                footer_text = replace_variables(footer_text, template_variables_dict)
                 if footer_text:
                     if template_text:
                         template_text = f"{template_text}\n\n{footer_text}"
@@ -846,8 +888,10 @@ async def send_template_message_api(
             template_text = f"[Template: {template_name}]"
             logger.info(f"  Using fallback template text: {template_text}")
         
-        logger.info(f"  Final template text to save: {template_text}")
+        logger.info(f"  Final template text to save (with variables replaced): {template_text}")
+        logger.info(f"  Template variables: {template_variables_dict}")
         print(f"💾 [TEMPLATE SEND] Texte final à sauvegarder: {template_text}")
+        print(f"💾 [TEMPLATE SEND] Variables: {template_variables_dict}")
         
         # Sauvegarder le message de manière synchrone pour éviter qu'il soit écrasé par le webhook
         from app.core.db import supabase_execute, supabase
@@ -862,12 +906,38 @@ async def send_template_message_api(
         message_payload = {
             "conversation_id": conversation_id,
             "direction": "outbound",
-            "content_text": template_text,
+            "content_text": template_text,  # Texte avec variables remplacées
             "timestamp": timestamp_iso,
             "wa_message_id": message_id,
             "message_type": message_type,
             "status": "sent",
+            "template_name": template_name,
+            "template_language": language_code,
         }
+        
+        # Sauvegarder les variables dans template_variables si présentes
+        if template_variables_dict:
+            import json
+            message_payload["template_variables"] = json.dumps(template_variables_dict)
+            logger.info(f"  ✅ Variables sauvegardées: {template_variables_dict}")
+        
+        # Sauvegarder les boutons dans interactive_data si présents
+        if template_buttons:
+            import json
+            interactive_data = {
+                "type": "button",
+                "buttons": [
+                    {
+                        "type": btn.get("type", "QUICK_REPLY"),
+                        "text": btn.get("text", ""),
+                        "url": btn.get("url", ""),
+                        "phone_number": btn.get("phone_number", "")
+                    }
+                    for btn in template_buttons[:5]  # Sécurité: max 5 boutons (normalement max 3)
+                ]
+            }
+            message_payload["interactive_data"] = json.dumps(interactive_data)
+            logger.info(f"  ✅ Boutons sauvegardés dans interactive_data: {len(template_buttons)} boutons")
         
         # Si le template a une image, sauvegarder l'URL pour l'affichage
         if template_header_image_url:

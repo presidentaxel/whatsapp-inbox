@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { formatRelativeDateTime } from "../../utils/date";
 import {
   FiHeadphones,
@@ -9,6 +9,8 @@ import {
   FiMessageSquare,
   FiPhone,
   FiList,
+  FiLink,
+  FiSend,
 } from "react-icons/fi";
 import { api } from "../../api/axiosClient";
 import MessageReactions from "./MessageReactions";
@@ -139,6 +141,33 @@ function RichMediaBubble({ message, messageType }) {
      message.content_text.trim() === '[document]');
   
   const caption = isPlaceholder ? null : message.content_text;
+  
+  // Parser les boutons depuis interactive_data si présent
+  let buttons = [];
+  if (message.interactive_data) {
+    try {
+      const interactiveData = typeof message.interactive_data === 'string' 
+        ? JSON.parse(message.interactive_data) 
+        : message.interactive_data;
+      
+      if (interactiveData.buttons && Array.isArray(interactiveData.buttons)) {
+        // Format pour les templates: {type: "QUICK_REPLY", text: "..."}
+        buttons = interactiveData.buttons.map(btn => ({
+          text: btn.text || btn.reply?.title || '',
+          type: btn.type || 'QUICK_REPLY',
+          url: btn.url || '',
+          phone_number: btn.phone_number || ''
+        }));
+      } else if (interactiveData.type === 'button' && interactiveData.buttons) {
+        buttons = interactiveData.buttons.map(btn => ({
+          text: btn.reply?.title || btn.text || '',
+          type: btn.type || 'reply'
+        }));
+      }
+    } catch (e) {
+      console.warn('Error parsing interactive_data:', e);
+    }
+  }
 
   const handleLoadingChange = (loading, error) => {
     // Cacher l'icône si l'image/vidéo est chargée sans erreur
@@ -147,21 +176,36 @@ function RichMediaBubble({ message, messageType }) {
     }
   };
 
-  return (
+  return {
+    content: (
       <div className="bubble-media bubble-media--rich">
-      {showIcon && (
-        <div className="bubble-media__icon">{typeEntry?.icon}</div>
-      )}
+        {showIcon && (
+          <div className="bubble-media__icon">{typeEntry?.icon}</div>
+        )}
         <div className="bubble-media__content">
-        <MediaRenderer 
-          message={message} 
-          messageType={messageType}
-          onLoadingChange={handleLoadingChange}
-        />
-        {caption && <p className="bubble-media__caption">{caption}</p>}
+          <MediaRenderer 
+            message={message} 
+            messageType={messageType}
+            onLoadingChange={handleLoadingChange}
+          />
+          {caption && (
+            <p className="bubble-media__caption" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+              {caption}
+            </p>
+          )}
+        </div>
       </div>
-    </div>
-  );
+    ),
+    buttons: buttons.length > 0 ? (
+      <div className="bubble-media__buttons-container">
+        {buttons.map((button, index) => (
+          <div key={index} className="bubble-media__button">
+            {button.text || button.title || button.reply?.title || button.url || button.phone_number || ''}
+          </div>
+        ))}
+      </div>
+    ) : null
+  };
 }
 
 function InteractiveBubble({ message }) {
@@ -212,44 +256,53 @@ function renderBody(message) {
   // Pour les templates avec image, le message_type peut être "image" ou "template" avec storage_url
   const hasMedia = message.media_id || message.storage_url;
   const isMediaType = FETCHABLE_MEDIA.has(messageType);
-  const isTemplateWithImage = messageType === "template" && hasMedia;
+  // Un template avec image : message_type === "image" avec template_name OU message_type === "template" avec storage_url
+  const isTemplateWithImage = (messageType === "image" && message.template_name) || 
+                               (messageType === "template" && hasMedia);
   
   if ((isMediaType || isTemplateWithImage) && hasMedia) {
     // Utiliser "image" comme type pour l'affichage si c'est un template avec image
     const displayType = isTemplateWithImage ? "image" : messageType;
-    return <RichMediaBubble message={message} messageType={displayType} />;
+    const result = RichMediaBubble({ message, messageType: displayType });
+    return result;
   }
 
   // Messages interactifs
   if (messageType === "interactive") {
-    return <InteractiveBubble message={message} />;
+    return { content: <InteractiveBubble message={message} />, buttons: null };
   }
 
   if (!typeEntry || messageType === "text" || messageType === "template") {
     // Préserver les retours à la ligne pour les templates et textes
     const text = message.content_text || "";
     const lines = text.split('\n');
-    return (
-      <span className="bubble__text">
-        {lines.map((line, index) => (
-          <span key={index}>
-            {line}
-            {index < lines.length - 1 && <br />}
-          </span>
-        ))}
-      </span>
-    );
+    return {
+      content: (
+        <span className="bubble__text">
+          {lines.map((line, index) => (
+            <span key={index}>
+              {line}
+              {index < lines.length - 1 && <br />}
+            </span>
+          ))}
+        </span>
+      ),
+      buttons: null
+    };
   }
 
-  return (
-    <div className="bubble-media">
-      <div className="bubble-media__icon">{typeEntry.icon}</div>
-      <div className="bubble-media__content">
-        <strong>{typeEntry.label}</strong>
-        {message.content_text && <p className="bubble__text">{message.content_text}</p>}
+  return {
+    content: (
+      <div className="bubble-media">
+        <div className="bubble-media__icon">{typeEntry.icon}</div>
+        <div className="bubble-media__content">
+          <strong>{typeEntry.label}</strong>
+          {message.content_text && <p className="bubble__text">{message.content_text}</p>}
+        </div>
       </div>
-    </div>
-  );
+    ),
+    buttons: null
+  };
 }
 
 export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend }) {
@@ -258,49 +311,93 @@ export default function MessageBubble({ message, conversation, onReactionChange,
 
   const messageType = (message.message_type || "text").toLowerCase();
   const hasMedia = message.media_id || message.storage_url;
-  const isMedia = (FETCHABLE_MEDIA.has(messageType) || (messageType === "template" && hasMedia)) && hasMedia;
+  // Un template avec image : message_type === "image" avec template_name OU message_type === "template" avec storage_url
+  const isTemplateWithImage = (messageType === "image" && message.template_name) || 
+                               (messageType === "template" && hasMedia);
+  const isMedia = (FETCHABLE_MEDIA.has(messageType) || isTemplateWithImage) && hasMedia;
   const isDeletedForAll = !!message.deleted_for_all_at;
   const isEdited = !!message.edited_at;
 
+  const bodyResult = renderBody(message);
+  const bodyContent = bodyResult?.content || bodyResult;
+  const buttons = bodyResult?.buttons || null;
+
+  const bubbleRef = useRef(null);
+  const buttonsWrapperRef = useRef(null);
+
+  // Synchroniser la largeur du conteneur de boutons avec la bulle
+  useEffect(() => {
+    if (buttons && bubbleRef.current && buttonsWrapperRef.current) {
+      const syncWidth = () => {
+        const bubbleWidth = bubbleRef.current.offsetWidth;
+        if (bubbleWidth > 0) {
+          buttonsWrapperRef.current.style.width = `${bubbleWidth}px`;
+        }
+      };
+
+      // Synchroniser immédiatement
+      syncWidth();
+
+      // Observer les changements de taille de la bulle
+      const resizeObserver = new ResizeObserver(syncWidth);
+      resizeObserver.observe(bubbleRef.current);
+
+      return () => {
+        resizeObserver.disconnect();
+      };
+    }
+  }, [buttons, bodyContent]);
+
   return (
-    <div
-      className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""}`}
-      onContextMenu={onContextMenu}
-      style={{ position: "relative" }}
-    >
-      {isDeletedForAll ? (
-        <span className="bubble__text bubble__text--deleted">
-          {mine ? "Vous avez supprimé ce message" : "Ce message a été supprimé"}
-        </span>
-      ) : (
-        renderBody(message)
-      )}
-      <div className="bubble__footer">
-        <div className="bubble__footer-left">
-          <small className="bubble__timestamp">
-            {timestamp}
-            {isEdited && !isDeletedForAll ? " · modifié" : ""}
-          </small>
+    <div className="message-with-buttons-wrapper">
+      <div
+        ref={bubbleRef}
+        className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""}`}
+        onContextMenu={onContextMenu}
+        style={{ position: "relative" }}
+      >
+        {isDeletedForAll ? (
+          <span className="bubble__text bubble__text--deleted">
+            {mine ? "Vous avez supprimé ce message" : "Ce message a été supprimé"}
+          </span>
+        ) : (
+          bodyContent
+        )}
+        <div className="bubble__footer">
+          <div className="bubble__footer-left">
+            <small className="bubble__timestamp">
+              {timestamp}
+              {isEdited && !isDeletedForAll ? " · modifié" : ""}
+            </small>
+            {!isDeletedForAll && (
+              <MessageReactions 
+                message={message} 
+                conversation={conversation} 
+                onReactionChange={onReactionChange}
+                forceOpen={forceReactionOpen}
+              />
+            )}
+          </div>
           {!isDeletedForAll && (
-            <MessageReactions 
-              message={message} 
-              conversation={conversation} 
-              onReactionChange={onReactionChange}
-              forceOpen={forceReactionOpen}
+            <MessageStatus 
+              status={message.status} 
+              isOwnMessage={mine}
+              conversation={conversation}
+              messageTimestamp={message.timestamp}
+              message={message}
+              onResend={onResend}
             />
           )}
         </div>
-        {!isDeletedForAll && (
-          <MessageStatus 
-            status={message.status} 
-            isOwnMessage={mine}
-            conversation={conversation}
-            messageTimestamp={message.timestamp}
-            message={message}
-            onResend={onResend}
-          />
-        )}
       </div>
+      {buttons && (
+        <div 
+          ref={buttonsWrapperRef}
+          className={`bubble-buttons-wrapper ${mine ? "bubble-buttons-wrapper--me" : "bubble-buttons-wrapper--them"}`}
+        >
+          {buttons}
+        </div>
+      )}
     </div>
   );
 }
