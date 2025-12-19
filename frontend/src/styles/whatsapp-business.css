@@ -67,7 +67,28 @@
   min-height: 600px;
   max-height: calc(100vh - 200px);
   overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid var(--border-light);
+  /* Permettre le scroll vertical */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.panel-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.panel-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.panel-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.panel-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .panel-empty {
@@ -296,6 +317,7 @@
 .templates-section {
   height: 100%;
   overflow: visible;
+  min-height: 0;
 }
 
 .templates-section h3 {
@@ -462,6 +484,46 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.template-preview-media-image-wrapper {
+  width: 100%;
+  max-height: 300px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.template-preview-media-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  object-fit: cover;
+  max-height: 300px;
+}
+
+.template-preview-media-video-wrapper {
+  width: 100%;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.template-preview-media-video {
+  width: 100%;
+  max-height: 300px;
+  display: block;
+}
+
+.template-preview-media-document {
+  display: block;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.3);
+  color: #e9edef;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  transition: background 0.2s;
+}
+
+.template-preview-media-document:hover {
+  background: rgba(0, 0, 0, 0.5);
+}
+
 .template-preview-body {
   padding: 0.75rem 1rem;
   color: #e9edef;
@@ -479,22 +541,47 @@
 }
 
 .template-preview-buttons {
-  padding: 0.5rem 1rem 0.75rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0;
+  margin-top: 0.5rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .template-preview-button {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 6px;
-  padding: 0.5rem;
-  text-align: center;
-  color: #e9edef;
-  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: #0084ff;
+  font-size: 0.9rem;
   font-weight: 500;
+  background: transparent;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  text-align: center;
+}
+
+.template-preview-button:first-child {
+  border-top: none;
+}
+
+.template-preview-button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.template-preview-button-icon {
+  font-size: 1rem;
+  color: #0084ff;
+  flex-shrink: 0;
+}
+
+.template-preview-button-text {
+  color: #0084ff;
 }
 
 /* Template Form */

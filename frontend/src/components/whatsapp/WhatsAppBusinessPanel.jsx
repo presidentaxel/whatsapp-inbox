@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FiInfo, FiMessageSquare, FiFileText, FiImage, FiUser } from "react-icons/fi";
+import { FiInfo, FiMessageSquare, FiFileText, FiImage, FiUser, FiExternalLink, FiPhone, FiCornerDownLeft } from "react-icons/fi";
 import {
   getPhoneDetails,
   getBusinessProfile,
@@ -10,6 +10,7 @@ import {
   uploadMedia,
   getWabaDetails
 } from "../../api/whatsappApi";
+import { supabaseClient } from "../../api/supabaseClient";
 
 export default function WhatsAppBusinessPanel({ accountId, accounts }) {
   const [activeTab, setActiveTab] = useState("info");
@@ -17,6 +18,7 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
   const [businessProfile, setBusinessProfile] = useState(null);
   const [wabaDetails, setWabaDetails] = useState(null);
   const [templates, setTemplates] = useState([]);
+  const [templateMedias, setTemplateMedias] = useState({}); // { templateName_language: { IMAGE: url, VIDEO: url, ... } }
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   
@@ -97,7 +99,10 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
       }
 
       if (templatesResult.status === "fulfilled") {
-        setTemplates(templatesResult.value.data?.data || []);
+        const templatesData = templatesResult.value.data?.data || [];
+        setTemplates(templatesData);
+        // Charger les médias pour chaque template
+        await loadTemplateMedias(templatesData);
       } else {
         console.log("Templates not available:", templatesResult.reason?.response?.data?.detail);
       }
@@ -203,6 +208,62 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
       console.error(err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadTemplateMedias = async (templates) => {
+    if (!accountId || !templates.length) return;
+
+    try {
+      // Récupérer tous les médias pour les templates de ce compte
+      const { data, error } = await supabaseClient
+        .from("template_media")
+        .select("template_name, template_language, media_type, storage_url, storage_path")
+        .eq("account_id", accountId);
+
+      if (error) {
+        console.error("Error loading template medias:", error);
+        return;
+      }
+
+      // Organiser les médias par template_name + template_language + media_type
+      const mediasMap = {};
+      if (data) {
+        data.forEach((media) => {
+          const key = `${media.template_name}_${media.template_language}`;
+          if (!mediasMap[key]) {
+            mediasMap[key] = {};
+          }
+          
+          // Construire l'URL publique
+          let publicUrl = null;
+          
+          // Si storage_url est déjà une URL complète, l'utiliser directement
+          if (media.storage_url && (media.storage_url.startsWith('http://') || media.storage_url.startsWith('https://'))) {
+            publicUrl = media.storage_url;
+          } else if (media.storage_path) {
+            // Sinon, construire l'URL depuis storage_path
+            const { data: urlData } = supabaseClient.storage
+              .from("template-media")
+              .getPublicUrl(media.storage_path);
+            publicUrl = urlData?.publicUrl;
+          } else if (media.storage_url) {
+            // Si storage_url existe mais n'est pas une URL complète, essayer de construire l'URL
+            const { data: urlData } = supabaseClient.storage
+              .from("template-media")
+              .getPublicUrl(media.storage_url);
+            publicUrl = urlData?.publicUrl;
+          }
+          
+          if (publicUrl) {
+            mediasMap[key][media.media_type] = publicUrl;
+          }
+        });
+      }
+
+      setTemplateMedias(mediasMap);
+    } catch (err) {
+      console.error("Error loading template medias:", err);
     }
   };
 
@@ -569,14 +630,54 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
                       <div className="template-preview-bubble">
                         {tpl.components?.map((comp, idx) => {
                           if (comp.type === "HEADER") {
+                            const mediaKey = `${tpl.name}_${tpl.language}`;
+                            const mediaUrl = templateMedias[mediaKey]?.[comp.format];
+                            
                             return (
                               <div key={idx} className="template-preview-header">
                                 {comp.format === "IMAGE" ? (
-                                  <div className="template-preview-media">[Image]</div>
+                                  mediaUrl ? (
+                                    <div className="template-preview-media-image-wrapper">
+                                      <img 
+                                        src={mediaUrl} 
+                                        alt="Template header" 
+                                        className="template-preview-media-image"
+                                        onError={(e) => {
+                                          e.target.parentElement.innerHTML = '<div class="template-preview-media">[Image non disponible]</div>';
+                                        }}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div className="template-preview-media">[Image]</div>
+                                  )
                                 ) : comp.format === "VIDEO" ? (
-                                  <div className="template-preview-media">[Vidéo]</div>
+                                  mediaUrl ? (
+                                    <div className="template-preview-media-video-wrapper">
+                                      <video 
+                                        src={mediaUrl} 
+                                        controls 
+                                        className="template-preview-media-video"
+                                        onError={(e) => {
+                                          e.target.parentElement.innerHTML = '<div class="template-preview-media">[Vidéo non disponible]</div>';
+                                        }}
+                                      />
+                                    </div>
+                                  ) : (
+                                    <div className="template-preview-media">[Vidéo]</div>
+                                  )
                                 ) : comp.format === "DOCUMENT" ? (
-                                  <div className="template-preview-media">[Document]</div>
+                                  mediaUrl ? (
+                                    <a 
+                                      href={mediaUrl} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer"
+                                      className="template-preview-media-document"
+                                    >
+                                      📄 Document
+                                    </a>
+                                  ) : (
+                                    <div className="template-preview-media">[Document]</div>
+                                  )
                                 ) : (
                                   <strong>{comp.text}</strong>
                                 )}
@@ -602,8 +703,14 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
                               <div key={idx} className="template-preview-buttons">
                                 {comp.buttons?.map((btn, btnIdx) => (
                                   <div key={btnIdx} className="template-preview-button">
-                                    {btn.type === "QUICK_REPLY" ? "↩️ " : btn.type === "URL" ? "🔗 " : "📞 "}
-                                    {btn.text}
+                                    {btn.type === "QUICK_REPLY" ? (
+                                      <FiCornerDownLeft className="template-preview-button-icon" />
+                                    ) : btn.type === "URL" ? (
+                                      <FiExternalLink className="template-preview-button-icon" />
+                                    ) : (
+                                      <FiPhone className="template-preview-button-icon" />
+                                    )}
+                                    <span className="template-preview-button-text">{btn.text}</span>
                                   </div>
                                 ))}
                               </div>

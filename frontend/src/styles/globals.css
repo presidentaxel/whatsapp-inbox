@@ -1034,6 +1034,13 @@ body {
   box-shadow: none;
 }
 
+/* Fond noir pour le top-bar uniquement sur PC */
+@media (min-width: 768px) {
+  .top-bar {
+    background: #000;
+  }
+}
+
 .top-bar__brand {
   display: flex;
   align-items: center;
