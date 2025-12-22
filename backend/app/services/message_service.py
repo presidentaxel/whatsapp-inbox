@@ -23,6 +23,7 @@ from app.services.whatsapp_api_service import (
     list_message_templates,
     create_message_template,
     send_template_message,
+    check_phone_number_has_whatsapp,
 )
 
 FALLBACK_MESSAGE = "Je me renseigne auprès d'un collègue et je reviens vers vous au plus vite."
@@ -465,9 +466,43 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
             error_code = error_obj.get("code")
             error_title = error_obj.get("title", "")
             error_details = error_obj.get("details", "")
-            error_message = f"Code {error_code}: {error_title}"
+            
+            # Traduire les codes d'erreur courants en français
+            error_translations = {
+                131026: "Message non livrable",
+                131047: "Message hors fenêtre gratuite (nécessite un template)",
+                131048: "Numéro de téléphone invalide",
+                131051: "Le destinataire n'a pas WhatsApp",
+                131052: "Le destinataire a bloqué ce numéro",
+                100: "Erreur d'authentification",
+                190: "Token d'accès expiré",
+            }
+            
+            # Détecter spécifiquement si le destinataire n'a pas WhatsApp
+            is_no_whatsapp_error = error_code in [131026, 131051] or (
+                error_code == 131026 and "undeliverable" in error_title.lower()
+            )
+            
+            # Utiliser la traduction si disponible, sinon utiliser le titre original
+            translated_title = error_translations.get(error_code, error_title)
+            
+            # Construire le message d'erreur
+            if error_code:
+                error_message = f"Code {error_code}: {translated_title}"
+            else:
+                error_message = translated_title if translated_title else error_title
+            
+            # Ajouter les détails si disponibles
             if error_details:
                 error_message += f" - {error_details}"
+            
+            # Ajouter des conseils pour les erreurs courantes
+            if is_no_whatsapp_error:
+                error_message += " ⚠️ Ce numéro ne semble pas avoir de compte WhatsApp actif. Vérifiez que le destinataire a WhatsApp installé et que le numéro est correct."
+            elif error_code == 131026:
+                error_message += " (Vérifiez que le numéro est valide et que le destinataire a WhatsApp installé)"
+            elif error_code == 131047:
+                error_message += " (Utilisez un template de message approuvé pour envoyer hors fenêtre gratuite)"
         elif status_payload.get("error"):
             # Format alternatif
             error_message = str(status_payload.get("error"))

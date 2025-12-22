@@ -39,6 +39,7 @@ from app.services.message_service import (
     delete_message_scope,
 )
 from app.services import whatsapp_api_service
+from app.services.whatsapp_api_service import check_phone_number_has_whatsapp
 
 router = APIRouter()
 
@@ -1417,5 +1418,77 @@ async def remove_message_reaction(
         )
         if wa_result.get("error"):
             logger.warning("Failed to remove reaction on WhatsApp: %s", wa_result)
+    
+    return result
+
+
+@router.post("/check-whatsapp")
+async def check_phone_has_whatsapp(
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Vérifie si un numéro de téléphone a un compte WhatsApp actif.
+    
+    Payload:
+    {
+      "phone_number": "+33612345678" ou "33612345678",
+      "account_id": "uuid"  # Optionnel, utilise le premier compte si non fourni
+    }
+    
+    Returns:
+    {
+      "has_whatsapp": true/false/null,
+      "name": "Nom du contact" ou null,
+      "profile_picture_url": "url" ou null,
+      "phone_number": "33612345678",
+      "error": "message d'erreur" ou null
+    }
+    """
+    phone_number = payload.get("phone_number")
+    account_id = payload.get("account_id")
+    
+    if not phone_number:
+        raise HTTPException(status_code=400, detail="phone_number is required")
+    
+    # Récupérer le compte
+    if account_id:
+        account = await get_account_by_id(account_id)
+        if not account:
+            raise HTTPException(status_code=404, detail="account_not_found")
+        # Vérifier les permissions
+        current_user.require(PermissionCodes.MESSAGES_VIEW, account_id)
+    else:
+        # Utiliser le premier compte disponible pour l'utilisateur
+        from app.services.account_service import get_all_accounts
+        all_accounts = await get_all_accounts()
+        if not all_accounts:
+            raise HTTPException(status_code=404, detail="no_accounts_found")
+        
+        # Trouver le premier compte auquel l'utilisateur a accès
+        account = None
+        for acc in all_accounts:
+            try:
+                current_user.require(PermissionCodes.MESSAGES_VIEW, acc["id"])
+                account = acc
+                break
+            except:
+                continue
+        
+        if not account:
+            raise HTTPException(status_code=403, detail="no_account_access")
+    
+    phone_number_id = account.get("phone_number_id")
+    access_token = account.get("access_token")
+    
+    if not phone_number_id or not access_token:
+        raise HTTPException(status_code=400, detail="whatsapp_not_configured")
+    
+    # Vérifier si le numéro a WhatsApp
+    result = await check_phone_number_has_whatsapp(
+        phone_number_id=phone_number_id,
+        access_token=access_token,
+        phone_number=phone_number
+    )
     
     return result

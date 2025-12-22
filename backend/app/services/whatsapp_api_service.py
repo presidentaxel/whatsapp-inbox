@@ -751,6 +751,123 @@ async def get_subscribed_apps(
 # ============================================================================
 
 @retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)
+async def check_phone_number_has_whatsapp(
+    phone_number_id: str,
+    access_token: str,
+    phone_number: str,
+) -> Dict[str, Any]:
+    """
+    Vérifie si un numéro de téléphone a un compte WhatsApp actif.
+    
+    Cette fonction utilise l'API WhatsApp Contacts pour vérifier si un numéro
+    est inscrit sur WhatsApp. Si l'API retourne des données, le numéro a WhatsApp.
+    Si elle retourne une erreur spécifique, le numéro n'a probablement pas WhatsApp.
+    
+    Args:
+        phone_number_id: ID du numéro de téléphone WhatsApp Business
+        access_token: Token d'accès Graph API
+        phone_number: Numéro de téléphone à vérifier (format international avec ou sans +)
+    
+    Returns:
+        Dict avec:
+        - has_whatsapp: bool (True si le numéro a WhatsApp, False sinon)
+        - name: Optional[str] (nom du contact si disponible)
+        - profile_picture_url: Optional[str] (URL de la photo de profil si disponible)
+        - error: Optional[str] (message d'erreur si la vérification a échoué)
+    """
+    try:
+        client = await get_http_client()
+        
+        # Nettoyer le numéro de téléphone (format international sans +)
+        clean_phone = phone_number.replace("+", "").replace(" ", "").replace("-", "")
+        
+        try:
+            response = await client.get(
+                f"{GRAPH_API_BASE}/{phone_number_id}/contacts",
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={
+                    "phone_numbers": clean_phone,
+                    "fields": "profile_picture_url,name"
+                },
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("data") and len(data["data"]) > 0:
+                    contact_data = data["data"][0]
+                    # Si on a des données, le numéro a WhatsApp
+                    logger.info(f"✅ Numéro {clean_phone} a WhatsApp")
+                    return {
+                        "has_whatsapp": True,
+                        "name": contact_data.get("name"),
+                        "profile_picture_url": contact_data.get("profile_picture_url"),
+                        "phone_number": clean_phone
+                    }
+                else:
+                    # Pas de données = le numéro n'a probablement pas WhatsApp
+                    logger.warning(f"⚠️ Numéro {clean_phone} n'a pas de compte WhatsApp (pas de données retournées)")
+                    return {
+                        "has_whatsapp": False,
+                        "name": None,
+                        "profile_picture_url": None,
+                        "phone_number": clean_phone,
+                        "error": "Ce numéro ne semble pas avoir de compte WhatsApp"
+                    }
+            else:
+                # Erreur HTTP = probablement pas WhatsApp
+                error_text = response.text
+                logger.warning(f"⚠️ Erreur lors de la vérification du numéro {clean_phone}: {response.status_code} - {error_text}")
+                return {
+                    "has_whatsapp": False,
+                    "name": None,
+                    "profile_picture_url": None,
+                    "phone_number": clean_phone,
+                    "error": f"Impossible de vérifier si ce numéro a WhatsApp (code {response.status_code})"
+                }
+        except httpx.HTTPStatusError as e:
+            # Erreur HTTP spécifique
+            if e.response.status_code == 400:
+                # Erreur 400 = probablement numéro invalide ou pas WhatsApp
+                logger.warning(f"⚠️ Numéro {clean_phone} invalide ou n'a pas WhatsApp (400)")
+                return {
+                    "has_whatsapp": False,
+                    "name": None,
+                    "profile_picture_url": None,
+                    "phone_number": clean_phone,
+                    "error": "Ce numéro ne semble pas avoir de compte WhatsApp"
+                }
+            else:
+                logger.error(f"❌ Erreur HTTP {e.response.status_code} lors de la vérification: {e.response.text}")
+                return {
+                    "has_whatsapp": None,  # Inconnu
+                    "name": None,
+                    "profile_picture_url": None,
+                    "phone_number": clean_phone,
+                    "error": f"Erreur lors de la vérification (code {e.response.status_code})"
+                }
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la vérification du numéro {clean_phone}: {e}")
+            return {
+                "has_whatsapp": None,  # Inconnu
+                "name": None,
+                "profile_picture_url": None,
+                "phone_number": clean_phone,
+                "error": f"Erreur lors de la vérification: {str(e)}"
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Erreur critique lors de la vérification du numéro {phone_number}: {e}", exc_info=True)
+        return {
+            "has_whatsapp": None,  # Inconnu
+            "name": None,
+            "profile_picture_url": None,
+            "phone_number": phone_number.replace("+", "").replace(" ", "").replace("-", ""),
+            "error": f"Erreur lors de la vérification: {str(e)}"
+        }
+
+
+@retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)
 async def get_contact_info(
     phone_number_id: str,
     access_token: str,
