@@ -47,14 +47,21 @@ export default function ContactsPanel({
               <span>Créé le</span>
               <strong>
                 {selected.created_at
-                  ? new Date(selected.created_at).toLocaleString("fr-FR", {
-                      timeZone: "Europe/Paris",
-                      year: "numeric",
-                      month: "2-digit",
-                      day: "2-digit",
-                      hour: "2-digit",
-                      minute: "2-digit"
-                    })
+                  ? (() => {
+                      const timestamp = selected.created_at;
+                      // Interpréter comme UTC si pas de timezone explicite
+                      const dateStr = typeof timestamp === 'string' && !timestamp.match(/[Z+-]\d{2}:\d{2}$/) 
+                        ? timestamp + 'Z' 
+                        : timestamp;
+                      return new Date(dateStr).toLocaleString("fr-FR", {
+                        timeZone: "Europe/Paris",
+                        year: "numeric",
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit"
+                      });
+                    })()
                   : "—"}
               </strong>
             </div>

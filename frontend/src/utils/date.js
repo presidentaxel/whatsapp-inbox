@@ -1,19 +1,25 @@
 /**
- * Parse une date en s'assurant qu'elle est correctement interprétée comme UTC
- * puis convertie en heure locale pour les comparaisons
+ * Parse une date en s'assurant qu'elle est interprétée comme UTC
+ * Les dates stockées dans Supabase sont en UTC
+ * 
+ * Si une date n'a pas de timezone explicite, on l'interprète comme UTC
  */
-function parseDate(value) {
+export function parseDateAsUTC(value) {
   if (!value) return null;
   
   let d;
+  
   if (typeof value === "string") {
-    // Si la string se termine par 'Z' ou contient '+00:00', c'est UTC
-    // Sinon, on assume que c'est UTC si c'est au format ISO
-    if (value.endsWith('Z') || value.includes('+00:00') || value.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)) {
-      // C'est une date UTC, la parser correctement
+    // Si la string se termine par 'Z' ou contient un timezone explicite (+XX:XX ou -XX:XX)
+    if (value.endsWith('Z') || value.match(/[+-]\d{2}:\d{2}$/)) {
+      // C'est une date avec timezone explicite, la parser correctement
       d = new Date(value);
+    } else if (value.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)) {
+      // Format ISO sans timezone : on l'interprète comme UTC
+      // On ajoute 'Z' pour forcer l'interprétation UTC
+      d = new Date(value + 'Z');
     } else {
-      // Parser comme date locale
+      // Parser comme date locale (fallback)
       d = new Date(value);
     }
   } else if (typeof value === "number") {
@@ -30,6 +36,46 @@ function parseDate(value) {
   return d;
 }
 
+/**
+ * Parse une date en s'assurant qu'elle est interprétée comme UTC
+ * Les dates stockées dans Supabase sont en UTC
+ * 
+ * Si une date n'a pas de timezone explicite, on l'interprète comme UTC
+ */
+function parseDate(value) {
+  return parseDateAsUTC(value);
+}
+
+/**
+ * Formate l'heure d'une date en heure française (Europe/Paris)
+ * La date est en UTC, on la convertit vers l'heure française pour l'affichage
+ */
+function formatTime(date, options = {}) {
+  if (!date) return "";
+  
+  // Convertir UTC vers Europe/Paris pour l'affichage
+  return date.toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Europe/Paris",
+    ...options
+  });
+}
+
+/**
+ * Formate la date en heure française (Europe/Paris)
+ * La date est en UTC, on la convertit vers l'heure française pour l'affichage
+ */
+function formatDateOnly(date, options = {}) {
+  if (!date) return "";
+  
+  // Convertir UTC vers Europe/Paris pour l'affichage
+  return date.toLocaleDateString("fr-FR", {
+    timeZone: "Europe/Paris",
+    ...options
+  });
+}
+
 export function formatRelativeDate(value) {
   const d = parseDate(value);
   if (!d) return "";
@@ -39,7 +85,7 @@ export function formatRelativeDate(value) {
 
   // Convertir les dates en heure locale (Europe/Paris) pour les comparaisons
   // Utiliser toLocaleString pour obtenir les composants de date en heure locale
-  const dLocalStr = d.toLocaleDateString("fr-FR", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" });
+  const dLocalStr = formatDateOnly(d, { year: "numeric", month: "2-digit", day: "2-digit" });
   const nowLocalStr = now.toLocaleDateString("fr-FR", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" });
   
   // Parser les dates locales pour comparaison
@@ -55,11 +101,7 @@ export function formatRelativeDate(value) {
 
   if (isToday) {
     // Afficher l'heure en heure locale (France)
-    return d.toLocaleTimeString("fr-FR", { 
-      hour: "2-digit", 
-      minute: "2-digit",
-      timeZone: "Europe/Paris" // Fuseau horaire de la France avec changement d'heure automatique
-    });
+    return formatTime(d);
   }
   if (isYesterday) {
     return "Hier";
@@ -68,18 +110,14 @@ export function formatRelativeDate(value) {
   // Dans la semaine
   const diffDays = Math.floor((nowLocal.getTime() - dLocal.getTime()) / oneDay);
   if (diffDays < 7) {
-    return d.toLocaleDateString("fr-FR", { 
-      weekday: "short",
-      timeZone: "Europe/Paris"
-    });
+    return formatDateOnly(d, { weekday: "short" });
   }
 
   // Sinon date courte
-  return d.toLocaleDateString("fr-FR", { 
+  return formatDateOnly(d, { 
     day: "2-digit", 
     month: "2-digit", 
-    year: "numeric",
-    timeZone: "Europe/Paris"
+    year: "numeric"
   });
 }
 
@@ -92,7 +130,7 @@ export function formatRelativeDateTime(value) {
 
   // Convertir les dates en heure locale (Europe/Paris) pour les comparaisons
   // Utiliser toLocaleString pour obtenir les composants de date en heure locale
-  const dLocalStr = d.toLocaleDateString("fr-FR", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" });
+  const dLocalStr = formatDateOnly(d, { year: "numeric", month: "2-digit", day: "2-digit" });
   const nowLocalStr = now.toLocaleDateString("fr-FR", { timeZone: "Europe/Paris", year: "numeric", month: "2-digit", day: "2-digit" });
   
   // Parser les dates locales pour comparaison
@@ -106,32 +144,22 @@ export function formatRelativeDateTime(value) {
   const isToday = dLocal.getTime() === nowLocal.getTime();
   const isYesterday = dLocal.getTime() === yesterdayLocal.getTime();
 
-  // Options pour l'affichage en heure locale (France)
-  const timeOptions = {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Europe/Paris" // Fuseau horaire de la France avec changement d'heure automatique
-  };
-
-  const dateOptions = {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    timeZone: "Europe/Paris"
-  };
-
   if (isToday) {
-    return d.toLocaleTimeString("fr-FR", timeOptions);
+    return formatTime(d);
   }
   if (isYesterday) {
-    return "Hier " + d.toLocaleTimeString("fr-FR", timeOptions);
+    return "Hier " + formatTime(d);
   }
 
   const diffDays = Math.floor((nowLocal.getTime() - dLocal.getTime()) / oneDay);
   if (diffDays < 7) {
-    return `${d.toLocaleDateString("fr-FR", { weekday: "short", timeZone: "Europe/Paris" })} ${d.toLocaleTimeString("fr-FR", timeOptions)}`;
+    return `${formatDateOnly(d, { weekday: "short" })} ${formatTime(d)}`;
   }
 
-  return d.toLocaleDateString("fr-FR", dateOptions) + " " + d.toLocaleTimeString("fr-FR", timeOptions);
+  return formatDateOnly(d, { 
+    day: "2-digit", 
+    month: "2-digit", 
+    year: "numeric"
+  }) + " " + formatTime(d);
 }
 

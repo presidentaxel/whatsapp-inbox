@@ -97,7 +97,11 @@ export default function MobileConversationsList({
 
   const formatTime = (timestamp) => {
     if (!timestamp) return "";
-    const date = new Date(timestamp);
+    // Interpréter comme UTC si pas de timezone explicite
+    const dateStr = typeof timestamp === 'string' && !timestamp.match(/[Z+-]\d{2}:\d{2}$/) 
+      ? timestamp + 'Z' 
+      : timestamp;
+    const date = new Date(dateStr);
     const now = currentTime; // Utiliser l'heure actuelle du hook
     
     // Calculer la différence en millisecondes

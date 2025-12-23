@@ -606,14 +606,21 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
                               <div className="mobile-chat__media-item-text">{msg.content_text}</div>
                             )}
                             <div className="mobile-chat__media-item-time">
-                              {new Date(msg.timestamp || msg.created_at).toLocaleString('fr-FR', {
-                                timeZone: 'Europe/Paris',
-                                year: 'numeric',
-                                month: '2-digit',
-                                day: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
+                              {(() => {
+                                const timestamp = msg.timestamp || msg.created_at;
+                                // Interpréter comme UTC si pas de timezone explicite
+                                const dateStr = typeof timestamp === 'string' && !timestamp.match(/[Z+-]\d{2}:\d{2}$/) 
+                                  ? timestamp + 'Z' 
+                                  : timestamp;
+                                return new Date(dateStr).toLocaleString('fr-FR', {
+                                  timeZone: 'Europe/Paris',
+                                  year: 'numeric',
+                                  month: '2-digit',
+                                  day: '2-digit',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                });
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -627,14 +634,21 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
                               {msg.content_text.match(/https?:\/\/[^\s]+/)?.[0]}
                             </div>
                             <div className="mobile-chat__media-item-time">
-                              {new Date(msg.timestamp || msg.created_at).toLocaleString('fr-FR', {
-                                timeZone: 'Europe/Paris',
-                                year: 'numeric',
-                                month: '2-digit',
-                                day: '2-digit',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              })}
+                              {(() => {
+                                const timestamp = msg.timestamp || msg.created_at;
+                                // Interpréter comme UTC si pas de timezone explicite
+                                const dateStr = typeof timestamp === 'string' && !timestamp.match(/[Z+-]\d{2}:\d{2}$/) 
+                                  ? timestamp + 'Z' 
+                                  : timestamp;
+                                return new Date(dateStr).toLocaleString('fr-FR', {
+                                  timeZone: 'Europe/Paris',
+                                  year: 'numeric',
+                                  month: '2-digit',
+                                  day: '2-digit',
+                                  hour: '2-digit',
+                                  minute: '2-digit'
+                                });
+                              })()}
                             </div>
                           </div>
                         </div>

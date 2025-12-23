@@ -151,7 +151,14 @@ export default function MobileInviteUser({ onBack }) {
                   <div className="mobile-invite-user__item-info">
                     <div className="mobile-invite-user__item-email">{invite.email}</div>
                     <div className="mobile-invite-user__item-date">
-                      Invité le {new Date(invite.invited_at).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' })}
+                      Invité le {(() => {
+                        const timestamp = invite.invited_at;
+                        // Interpréter comme UTC si pas de timezone explicite
+                        const dateStr = typeof timestamp === 'string' && !timestamp.match(/[Z+-]\d{2}:\d{2}$/) 
+                          ? timestamp + 'Z' 
+                          : timestamp;
+                        return new Date(dateStr).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' });
+                      })()}
                     </div>
                   </div>
                   <button
