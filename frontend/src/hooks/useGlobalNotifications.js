@@ -85,17 +85,34 @@ export function useGlobalNotifications(selectedConversationId = null) {
               return;
             }
 
-            // Vérification explicite : si l'utilisateur a access_level = 'aucun' pour ce compte,
-            // ne pas envoyer de notification (même si hasPermission pourrait le gérer)
-            const accountAccessLevels = profile?.permissions?.account_access_levels || {};
-            if (accountAccessLevels[accountId] === "aucun") {
+            // Vérification que les permissions sont complètement chargées
+            // Si account_access_levels n'existe pas, ne pas notifier (sécurité par défaut)
+            if (!profile.permissions || !profile.permissions.account_access_levels) {
+              return;
+            }
+
+            const accountAccessLevels = profile.permissions.account_access_levels;
+
+            // Vérification STRICTE : si l'utilisateur a access_level = 'aucun' pour ce compte,
+            // ne pas envoyer de notification
+            // On vérifie avec différentes variantes de la clé pour être sûr (format UUID peut varier)
+            const accountIdStr = String(accountId);
+            const accessLevel = accountAccessLevels[accountId] || 
+                               accountAccessLevels[accountIdStr] ||
+                               accountAccessLevels[accountIdStr.trim()];
+            
+            // Blocage explicite si access_level = 'aucun'
+            // Cette vérification est critique : elle doit bloquer TOUTES les notifications
+            // pour les utilisateurs avec access_level = 'aucun'
+            if (accessLevel === "aucun") {
               // L'utilisateur n'a aucun accès à ce compte, ne pas notifier
+              // Cette vérification passe avant hasPermission pour être absolument sûr
               return;
             }
 
             // Vérifier les permissions : l'utilisateur doit avoir conversations.view pour ce compte
             // Cela vérifie automatiquement si access_level = 'aucun' (via hasPermission)
-            // Mais on a déjà vérifié explicitement ci-dessus pour plus de sécurité
+            // Cette vérification est redondante mais ajoute une couche de sécurité supplémentaire
             if (!hasPermission || !hasPermission('conversations.view', accountId)) {
               return;
             }

@@ -409,6 +409,20 @@ export default function ChatWindow({
           const hasFocus = document.hasFocus?.() === true;
           const accountId = conversation?.account_id;
           if (!incoming.from_me && (!isWindowActive || !hasFocus)) {
+            // Vérifier que l'utilisateur a accès à ce compte avant d'envoyer une notification
+            if (accountId && profile?.permissions?.account_access_levels) {
+              const accountAccessLevels = profile.permissions.account_access_levels;
+              const accountIdStr = String(accountId);
+              const accessLevel = accountAccessLevels[accountId] || 
+                                 accountAccessLevels[accountIdStr] ||
+                                 accountAccessLevels[accountIdStr.trim()];
+              
+              // Bloquer explicitement si access_level = 'aucun'
+              if (accessLevel === "aucun") {
+                return; // Ne pas notifier si l'utilisateur n'a aucun accès
+              }
+            }
+            
             // Vérifier les préférences de notifications pour ce compte avant d'envoyer
             if (accountId && isNotificationEnabledForAccount(accountId, 'messages')) {
               notifyNewMessage(incoming, conversation);

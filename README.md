@@ -18,6 +18,7 @@ L'application implémente maintenant **toutes les fonctionnalités de l'API What
 📚 **Documentation complète :**
 - [Guide complet de l'API](./WHATSAPP_API_COMPLETE_GUIDE.md) - Documentation détaillée de tous les endpoints
 - [Démarrage rapide](./WHATSAPP_API_QUICK_START.md) - Configuration en 5 minutes
+- [Système de notifications](./NOTIFICATIONS.md) - Comment fonctionnent les notifications, qui reçoit quoi et selon quelles règles
 
 🚀 **Pour activer ces fonctionnalités :**
 1. Appliquez la migration SQL : `supabase/migrations/011_whatsapp_extended_fields.sql`

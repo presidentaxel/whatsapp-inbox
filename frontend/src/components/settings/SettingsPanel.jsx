@@ -56,6 +56,7 @@ export default function SettingsPanel({
   canViewPermissions,
   canManagePermissions,
   onAccountsRefresh,
+  refreshProfile,
 }) {
   const [accountForm, setAccountForm] = useState(INITIAL_ACCOUNT_FORM);
   const [roleForm, setRoleForm] = useState(INITIAL_ROLE_FORM);
@@ -529,6 +530,8 @@ export default function SettingsPanel({
                   : currentUser?.role_slug) || null
               }
               canManagePermissions={canManagePermissions}
+              currentUserId={currentUser?.id}
+              refreshProfile={refreshProfile}
             />
           </section>
         </div>

@@ -23,7 +23,7 @@ import { clearConversationNotification } from "../registerSW";
 
 
 export default function InboxPage() {
-  const { signOut, profile, hasPermission } = useAuth();
+  const { signOut, profile, hasPermission, refreshProfile } = useAuth();
   const [accounts, setAccounts] = useState([]);
   const [activeAccount, setActiveAccount] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -372,6 +372,7 @@ export default function InboxPage() {
               canViewPermissions={canViewPermissions}
               canManagePermissions={canManagePermissions}
               onAccountsRefresh={loadAccounts}
+              refreshProfile={refreshProfile}
             />
           </div>
         ) : navMode === "whatsapp" ? (

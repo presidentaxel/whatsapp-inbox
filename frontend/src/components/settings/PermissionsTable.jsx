@@ -13,7 +13,13 @@ const ACCESS_LEVELS = [
   { value: "aucun", label: "Aucun", description: "Ne sait même pas que le compte existe" },
 ];
 
-export default function PermissionsTable({ accounts: propsAccounts, currentUserRole, canManagePermissions }) {
+export default function PermissionsTable({ 
+  accounts: propsAccounts, 
+  currentUserRole, 
+  canManagePermissions,
+  currentUserId,
+  refreshProfile,
+}) {
   const [users, setUsers] = useState([]);
   const [roles, setRoles] = useState([]);
   const [accounts, setAccounts] = useState([]); // Comptes chargés pour la table des permissions (tous les comptes)
@@ -111,6 +117,11 @@ export default function PermissionsTable({ accounts: propsAccounts, currentUserR
     try {
       await updateUserAccountAccess(userId, accountId, newLevel);
       await loadUsers(); // Recharger seulement les utilisateurs (les comptes ne changent pas)
+      
+      // Si c'est l'utilisateur actuel, rafraîchir son profil pour mettre à jour les permissions immédiatement
+      if (currentUserId && userId === currentUserId && refreshProfile) {
+        await refreshProfile();
+      }
     } catch (error) {
       console.error("Erreur lors de la sauvegarde:", error);
       alert("Erreur lors de la sauvegarde de l'accès");
@@ -141,6 +152,11 @@ export default function PermissionsTable({ accounts: propsAccounts, currentUserR
       // Assigner le nouveau rôle (sans account_id pour qu'il soit global)
       await setUserRoles(userId, [{ role_id: newRole.id, account_id: null }]);
       await loadUsers(); // Recharger seulement les utilisateurs
+      
+      // Si c'est l'utilisateur actuel, rafraîchir son profil pour mettre à jour les permissions immédiatement
+      if (currentUserId && userId === currentUserId && refreshProfile) {
+        await refreshProfile();
+      }
     } catch (error) {
       console.error("Erreur lors de la sauvegarde du rôle:", error);
       alert("Erreur lors de la sauvegarde du rôle");

@@ -273,7 +273,8 @@ async def _invalidate_user_cache_async(user_id: str):
     try:
         # Invalider tous les caches auth (tous les utilisateurs)
         # C'est acceptable car le cache TTL est court (2 minutes)
-        await invalidate_cache_pattern("auth_user:")
+        # IMPORTANT: Le pattern doit se terminer par "*" pour fonctionner comme wildcard
+        await invalidate_cache_pattern("auth_user:*")
         logger.info(f"Cache invalidated for all users after permission change for user {user_id}")
     except Exception as e:
         logger.warning(f"Could not invalidate cache for user {user_id}: {e}")
