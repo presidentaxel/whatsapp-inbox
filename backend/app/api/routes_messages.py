@@ -1,3 +1,4 @@
+import json
 import logging
 import sys
 from datetime import datetime, timezone
@@ -674,19 +675,19 @@ async def send_template_message_api(
         template_header_image_url = None  # Pour sauvegarder l'URL de l'image du template
         
         # Si le template a un header avec un format (IMAGE, VIDEO, DOCUMENT, etc.), 
-        # il faut envoyer un composant HEADER même vide
+        # il faut envoyer un composant HEADER avec le média uploadé pour obtenir un media_id
         if template_details:
             template_components = template_details.get("components", [])
-            header_component = next(
+            header_component_template = next(
                 (c for c in template_components if c.get("type") == "HEADER"),
                 None
             )
             
-            if header_component:
-                header_format = header_component.get("format")
+            if header_component_template:
+                header_format = header_component_template.get("format")
                 if header_format in ["IMAGE", "VIDEO", "DOCUMENT"]:
                     # Pour les templates avec média dans le header, il faut uploader le média et obtenir un media_id
-                    example = header_component.get("example", {})
+                    example = header_component_template.get("example", {})
                     header_handle = example.get("header_handle", [])
                     example_url = header_handle[0] if isinstance(header_handle, list) and len(header_handle) > 0 else None
                     
@@ -698,8 +699,9 @@ async def send_template_message_api(
                             # Télécharger l'image depuis l'URL
                             import httpx
                             from app.core.http_client import get_http_client_for_media
+                            from app.services.whatsapp_api_service import upload_media_from_bytes
                             
-                            logger.info(f"  📥 Téléchargement de l'image pour le header: {example_url[:100]}...")
+                            logger.info(f"  📥 Téléchargement du média pour le header: {example_url[:100]}...")
                             client = await get_http_client_for_media()
                             media_response = await client.get(example_url)
                             media_response.raise_for_status()
@@ -721,8 +723,7 @@ async def send_template_message_api(
                             filename = f"template_{template_name}_{header_format.lower()}{extension}"
                             
                             # Upload vers WhatsApp pour obtenir un media_id
-                            from app.services.whatsapp_api_service import upload_media_from_bytes
-                            logger.info(f"  📤 Upload de l'image vers WhatsApp...")
+                            logger.info(f"  📤 Upload du média vers WhatsApp...")
                             upload_result = await upload_media_from_bytes(
                                 phone_number_id=phone_id,
                                 access_token=token,
@@ -733,7 +734,7 @@ async def send_template_message_api(
                             
                             media_id = upload_result.get("id")
                             if media_id:
-                                logger.info(f"  ✅ Media uploadé avec succès, media_id: {media_id}")
+                                logger.info(f"  ✅ Média uploadé avec succès, media_id: {media_id}")
                                 # Ajouter le composant HEADER avec le media_id
                                 final_components.append({
                                     "type": "HEADER",
@@ -766,15 +767,64 @@ async def send_template_message_api(
                             "parameters": []
                         })
         
-        # Ajouter les composants fournis par l'utilisateur s'ils sont valides
-        if components and len(components) > 0:
-            # Vérifier si les composants contiennent des paramètres valides
-            has_valid_parameters = any(
-                comp.get("parameters") and isinstance(comp.get("parameters"), list) and len(comp.get("parameters", [])) > 0
-                for comp in components
+        # IMPORTANT: Pour les templates avec variables nommées ({{sender_name}}, etc.),
+        # Meta attend que les paramètres utilisent le champ "parameter_name" au lieu de l'ordre séquentiel
+        # Vérifier si le template utilise des variables nommées
+        has_named_params = False
+        named_params_map = {}  # Map pour associer les paramètres aux noms de variables
+        
+        if template_details:
+            body_component = next(
+                (c for c in template_details.get("components", []) if c.get("type") == "BODY"),
+                None
             )
-            if has_valid_parameters:
-                final_components.extend(components)
+            if body_component:
+                example = body_component.get("example", {})
+                body_text_named_params = example.get("body_text_named_params", [])
+                if body_text_named_params and len(body_text_named_params) > 0:
+                    has_named_params = True
+                    # Créer un mapping entre l'ordre séquentiel et les noms de variables
+                    for idx, param_info in enumerate(body_text_named_params, start=1):
+                        param_name = param_info.get("param_name")
+                        if param_name:
+                            named_params_map[idx] = param_name
+                    logger.info(f"  ℹ️ Template utilise des variables nommées: {named_params_map}")
+        
+        # Ajouter les composants fournis par l'utilisateur (BODY généralement) dans l'ordre correct
+        # Meta attend que les components soient dans l'ordre : HEADER, BODY, FOOTER, BUTTONS
+        # Mais nous n'envoyons que ceux qui ont des paramètres
+        
+        if components and len(components) > 0:
+            # Organiser les components par type pour éviter les doublons
+            existing_types = {comp.get("type") for comp in final_components}
+            
+            for comp in components:
+                comp_type = comp.get("type", "").upper()
+                # Vérifier si ce type de component existe déjà dans final_components
+                if comp_type not in existing_types:
+                    if comp.get("parameters") and isinstance(comp.get("parameters"), list) and len(comp.get("parameters", [])) > 0:
+                        # Si le template utilise des variables nommées, ajouter parameter_name à chaque paramètre
+                        if has_named_params and comp_type == "BODY":
+                            modified_comp = comp.copy()
+                            modified_parameters = []
+                            for idx, param in enumerate(comp.get("parameters", []), start=1):
+                                param_name = named_params_map.get(idx)
+                                if param_name:
+                                    modified_param = param.copy()
+                                    modified_param["parameter_name"] = param_name
+                                    modified_parameters.append(modified_param)
+                                    logger.info(f"  📝 Paramètre {idx} mappé à variable nommée '{param_name}': {param.get('text', '')[:50]}")
+                                else:
+                                    modified_parameters.append(param)
+                            modified_comp["parameters"] = modified_parameters
+                            final_components.append(modified_comp)
+                            logger.info(f"  ✅ Component {comp_type} ajouté avec {len(modified_parameters)} paramètres (variables nommées)")
+                        else:
+                            final_components.append(comp)
+                            logger.info(f"  ✅ Component {comp_type} ajouté avec {len(comp.get('parameters', []))} paramètres (ordre séquentiel)")
+                        existing_types.add(comp_type)
+                else:
+                    logger.warning(f"  ⚠️ Component {comp_type} déjà présent dans final_components, ignoré pour éviter les doublons")
         
         # Si pas de composants nécessaires, envoyer None
         if len(final_components) == 0:
@@ -798,18 +848,24 @@ async def send_template_message_api(
         # Et extraire les boutons si présents
         template_text = ""
         template_buttons = []
-        template_variables_dict = {}
+        template_variables_dict = {}  # Pour les variables numériques {{1}}, {{2}}, etc.
+        template_named_variables_dict = {}  # Pour les variables nommées {{sender_name}}, etc.
         
-        # Extraire les variables depuis les components envoyés
-        if components:
-            import re
-            for comp in components:
+        # Extraire les variables depuis les final_components (qui contiennent parameter_name pour les variables nommées)
+        if final_components:
+            for comp in final_components:
                 if comp.get("type") in ["BODY", "HEADER", "FOOTER"] and comp.get("parameters"):
-                    # Les paramètres sont dans l'ordre des variables {{1}}, {{2}}, etc.
                     parameters = comp.get("parameters", [])
                     for idx, param in enumerate(parameters, start=1):
                         if param.get("type") == "text":
-                            template_variables_dict[str(idx)] = param.get("text", "")
+                            text_value = param.get("text", "")
+                            # Si le paramètre a un parameter_name, c'est une variable nommée
+                            param_name = param.get("parameter_name")
+                            if param_name:
+                                template_named_variables_dict[param_name] = text_value
+                            else:
+                                # Variable numérique
+                                template_variables_dict[str(idx)] = text_value
         
         if template_details:
             # Extraire le texte du BODY et du FOOTER du template
@@ -840,38 +896,47 @@ async def send_template_message_api(
             # Construire le texte avec les variables remplacées
             import re
             
-            def replace_variables(text, variables):
-                """Remplace les variables {{1}}, {{2}}, etc. par leurs valeurs"""
-                if not text or not variables:
+            def replace_variables(text, numeric_variables, named_variables):
+                """Remplace les variables {{1}}, {{2}}, etc. et {{sender_name}}, etc. par leurs valeurs"""
+                if not text:
                     return text
                 result = text
-                # Remplacer dans l'ordre décroissant pour éviter les conflits ({{10}} avant {{1}})
-                for var_num in sorted(variables.keys(), key=lambda x: int(x), reverse=True):
-                    var_value = variables[var_num]
-                    # Remplacer {{var_num}} par la valeur
-                    # Pattern: {{1}}, {{2}}, etc.
-                    pattern = r'\{\{' + str(var_num) + r'\}\}'
-                    result = re.sub(pattern, var_value, result)
+                
+                # D'abord remplacer les variables nommées ({{sender_name}}, etc.)
+                if named_variables:
+                    for var_name, var_value in named_variables.items():
+                        # Pattern: {{sender_name}}, {{variable_name}}, etc.
+                        pattern = r'\{\{' + re.escape(var_name) + r'\}\}'
+                        result = re.sub(pattern, var_value, result)
+                
+                # Ensuite remplacer les variables numériques ({{1}}, {{2}}, etc.)
+                if numeric_variables:
+                    # Remplacer dans l'ordre décroissant pour éviter les conflits ({{10}} avant {{1}})
+                    for var_num in sorted(numeric_variables.keys(), key=lambda x: int(x), reverse=True):
+                        var_value = numeric_variables[var_num]
+                        # Pattern: {{1}}, {{2}}, etc.
+                        pattern = r'\{\{' + str(var_num) + r'\}\}'
+                        result = re.sub(pattern, var_value, result)
                 return result
             
             # Header
             if header_component and header_component.get("text"):
                 header_text = header_component.get("text", "")
-                header_text = replace_variables(header_text, template_variables_dict)
+                header_text = replace_variables(header_text, template_variables_dict, template_named_variables_dict)
                 if header_text:
                     template_text = header_text + "\n\n"
             
             # Body
             if body_component:
                 body_text = body_component.get("text", "")
-                body_text = replace_variables(body_text, template_variables_dict)
+                body_text = replace_variables(body_text, template_variables_dict, template_named_variables_dict)
                 template_text += body_text
                 logger.info(f"  Template text from BODY (with variables): {body_text}")
             
             # Footer
             if footer_component:
                 footer_text = footer_component.get("text", "")
-                footer_text = replace_variables(footer_text, template_variables_dict)
+                footer_text = replace_variables(footer_text, template_variables_dict, template_named_variables_dict)
                 if footer_text:
                     if template_text:
                         template_text = f"{template_text}\n\n{footer_text}"
@@ -890,9 +955,11 @@ async def send_template_message_api(
             logger.info(f"  Using fallback template text: {template_text}")
         
         logger.info(f"  Final template text to save (with variables replaced): {template_text}")
-        logger.info(f"  Template variables: {template_variables_dict}")
+        logger.info(f"  Template variables (numeric): {template_variables_dict}")
+        logger.info(f"  Template variables (named): {template_named_variables_dict}")
         print(f"💾 [TEMPLATE SEND] Texte final à sauvegarder: {template_text}")
-        print(f"💾 [TEMPLATE SEND] Variables: {template_variables_dict}")
+        print(f"💾 [TEMPLATE SEND] Variables (numeric): {template_variables_dict}")
+        print(f"💾 [TEMPLATE SEND] Variables (named): {template_named_variables_dict}")
         
         # Sauvegarder le message de manière synchrone pour éviter qu'il soit écrasé par le webhook
         from app.core.db import supabase_execute, supabase

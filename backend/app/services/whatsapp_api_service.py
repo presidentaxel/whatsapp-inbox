@@ -2,6 +2,7 @@
 Service complet pour l'API WhatsApp Business Cloud API
 Implémente tous les endpoints de l'API Meta WhatsApp
 """
+import json
 import logging
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
@@ -122,7 +123,9 @@ async def send_template_message(
         "language": {"code": language_code}
     }
     
-    if components:
+    # Ne pas inclure "components" du tout si None ou vide, plutôt que d'envoyer null
+    # Cela peut faire la différence pour WhatsApp dans certains cas
+    if components is not None and len(components) > 0:
         template_payload["components"] = components
     
     payload = {
@@ -135,7 +138,17 @@ async def send_template_message(
     # Log pour déboguer
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"📤 WhatsApp API - Envoi template: {template_name}, to: {to}, payload: {payload}")
+    logger.info(f"📤 [WHATSAPP API] Envoi template:")
+    logger.info(f"  - template_name: {template_name}")
+    logger.info(f"  - to: {to}")
+    logger.info(f"  - language_code: {language_code}")
+    logger.info(f"  - components: {components}")
+    logger.info(f"  - components type: {type(components)}")
+    if components:
+        logger.info(f"  - components length: {len(components)}")
+        for idx, comp in enumerate(components):
+            logger.info(f"    Component {idx}: {json.dumps(comp, indent=2, ensure_ascii=False)}")
+    logger.info(f"📤 [WHATSAPP API] Payload complet: {json.dumps(payload, indent=2, ensure_ascii=False)}")
     
     response = await client.post(
         f"{GRAPH_API_BASE}/{phone_number_id}/messages",
@@ -146,7 +159,14 @@ async def send_template_message(
     # Log de la réponse en cas d'erreur
     if response.status_code != 200:
         error_detail = response.text
-        logger.error(f"❌ WhatsApp API Error {response.status_code}: {error_detail}")
+        logger.error(f"❌ [WHATSAPP API] Error {response.status_code}: {error_detail}")
+        try:
+            error_json = response.json()
+            logger.error(f"❌ [WHATSAPP API] Error JSON: {json.dumps(error_json, indent=2, ensure_ascii=False)}")
+        except:
+            pass
+    else:
+        logger.info(f"✅ [WHATSAPP API] Success: {response.text[:500]}")
     
     response.raise_for_status()
     return response.json()

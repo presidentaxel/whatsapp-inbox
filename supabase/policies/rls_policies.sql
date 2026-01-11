@@ -696,6 +696,269 @@ CREATE POLICY "bot_profiles_delete" ON bot_profiles
   );
 
 -- ============================================
+-- FONCTION HELPER: Vérifier si l'utilisateur a un accès valide à un compte
+-- (exclut les comptes avec access_level = 'aucun')
+-- ============================================
+CREATE OR REPLACE FUNCTION user_has_account_access(target_account_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+AS $$
+DECLARE
+  access_level_val text;
+BEGIN
+  -- Service role peut tout faire
+  IF auth.role() = 'service_role' THEN
+    RETURN true;
+  END IF;
+
+  -- Vérifier si l'utilisateur a un accès explicite au compte
+  SELECT uaa.access_level INTO access_level_val
+  FROM user_account_access uaa
+  WHERE uaa.user_id = auth.uid()
+    AND uaa.account_id = target_account_id
+  LIMIT 1;
+
+  -- Si access_level = 'aucun', pas d'accès (même avec permission globale)
+  IF access_level_val = 'aucun' THEN
+    RETURN false;
+  END IF;
+
+  -- Si pas d'enregistrement dans user_account_access, vérifier les permissions classiques
+  -- (permissions via rôles/overrides, y compris les permissions globales)
+  IF access_level_val IS NULL THEN
+    RETURN user_has_account_permission('accounts.view', target_account_id);
+  END IF;
+
+  -- Si access_level = 'full' ou 'lecture', l'utilisateur a accès
+  RETURN true;
+END;
+$$;
+
+-- ============================================
+-- ACTIVATION RLS SUR LES NOUVELLES TABLES
+-- ============================================
+
+ALTER TABLE user_account_access ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_chat_settings ENABLE ROW LEVEL SECURITY;
+
+-- ============================================
+-- POLITIQUES: USER_ACCOUNT_ACCESS
+-- ============================================
+
+-- SELECT: Voir ses propres accès ou si on a permissions.manage
+DROP POLICY IF EXISTS "user_account_access_select" ON user_account_access;
+CREATE POLICY "user_account_access_select" ON user_account_access
+  FOR SELECT
+  USING (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      (
+        user_id = auth.uid() OR
+        user_has_global_permission('permissions.manage')
+      )
+    )
+  );
+
+-- INSERT: Créer des accès si on a permissions.manage
+DROP POLICY IF EXISTS "user_account_access_insert" ON user_account_access;
+CREATE POLICY "user_account_access_insert" ON user_account_access
+  FOR INSERT
+  WITH CHECK (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      user_has_global_permission('permissions.manage')
+    )
+  );
+
+-- UPDATE: Modifier des accès si on a permissions.manage
+DROP POLICY IF EXISTS "user_account_access_update" ON user_account_access;
+CREATE POLICY "user_account_access_update" ON user_account_access
+  FOR UPDATE
+  USING (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      user_has_global_permission('permissions.manage')
+    )
+  );
+
+-- DELETE: Supprimer des accès si on a permissions.manage
+DROP POLICY IF EXISTS "user_account_access_delete" ON user_account_access;
+CREATE POLICY "user_account_access_delete" ON user_account_access
+  FOR DELETE
+  USING (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      user_has_global_permission('permissions.manage')
+    )
+  );
+
+-- ============================================
+-- POLITIQUES: USER_CHAT_SETTINGS
+-- ============================================
+
+-- SELECT: Voir uniquement ses propres paramètres
+DROP POLICY IF EXISTS "user_chat_settings_select" ON user_chat_settings;
+CREATE POLICY "user_chat_settings_select" ON user_chat_settings
+  FOR SELECT
+  USING (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      user_id = auth.uid()
+    )
+  );
+
+-- INSERT: Créer ses propres paramètres
+DROP POLICY IF EXISTS "user_chat_settings_insert" ON user_chat_settings;
+CREATE POLICY "user_chat_settings_insert" ON user_chat_settings
+  FOR INSERT
+  WITH CHECK (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      user_id = auth.uid()
+    )
+  );
+
+-- UPDATE: Modifier uniquement ses propres paramètres
+DROP POLICY IF EXISTS "user_chat_settings_update" ON user_chat_settings;
+CREATE POLICY "user_chat_settings_update" ON user_chat_settings
+  FOR UPDATE
+  USING (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      user_id = auth.uid()
+    )
+  );
+
+-- DELETE: Supprimer uniquement ses propres paramètres
+DROP POLICY IF EXISTS "user_chat_settings_delete" ON user_chat_settings;
+CREATE POLICY "user_chat_settings_delete" ON user_chat_settings
+  FOR DELETE
+  USING (
+    auth.role() = 'service_role' OR
+    (
+      is_user_active() AND
+      user_id = auth.uid()
+    )
+  );
+
+-- ============================================
+-- FONCTIONS SÉCURISÉES: VUES MESSAGE_COSTS_WEEKLY
+-- ============================================
+-- Note: Les vues ne peuvent pas avoir de politiques RLS directement dans Supabase
+-- (sauf si elles sont matérialisées). On crée donc des fonctions sécurisées
+-- pour accéder aux données des vues avec les bonnes permissions.
+--
+-- Utilisation:
+-- - Pour accéder aux coûts globaux: SELECT * FROM get_message_costs_weekly_secure();
+-- - Pour accéder aux coûts par compte: SELECT * FROM get_message_costs_weekly_by_account_secure();
+--
+-- Ces fonctions respectent les permissions et les niveaux d'accès (access_level)
+-- définis dans user_account_access.
+
+-- Fonction pour obtenir les coûts hebdomadaires globaux (tous comptes confondus)
+-- Retourne seulement les données pour les comptes auxquels l'utilisateur a accès
+CREATE OR REPLACE FUNCTION get_message_costs_weekly_secure()
+RETURNS TABLE (
+  week_start date,
+  year double precision,
+  week_number double precision,
+  total_messages_sent bigint,
+  paid_messages_count bigint,
+  total_cost numeric,
+  avg_cost_per_message numeric,
+  min_cost numeric,
+  max_cost numeric
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+AS $$
+BEGIN
+  -- Service role peut tout voir
+  IF auth.role() = 'service_role' THEN
+    RETURN QUERY
+    SELECT *
+    FROM message_costs_weekly;
+    RETURN;
+  END IF;
+
+  -- Pour les utilisateurs authentifiés, retourner les coûts agrégés
+  -- seulement pour les comptes auxquels ils ont accès
+  RETURN QUERY
+  WITH filtered_costs AS (
+    SELECT mcwa.*
+    FROM message_costs_weekly_by_account mcwa
+    WHERE is_user_active()
+      AND user_has_account_access(mcwa.account_id)
+  )
+  SELECT
+    fc.week_start,
+    fc.year,
+    fc.week_number,
+    SUM(fc.total_messages_sent)::bigint as total_messages_sent,
+    SUM(fc.paid_messages_count)::bigint as paid_messages_count,
+    SUM(fc.total_cost) as total_cost,
+    CASE 
+      WHEN SUM(fc.paid_messages_count) > 0 
+      THEN SUM(fc.total_cost) / SUM(fc.paid_messages_count)
+      ELSE 0::numeric
+    END as avg_cost_per_message,
+    MIN(fc.avg_cost_per_message) FILTER (WHERE fc.paid_messages_count > 0) as min_cost,
+    MAX(fc.avg_cost_per_message) FILTER (WHERE fc.paid_messages_count > 0) as max_cost
+  FROM filtered_costs fc
+  GROUP BY fc.week_start, fc.year, fc.week_number
+  ORDER BY fc.week_start DESC;
+END;
+$$;
+
+-- Fonction pour obtenir les coûts hebdomadaires par compte
+-- Retourne seulement les comptes auxquels l'utilisateur a accès
+CREATE OR REPLACE FUNCTION get_message_costs_weekly_by_account_secure()
+RETURNS TABLE (
+  account_id uuid,
+  account_name text,
+  week_start date,
+  year double precision,
+  week_number double precision,
+  total_messages_sent bigint,
+  paid_messages_count bigint,
+  total_cost numeric,
+  avg_cost_per_message numeric
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+AS $$
+BEGIN
+  -- Service role peut tout voir
+  IF auth.role() = 'service_role' THEN
+    RETURN QUERY
+    SELECT *
+    FROM message_costs_weekly_by_account;
+    RETURN;
+  END IF;
+
+  -- Pour les utilisateurs authentifiés, retourner seulement les comptes
+  -- auxquels ils ont accès (user_has_account_access gère déjà access_level = 'aucun')
+  RETURN QUERY
+  SELECT mcwa.*
+  FROM message_costs_weekly_by_account mcwa
+  WHERE is_user_active()
+    AND user_has_account_access(mcwa.account_id)
+  ORDER BY mcwa.week_start DESC, mcwa.account_name;
+END;
+$$;
+
+-- ============================================
 -- NOTES IMPORTANTES
 -- ============================================
 --

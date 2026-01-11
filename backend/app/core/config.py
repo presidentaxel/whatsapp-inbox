@@ -45,5 +45,13 @@ class Settings:
     PROMETHEUS_METRICS_PATH: str = os.getenv("PROMETHEUS_METRICS_PATH", "/metrics")
     PROMETHEUS_APP_LABEL: str = os.getenv("PROMETHEUS_APP_LABEL", "whatsapp_inbox_api")
     
+    # Template Header Strategy (pour les templates avec HEADER IMAGE)
+    # Valeurs possibles: "none", "empty_header", "omit_header"
+    # - "none": Envoyer components=None (ne fonctionne pas pour HEADER IMAGE avec exemple fixe)
+    # - "empty_header": Inclure un header avec l'URL de l'exemple fixe comme parameter (FONCTIONNE)
+    # - "omit_header": Omettre complètement le header (ne devrait pas fonctionner)
+    # NOTE: empty_header fonctionne mais les URLs WhatsApp peuvent expirer - pour une solution robuste,
+    # il faudrait uploader l'image via l'API et utiliser media_id
+    TEMPLATE_HEADER_STRATEGY: str = os.getenv("TEMPLATE_HEADER_STRATEGY", "empty_header")
 
 settings = Settings()

@@ -470,6 +470,7 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
             # Traduire les codes d'erreur courants en français
             error_translations = {
                 131026: "Message non livrable",
+                131042: "Problème d'éligibilité du compte (paiement/facturation)",
                 131047: "Message hors fenêtre gratuite (nécessite un template)",
                 131048: "Numéro de téléphone invalide",
                 131051: "Le destinataire n'a pas WhatsApp",
@@ -501,6 +502,8 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
                 error_message += " ⚠️ Ce numéro ne semble pas avoir de compte WhatsApp actif. Vérifiez que le destinataire a WhatsApp installé et que le numéro est correct."
             elif error_code == 131026:
                 error_message += " (Vérifiez que le numéro est valide et que le destinataire a WhatsApp installé)"
+            elif error_code == 131042:
+                error_message += " ⚠️ Votre compte WhatsApp Business n'est pas éligible pour envoyer des templates. Vérifiez: 1) La méthode de paiement dans Meta Business Suite, 2) Que le compte est vérifié (pas en mode test), 3) Les limites d'utilisation de votre compte."
             elif error_code == 131047:
                 error_message += " (Utilisez un template de message approuvé pour envoyer hors fenêtre gratuite)"
         elif status_payload.get("error"):

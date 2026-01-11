@@ -1,13 +1,13 @@
 // Service Worker pour PWA avec notifications en arrière-plan
 // IMPORTANT: Incrémenter cette version à chaque déploiement pour forcer la mise à jour
 // Cette version est aussi utilisée pour forcer la mise à jour des icônes PWA
-const SW_VERSION = 'v2.0.1';
+const SW_VERSION = 'v2.0.3';
 const CACHE_NAME = `lmdcvtc-whatsapp-${SW_VERSION}`;
 
-// URLs des icônes avec version pour forcer la mise à jour
-const ICON_192 = `/192x192.svg?v=${SW_VERSION}`;
-const ICON_512 = `/512x512.svg?v=${SW_VERSION}`;
-const MANIFEST = `/manifest.json?v=${SW_VERSION}`;
+// URLs des icônes (sans version pour compatibilité développement Vite)
+const ICON_192 = `/192x192.svg`;
+const ICON_512 = `/512x512.svg`;
+const MANIFEST = `/manifest.json`;
 
 const ASSETS_TO_CACHE = [
   '/',
@@ -91,6 +91,23 @@ self.addEventListener('fetch', (event) => {
   
   // Ignorer les requêtes vers d'autres domaines (API, etc.)
   if (!event.request.url.startsWith(self.location.origin)) return;
+
+  const url = new URL(event.request.url);
+  
+  // Ne PAS mettre en cache les fichiers statiques (SVG, manifest, etc.) en développement
+  // Pour forcer le rechargement des icônes et du manifest
+  const shouldSkipCache = 
+    url.pathname.endsWith('.svg') ||
+    url.pathname === '/manifest.json' ||
+    url.pathname.includes('/192x192') ||
+    url.pathname.includes('/512x512') ||
+    url.pathname.includes('/favicon');
+
+  if (shouldSkipCache) {
+    // Pour les fichiers statiques, toujours aller chercher sur le réseau sans cache
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   event.respondWith(
     fetch(event.request)

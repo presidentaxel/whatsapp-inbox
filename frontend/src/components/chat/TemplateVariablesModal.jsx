@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { FiX, FiSend } from "react-icons/fi";
-import { extractVariablesFromComponents, buildTemplateComponents } from "../../utils/templateVariables";
+import { extractVariablesFromComponents, buildTemplateComponents, extractTemplateVariables, extractTemplateVariablesWithMapping } from "../../utils/templateVariables";
 
 export default function TemplateVariablesModal({ 
   template, 
@@ -11,29 +11,205 @@ export default function TemplateVariablesModal({
   const [variableValues, setVariableValues] = useState({});
   const [errors, setErrors] = useState({});
   
-  // Extraire les variables du template
-  const variables = extractVariablesFromComponents(template?.components || []);
-  const allVariables = [
-    ...variables.header.map(v => ({ num: v, type: "header", label: `Variable ${v} (En-tête)` })),
-    ...variables.body.map(v => ({ num: v, type: "body", label: `Variable ${v} (Corps)` })),
-    ...variables.footer.map(v => ({ num: v, type: "footer", label: `Variable ${v} (Pied de page)` })),
-    ...variables.buttons.map(v => ({ num: v, type: "buttons", label: `Variable ${v} (Boutons)` }))
-  ].sort((a, b) => a.num - b.num);
+  // Calculer les variables avec useMemo pour éviter les recalculs inutiles
+  const allVariables = useMemo(() => {
+    if (!template || !template.components || !Array.isArray(template.components)) {
+      console.log("📝 TemplateVariablesModal: Pas de components dans le template");
+      return [];
+    }
+    
+    const variablesList = [];
+    const seenVariables = new Set();
+    
+    console.log("📝 TemplateVariablesModal: Analyse des components", {
+      templateName: template.name,
+      componentsCount: template.components.length,
+      components: template.components.map(c => ({ 
+        type: c.type, 
+        text: c.text?.substring(0, 100), // Limiter pour les logs
+        hasText: !!c.text 
+      }))
+    });
+    
+    template.components.forEach((component, index) => {
+      const type = (component.type || "").toUpperCase();
+      const text = component.text || "";
+      
+      console.log(`📝 Component ${index}:`, {
+        type,
+        textLength: text.length,
+        text: text.substring(0, 200),
+        hasText: !!text
+      });
+      
+      if (text) {
+        const foundVars = extractTemplateVariables(text);
+        console.log(`📝 Component ${index} (${type}): Variables trouvées:`, foundVars);
+        
+        // Utiliser extractTemplateVariablesWithMapping pour obtenir toutes les infos des variables
+        const variableMapping = extractTemplateVariablesWithMapping(text);
+        
+        foundVars.forEach(varId => {
+          // varId peut être un numéro ou un nom (string)
+          // Trouver la variable correspondante dans le mapping
+          const variableInfo = variableMapping.find(v => {
+            if (typeof varId === 'string') {
+              // Si varId est un string (nom), chercher par nom
+              return v.name === varId;
+            } else {
+              // Si varId est un numéro, chercher par numéro
+              return v.num === varId;
+            }
+          });
+          
+          if (!variableInfo) {
+            console.warn(`⚠️ TemplateVariablesModal: Variable ${varId} non trouvée dans le mapping`);
+            return;
+          }
+          
+          // Utiliser le numéro assigné pour l'ordre et le stockage (même pour les variables nommées)
+          const varNum = variableInfo.num;
+          const key = `${type}-${varNum}`;
+          
+          if (!seenVariables.has(key)) {
+            seenVariables.add(key);
+            
+            let label = variableInfo.isNamed && variableInfo.name 
+              ? variableInfo.name 
+              : `Variable ${varNum}`;
+            
+            if (type === "HEADER") label += " (En-tête)";
+            else if (type === "BODY") label += " (Corps)";
+            else if (type === "FOOTER") label += " (Pied de page)";
+            else if (type === "BUTTONS") label += " (Boutons)";
+            
+            variablesList.push({
+              num: varNum, // Toujours utiliser le numéro assigné pour le stockage dans variableValues
+              name: variableInfo.name || null, // Nom original si variable nommée
+              type: type.toLowerCase(),
+              label: label,
+              component: component,
+              originalText: text
+            });
+            
+            console.log(`📝 TemplateVariablesModal: Variable ajoutée - num: ${varNum}, name: ${variableInfo.name || 'null'}, isNamed: ${variableInfo.isNamed}, label: ${label}`);
+          }
+        });
+      }
+    });
+    
+    // Trier par numéro de variable
+    variablesList.sort((a, b) => a.num - b.num);
+    
+    console.log("📝 TemplateVariablesModal: Variables finales détectées", {
+      count: variablesList.length,
+      variables: variablesList.map(v => ({ num: v.num, label: v.label }))
+    });
+    
+    return variablesList;
+  }, [template?.name, template?.components ? JSON.stringify(template.components) : null]);
   
-  // Réinitialiser les valeurs quand le template change
+  // Réinitialiser les valeurs quand les variables changent
   useEffect(() => {
-    if (template) {
+    if (allVariables.length > 0) {
+      console.log("📝 TemplateVariablesModal: Initialisation des valeurs pour", allVariables.length, "variables");
       const initialValues = {};
       allVariables.forEach(v => {
         initialValues[v.num] = "";
       });
       setVariableValues(initialValues);
       setErrors({});
+    } else {
+      console.warn("⚠️ TemplateVariablesModal: Aucune variable détectée", {
+        templateName: template?.name,
+        hasTemplate: !!template,
+        hasComponents: !!template?.components,
+        componentsLength: template?.components?.length || 0
+      });
+      setVariableValues({});
+      setErrors({});
     }
-  }, [template?.name]);
+  }, [allVariables]);
   
-  if (!isOpen || !template) return null;
+  // Obtenir le texte du template pour l'aperçu - utiliser useMemo pour se mettre à jour quand variableValues change
+  // IMPORTANT: Ce hook doit être appelé AVANT le return conditionnel pour éviter l'erreur "Rendered more hooks"
+  const templatePreview = useMemo(() => {
+    if (!template || !template.components) return "";
+    
+    let previewParts = [];
+    const components = template.components || [];
+    
+    // Construire le texte de base component par component pour préserver l'ordre
+    components.forEach(component => {
+      if (component.type === "HEADER" && component.text && component.format !== "IMAGE" && component.format !== "VIDEO" && component.format !== "DOCUMENT") {
+        previewParts.push({
+          text: component.text,
+          type: "HEADER"
+        });
+        previewParts.push({ text: "\n\n", type: "SPACER" });
+      } else if (component.type === "BODY" && component.text) {
+        previewParts.push({
+          text: component.text,
+          type: "BODY"
+        });
+      } else if (component.type === "FOOTER" && component.text) {
+        previewParts.push({ text: "\n\n", type: "SPACER" });
+        previewParts.push({
+          text: component.text,
+          type: "FOOTER"
+        });
+      }
+    });
+    
+    console.log("🔍 templatePreview (useMemo): Preview parts", previewParts);
+    console.log("🔍 templatePreview (useMemo): Variables à remplacer", variableValues);
+    console.log("🔍 templatePreview (useMemo): allVariables", allVariables);
+    
+    // Pour chaque part de texte, remplacer les variables dans l'ordre d'apparition
+    const resultParts = previewParts.map(part => {
+      if (part.type === "SPACER") {
+        return part.text;
+      }
+      
+      let resultText = part.text;
+      
+      // Utiliser extractTemplateVariablesWithMapping pour obtenir les variables dans l'ordre d'apparition
+      const variableMapping = extractTemplateVariablesWithMapping(part.text);
+      
+      console.log(`🔍 templatePreview (useMemo): Component ${part.type} - Texte original:`, part.text);
+      console.log(`🔍 templatePreview (useMemo): Component ${part.type} - Variables trouvées:`, variableMapping);
+      console.log(`🔍 templatePreview (useMemo): Component ${part.type} - variableValues disponibles:`, variableValues);
+      
+      // Trier par position (ordre d'apparition) - dans l'ordre inverse pour éviter les problèmes d'index lors du remplacement
+      const sortedMapping = [...variableMapping].sort((a, b) => b.position - a.position);
+      
+      // Remplacer dans l'ordre inverse pour préserver les positions
+      sortedMapping.forEach(({ num, name, pattern, position, isNumbered, isNamed }) => {
+        // Pour les variables nommées, chercher par num (car elles sont stockées par num dans variableValues)
+        // Pour les variables numérotées ou vides, chercher aussi par num
+        const value = variableValues[num] || variableValues[String(num)] || "";
+        const varDisplay = isNamed && name ? `${name} (${num})` : num;
+        console.log(`🔍 templatePreview (useMemo): Variable ${varDisplay} (pattern: "${pattern}", position: ${position}, isNamed: ${isNamed}) -> valeur: "${value}"`);
+        if (value) {
+          const before = resultText.substring(0, position);
+          const after = resultText.substring(position + pattern.length);
+          resultText = before + value + after;
+          console.log(`✅ templatePreview (useMemo): Remplacement de "${pattern}" par "${value}" effectué`);
+        } else {
+          console.warn(`⚠️ templatePreview (useMemo): Aucune valeur trouvée pour la variable ${varDisplay} (pattern: "${pattern}")`);
+        }
+      });
+      
+      return resultText;
+    });
+    
+    const result = resultParts.join("");
+    console.log("🔍 templatePreview (useMemo): Texte final après remplacement", result);
+    
+    return result;
+  }, [template, variableValues, allVariables]);
   
+  // Fonctions de gestion (doivent être définies après les hooks mais avant le return)
   const handleChange = (varNum, value) => {
     setVariableValues(prev => ({
       ...prev,
@@ -73,29 +249,8 @@ export default function TemplateVariablesModal({
     onClose();
   };
   
-  // Obtenir le texte du template pour l'aperçu
-  const getTemplatePreview = () => {
-    let preview = "";
-    const components = template.components || [];
-    
-    components.forEach(component => {
-      if (component.type === "HEADER" && component.text) {
-        preview += component.text + "\n\n";
-      } else if (component.type === "BODY" && component.text) {
-        preview += component.text;
-      } else if (component.type === "FOOTER" && component.text) {
-        preview += "\n\n" + component.text;
-      }
-    });
-    
-    // Remplacer les variables par leurs valeurs pour l'aperçu
-    Object.keys(variableValues).forEach(varNum => {
-      const value = variableValues[varNum] || `{{${varNum}}}`;
-      preview = preview.replace(new RegExp(`\\{\\{${varNum}\\}\\}`, "g"), value);
-    });
-    
-    return preview;
-  };
+  // Retourner null APRÈS tous les hooks
+  if (!isOpen || !template) return null;
   
   return (
     <div className="template-variables-modal-overlay" onClick={onClose}>
@@ -123,7 +278,26 @@ export default function TemplateVariablesModal({
           
           {allVariables.length === 0 ? (
             <div className="template-variables-modal__no-vars">
-              Ce template n'a pas de variables à remplir.
+              <p>Ce template n'a pas de variables à remplir.</p>
+              {template?.components && template.components.length > 0 && (
+                <details style={{ marginTop: '12px', fontSize: '12px', color: 'rgba(255, 255, 255, 0.6)' }}>
+                  <summary style={{ cursor: 'pointer', marginBottom: '8px' }}>Détails du template (debug)</summary>
+                  <pre style={{ 
+                    background: 'rgba(0, 0, 0, 0.2)', 
+                    padding: '8px', 
+                    borderRadius: '4px',
+                    overflow: 'auto',
+                    fontSize: '11px',
+                    maxHeight: '200px'
+                  }}>
+                    {JSON.stringify(template.components.map(c => ({ 
+                      type: c.type, 
+                      text: c.text,
+                      format: c.format 
+                    })), null, 2)}
+                  </pre>
+                </details>
+              )}
             </div>
           ) : (
             <>
@@ -139,7 +313,7 @@ export default function TemplateVariablesModal({
                       className={`template-variables-modal__input ${errors[v.num] ? "template-variables-modal__input--error" : ""}`}
                       value={variableValues[v.num] || ""}
                       onChange={(e) => handleChange(v.num, e.target.value)}
-                      placeholder={`Valeur pour {{${v.num}}}`}
+                      placeholder={v.name ? `Valeur pour {{${v.name}}}` : `Valeur pour {{${v.num}}}`}
                       maxLength={32768} // Limite WhatsApp
                     />
                     {errors[v.num] && (
@@ -156,7 +330,7 @@ export default function TemplateVariablesModal({
                   Aperçu du message
                 </div>
                 <div className="template-variables-modal__preview-content">
-                  {getTemplatePreview() || "Aperçu non disponible"}
+                  {templatePreview || "Aperçu non disponible"}
                 </div>
               </div>
             </>

@@ -26,6 +26,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [selectedTemplate, setSelectedTemplate] = useState(null); // Template sélectionné pour remplir les variables
   const [showTemplateModal, setShowTemplateModal] = useState(false); // Afficher la modale de variables
   const [forceTemplateMode, setForceTemplateMode] = useState(false); // État pour forcer l'affichage des templates
+  const [previewTemplate, setPreviewTemplate] = useState(null); // Template sélectionné pour l'aperçu dans le menu latéral
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -234,6 +235,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       setTemplateSent(false);
       setLastInboundMessageId(null);
       setForceTemplateMode(false);
+      setPreviewTemplate(null);
       lastCheckedOutboundMessageIdRef.current = null;
       previousIsOutsideFreeWindowRef.current = false;
       return;
@@ -242,6 +244,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     // Réinitialiser lastInboundMessageId et les refs quand on change de conversation
     setLastInboundMessageId(null);
     setForceTemplateMode(false);
+    setPreviewTemplate(null);
     lastCheckedOutboundMessageIdRef.current = null;
     previousIsOutsideFreeWindowRef.current = false;
   }, [conversation?.id]);
@@ -272,10 +275,19 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           setLoadingTemplates(true);
           try {
             const templatesResponse = await getAvailableTemplates(conversation.id);
-            setTemplates(templatesResponse.data?.templates || []);
+            const newTemplates = templatesResponse.data?.templates || [];
+            setTemplates(newTemplates);
+            // Réinitialiser le preview si le template sélectionné n'est plus dans la liste
+            // Sinon, sélectionner automatiquement le premier template si aucun n'est sélectionné
+            if (previewTemplate && !newTemplates.find(t => t.name === previewTemplate.name)) {
+              setPreviewTemplate(newTemplates.length > 0 ? newTemplates[0] : null);
+            } else if (!previewTemplate && newTemplates.length > 0) {
+              setPreviewTemplate(newTemplates[0]);
+            }
           } catch (error) {
             console.error("Error loading templates:", error);
             setTemplates([]);
+            setPreviewTemplate(null);
           } finally {
             setLoadingTemplates(false);
           }
@@ -357,7 +369,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       disabled, 
       conversationId: conversation?.id, 
       template: template.name,
-      hasComponents: !!components
+      hasComponents: !!components,
+      templateComponents: template.components
     });
     
     if (disabled || !conversation?.id) {
@@ -365,8 +378,18 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       return;
     }
     
+    // Vérifier si le template a des variables
+    const hasVariables = hasTemplateVariables(template);
+    console.log("🔍 [FRONTEND] Vérification variables:", { 
+      templateName: template.name, 
+      hasVariables, 
+      components: template.components,
+      hasComponentsParam: !!components
+    });
+    
     // Si le template a des variables et qu'on n'a pas encore de components, ouvrir la modale
-    if (hasTemplateVariables(template) && !components) {
+    if (hasVariables && !components) {
+      console.log("📝 [FRONTEND] Template avec variables détecté, ouverture de la modale");
       setSelectedTemplate(template);
       setShowTemplateModal(true);
       return;
@@ -491,16 +514,40 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         payload.components = components;
       }
       
-      console.log("📤 [FRONTEND] Envoi du template:", {
+      console.log("📤 [FRONTEND] ========== ENVOI TEMPLATE ==========");
+      console.log("📤 [FRONTEND] Template info:", {
         conversationId: conversation.id,
-        payload
+        templateName: template.name,
+        languageCode: template.language || "fr",
+        componentsCount: components?.length || 0,
+        hasHeaderImage: template.header_media_url ? true : false,
+        headerMediaType: template.header_media_type || null,
+        headerMediaUrl: template.header_media_url || null
       });
+      console.log("📤 [FRONTEND] Payload complet:", JSON.stringify(payload, null, 2));
+      console.log("📤 [FRONTEND] Components détaillés:", components?.map((c, idx) => ({
+        index: idx,
+        type: c.type,
+        format: c.format || null,
+        parametersCount: c.parameters?.length || 0,
+        parameters: c.parameters?.map((p, pIdx) => ({
+          index: pIdx,
+          type: p.type,
+          text: p.text?.substring(0, 100) + (p.text?.length > 100 ? '...' : ''),
+          textLength: p.text?.length || 0,
+          image: p.image || null,
+          video: p.video || null,
+          document: p.document || null
+        }))
+      })));
+      console.log("📤 [FRONTEND] ====================================");
       
       const response = await sendTemplateMessage(conversation.id, payload);
       console.log("✅ [FRONTEND] Template envoyé avec succès:", response);
       
-      // Réinitialiser forceTemplateMode car un nouveau template a été envoyé
+      // Réinitialiser forceTemplateMode et previewTemplate car un nouveau template a été envoyé
       setForceTemplateMode(false);
+      setPreviewTemplate(null);
       
       // Attendre un peu pour que le message soit sauvegardé dans la base
       // Puis rafraîchir plusieurs fois pour s'assurer que le message est bien chargé
@@ -1128,13 +1175,6 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
             ) : (
               // Affichage normal des templates (hors fenêtre gratuite et pas de template récent)
               <>
-                <div className="templates-selector__header">
-                  <span className="templates-selector__title">
-                    <FiClock style={{ marginRight: '6px', verticalAlign: 'middle' }} />
-                    Plus de 24h depuis la dernière interaction client
-                  </span>
-                  <span className="templates-selector__subtitle">Sélectionnez un template pour envoyer un message</span>
-                </div>
                 {loadingTemplates ? (
                   <div className="templates-selector__loading">Chargement des templates...</div>
                 ) : templates.length === 0 ? (
@@ -1142,75 +1182,217 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                     Aucun template UTILITY, MARKETING ou AUTHENTICATION disponible. Créez-en un dans Meta Business Manager.
                   </div>
                 ) : (
-                  <div className="templates-selector__list">
-                    {templates.map((template, index) => {
-                      const bodyComponent = template.components?.find(c => c.type === "BODY");
-                      const headerComponent = template.components?.find(c => c.type === "HEADER");
-                      const footerComponent = template.components?.find(c => c.type === "FOOTER");
-                      const buttonsComponent = template.components?.find(c => c.type === "BUTTONS");
-                      const templateText = bodyComponent?.text || template.name;
-                      const headerImageUrl = template.header_media_url || 
-                        (headerComponent?.example?.header_handle?.[0]) ||
-                        (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
-                      const hasVariables = hasTemplateVariables(template);
-                      const buttons = buttonsComponent?.buttons || [];
-                      return (
-                        <div
-                          key={index}
-                          className="templates-selector__bubble-wrapper"
-                          onClick={() => !disabled && !uploading && handleSendTemplate(template)}
-                        >
-                          <div className="bubble me templates-selector__bubble">
-                            {headerImageUrl && (
-                              <div className="templates-selector__bubble-image">
-                                <img 
-                                  src={headerImageUrl} 
-                                  alt={headerComponent?.text || template.name}
-                                />
-                              </div>
-                            )}
-                            {headerComponent && headerComponent.text && !headerImageUrl && (
-                              <div className="templates-selector__bubble-header">
-                                {headerComponent.text}
-                              </div>
-                            )}
-                            <span className="bubble__text">{templateText}</span>
-                            {footerComponent && (
-                              <div className="templates-selector__bubble-footer">
-                                {footerComponent.text}
-                              </div>
-                            )}
-                            {buttons.length > 0 && (
-                              <div className="templates-selector__bubble-buttons">
-                                {buttons.map((button, btnIndex) => (
-                                  <div key={btnIndex} className="templates-selector__bubble-button">
-                                    {button.type === "URL" && <FiLink style={{ marginRight: "6px", verticalAlign: "middle" }} />}
-                                    {button.type === "QUICK_REPLY" && <FiSend style={{ marginRight: "6px", verticalAlign: "middle" }} />}
-                                    {button.type === "PHONE_NUMBER" && <FiPhone style={{ marginRight: "6px", verticalAlign: "middle" }} />}
-                                    {button.text || button.url || button.phone_number}
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            <div className="bubble__footer">
-                              <div className="bubble__footer-left">
-                                <small className="bubble__timestamp">Maintenant</small>
+                  <div className="templates-selector__container">
+                    {/* Colonne de gauche : header et sidebar */}
+                    <div className="templates-selector__left-column">
+                      <div className="templates-selector__header">
+                        <span className="templates-selector__title">
+                          <FiClock style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+                          Plus de 24h depuis la dernière interaction client
+                        </span>
+                        <span className="templates-selector__subtitle">Sélectionnez un template pour envoyer un message</span>
+                      </div>
+                      {/* Menu latéral avec la liste des templates */}
+                      <div className="templates-selector__sidebar">
+                      <div className="templates-selector__sidebar-list">
+                        {templates.map((template, index) => {
+                          const bodyComponent = template.components?.find(c => c.type === "BODY");
+                          const templateText = bodyComponent?.text || template.name;
+                          const hasVariables = hasTemplateVariables(template);
+                          const isSelected = previewTemplate?.name === template.name;
+                          
+                          return (
+                            <div
+                              key={index}
+                              className={`templates-selector__sidebar-item ${isSelected ? 'templates-selector__sidebar-item--selected' : ''}`}
+                              onClick={() => !disabled && !uploading && setPreviewTemplate(template)}
+                            >
+                              <div className="templates-selector__sidebar-item-header">
+                                <div className="templates-selector__sidebar-item-name">
+                                  {template.name}
+                                </div>
                                 {hasVariables && (
-                                  <small className="templates-selector__has-variables" title="Ce template contient des variables à remplir">
-                                    <FiEdit style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                  <div className="templates-selector__sidebar-item-badge">
+                                    <FiEdit style={{ fontSize: '10px' }} />
                                     Variables
-                                  </small>
+                                  </div>
                                 )}
                               </div>
-                              <div className="templates-selector__price">
-                                <FiDollarSign style={{ marginRight: '4px', verticalAlign: 'middle' }} />
-                                {parseFloat(template.price_eur || template.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {template.price_eur ? 'EUR' : 'USD'}
+                              <div className="templates-selector__sidebar-item-preview" title={templateText}>
+                                {templateText}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      </div>
+                    </div>
+
+                    {/* Zone d'aperçu */}
+                    <div className="templates-selector__preview">
+                      {previewTemplate ? (
+                        <>
+                          <div className="templates-selector__preview-content">
+                            <div className="templates-selector__preview-bubble-wrapper">
+                              <div className="bubble me templates-selector__preview-bubble">
+                                {(() => {
+                                  const headerComponent = previewTemplate.components?.find(c => c.type === "HEADER");
+                                  const headerImageUrl = previewTemplate.header_media_url || 
+                                    (headerComponent?.example?.header_handle?.[0]) ||
+                                    (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
+                                  
+                                  return headerImageUrl ? (
+                                    <div className="templates-selector__preview-content-wrapper">
+                                      <div className="templates-selector__preview-image-side">
+                                        <img 
+                                          src={headerImageUrl} 
+                                          alt={headerComponent?.text || previewTemplate.name}
+                                        />
+                                      </div>
+                                      <div className="templates-selector__preview-text-side">
+                                        {headerComponent && headerComponent.text && (
+                                          <div className="templates-selector__bubble-header">
+                                            {headerComponent.text}
+                                          </div>
+                                        )}
+                                        {(() => {
+                                          const bodyComponent = previewTemplate.components?.find(c => c.type === "BODY");
+                                          const templateText = bodyComponent?.text || previewTemplate.name;
+                                          // Log pour debug
+                                          console.log("🔍 Preview template text:", {
+                                            templateName: previewTemplate.name,
+                                            bodyText: bodyComponent?.text,
+                                            templateText,
+                                            hasVariables: hasTemplateVariables(previewTemplate)
+                                          });
+                                          return <span className="bubble__text">{templateText}</span>;
+                                        })()}
+                                        {(() => {
+                                          const footerComponent = previewTemplate.components?.find(c => c.type === "FOOTER");
+                                          return footerComponent && (
+                                            <div className="templates-selector__bubble-footer">
+                                              {footerComponent.text}
+                                            </div>
+                                          );
+                                        })()}
+                                        {(() => {
+                                          const buttonsComponent = previewTemplate.components?.find(c => c.type === "BUTTONS");
+                                          const buttons = buttonsComponent?.buttons || [];
+                                          return buttons.length > 0 && (
+                                            <div className="templates-selector__bubble-buttons">
+                                              {buttons.map((button, btnIndex) => (
+                                                <div key={btnIndex} className="templates-selector__bubble-button">
+                                                  {button.type === "URL" && <FiLink style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                  {button.type === "QUICK_REPLY" && <FiSend style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                  {button.type === "PHONE_NUMBER" && <FiPhone style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                  {button.text || button.url || button.phone_number}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          );
+                                        })()}
+                                        <div className="bubble__footer">
+                                          <div className="bubble__footer-left">
+                                            <small className="bubble__timestamp">Maintenant</small>
+                                            {hasTemplateVariables(previewTemplate) && (
+                                              <small className="templates-selector__has-variables" title="Ce template contient des variables à remplir">
+                                                <FiEdit style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                                Variables
+                                              </small>
+                                            )}
+                                          </div>
+                                          <div className="templates-selector__price">
+                                            <FiDollarSign style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                            {parseFloat(previewTemplate.price_eur || previewTemplate.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {previewTemplate.price_eur ? 'EUR' : 'USD'}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      {headerComponent && headerComponent.text && (
+                                        <div className="templates-selector__bubble-header">
+                                          {headerComponent.text}
+                                        </div>
+                                      )}
+                                      {(() => {
+                                        const bodyComponent = previewTemplate.components?.find(c => c.type === "BODY");
+                                        const templateText = bodyComponent?.text || previewTemplate.name;
+                                        return <span className="bubble__text">{templateText}</span>;
+                                      })()}
+                                      {(() => {
+                                        const footerComponent = previewTemplate.components?.find(c => c.type === "FOOTER");
+                                        return footerComponent && (
+                                          <div className="templates-selector__bubble-footer">
+                                            {footerComponent.text}
+                                          </div>
+                                        );
+                                      })()}
+                                      {(() => {
+                                        const buttonsComponent = previewTemplate.components?.find(c => c.type === "BUTTONS");
+                                        const buttons = buttonsComponent?.buttons || [];
+                                        return buttons.length > 0 && (
+                                          <div className="templates-selector__bubble-buttons">
+                                            {buttons.map((button, btnIndex) => (
+                                              <div key={btnIndex} className="templates-selector__bubble-button">
+                                                {button.type === "URL" && <FiLink style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                {button.type === "QUICK_REPLY" && <FiSend style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                {button.type === "PHONE_NUMBER" && <FiPhone style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                {button.text || button.url || button.phone_number}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        );
+                                      })()}
+                                      <div className="bubble__footer">
+                                        <div className="bubble__footer-left">
+                                          <small className="bubble__timestamp">Maintenant</small>
+                                          {hasTemplateVariables(previewTemplate) && (
+                                            <small className="templates-selector__has-variables" title="Ce template contient des variables à remplir">
+                                              <FiEdit style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                              Variables
+                                            </small>
+                                          )}
+                                        </div>
+                                        <div className="templates-selector__price">
+                                          <FiDollarSign style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                          {parseFloat(previewTemplate.price_eur || previewTemplate.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {previewTemplate.price_eur ? 'EUR' : 'USD'}
+                                        </div>
+                                      </div>
+                                    </>
+                                  );
+                                })()}
                               </div>
                             </div>
                           </div>
+                          
+                          {/* Bouton Envoyer en bas */}
+                          <div className="templates-selector__preview-actions">
+                            <button
+                              className="templates-selector__send-btn"
+                              onClick={() => {
+                                if (disabled || uploading || !previewTemplate) return;
+                                // handleSendTemplate vérifie déjà les variables et ouvre la modale si nécessaire
+                                handleSendTemplate(previewTemplate);
+                              }}
+                              disabled={disabled || uploading}
+                            >
+                              <FiSend style={{ marginRight: '8px' }} />
+                              Envoyer
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="templates-selector__preview-empty">
+                          <div className="templates-selector__preview-empty-icon">
+                            <FiGrid />
+                          </div>
+                          <div className="templates-selector__preview-empty-text">
+                            Sélectionnez un template dans le menu pour voir l'aperçu
+                          </div>
                         </div>
-                      );
-                    })}
+                      )}
+                    </div>
                   </div>
                 )}
               </>
