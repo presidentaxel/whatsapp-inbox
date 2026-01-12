@@ -674,11 +674,26 @@ async def create_message_template(
         "components": components
     }
     
+    logger.info(f"📤 [WHATSAPP API] Création template: name={name}, category={category}, language={language}")
+    logger.debug(f"📤 [WHATSAPP API] Payload complet: {payload}")
+    
     response = await client.post(
         f"{GRAPH_API_BASE}/{waba_id}/message_templates",
         headers={"Authorization": f"Bearer {access_token}"},
         json=payload
     )
+    
+    # Capturer les détails de l'erreur avant de lever l'exception
+    if response.status_code != 200:
+        error_detail = response.text
+        try:
+            error_json = response.json()
+            error_detail = error_json
+        except:
+            pass
+        logger.error(f"❌ [WHATSAPP API] Erreur Meta: status={response.status_code}, detail={error_detail}")
+        logger.error(f"   Payload envoyé: {payload}")
+    
     response.raise_for_status()
     return response.json()
 

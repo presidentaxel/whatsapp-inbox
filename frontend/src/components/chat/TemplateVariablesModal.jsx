@@ -14,7 +14,6 @@ export default function TemplateVariablesModal({
   // Calculer les variables avec useMemo pour éviter les recalculs inutiles
   const allVariables = useMemo(() => {
     if (!template || !template.components || !Array.isArray(template.components)) {
-      console.log("📝 TemplateVariablesModal: Pas de components dans le template");
       return [];
     }
     
@@ -120,12 +119,6 @@ export default function TemplateVariablesModal({
       setVariableValues(initialValues);
       setErrors({});
     } else {
-      console.warn("⚠️ TemplateVariablesModal: Aucune variable détectée", {
-        templateName: template?.name,
-        hasTemplate: !!template,
-        hasComponents: !!template?.components,
-        componentsLength: template?.components?.length || 0
-      });
       setVariableValues({});
       setErrors({});
     }

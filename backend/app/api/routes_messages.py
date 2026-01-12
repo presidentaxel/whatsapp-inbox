@@ -41,6 +41,7 @@ from app.services.message_service import (
 )
 from app.services import whatsapp_api_service
 from app.services.whatsapp_api_service import check_phone_number_has_whatsapp
+from app.services.pending_template_service import create_and_queue_template
 
 router = APIRouter()
 
@@ -137,6 +138,139 @@ async def send_api_message(payload: dict, current_user: CurrentUser = Depends(ge
         raise HTTPException(status_code=400, detail=result.get("message", result.get("error")))
     
     return result
+
+
+@router.post("/send-with-auto-template")
+async def send_with_auto_template(
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Envoie un message. Si hors fenêtre gratuite, crée automatiquement un template.
+    L'utilisateur ne voit pas la différence - le message s'affiche comme envoyé.
+    Le template sera validé par Meta en arrière-plan et envoyé automatiquement une fois approuvé.
+    """
+    conversation_id = payload.get("conversation_id")
+    content = payload.get("content", "").strip()
+    
+    logger.info("=" * 80)
+    logger.info(f"🚀 [SEND-AUTO-TEMPLATE] Début - conversation_id={conversation_id}, content_length={len(content)}")
+    logger.info(f"🚀 [SEND-AUTO-TEMPLATE] Payload: {payload}")
+    
+    if not conversation_id:
+        logger.error("❌ [SEND-AUTO-TEMPLATE] conversation_id manquant")
+        raise HTTPException(status_code=400, detail="conversation_id_required")
+    
+    if not content:
+        logger.error("❌ [SEND-AUTO-TEMPLATE] content manquant")
+        raise HTTPException(status_code=400, detail="content_required")
+    
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        logger.error(f"❌ [SEND-AUTO-TEMPLATE] Conversation {conversation_id} non trouvée")
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    logger.info(f"✅ [SEND-AUTO-TEMPLATE] Conversation trouvée: account_id={conversation.get('account_id')}")
+    
+    # Vérifier les permissions
+    access_level = current_user.permissions.account_access_levels.get(conversation["account_id"])
+    if access_level == "aucun":
+        logger.error(f"❌ [SEND-AUTO-TEMPLATE] Accès refusé (aucun)")
+        raise HTTPException(status_code=403, detail="account_access_denied")
+    if access_level == "lecture":
+        logger.error(f"❌ [SEND-AUTO-TEMPLATE] Accès refusé (lecture seule)")
+        raise HTTPException(status_code=403, detail="write_access_denied")
+    
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+    
+    # Vérifier si on est dans la fenêtre gratuite
+    logger.info(f"🔍 [SEND-AUTO-TEMPLATE] Vérification de la fenêtre gratuite...")
+    is_free, last_interaction_time = await is_within_free_window(conversation_id)
+    logger.info(f"📊 [SEND-AUTO-TEMPLATE] Fenêtre gratuite: is_free={is_free}, last_interaction={last_interaction_time}")
+    
+    if is_free:
+        # Envoi normal - utiliser l'endpoint existant
+        logger.info("✅ [SEND-AUTO-TEMPLATE] Dans la fenêtre gratuite - envoi normal")
+        result = await send_message(payload, force_send=True)
+        if result.get("error"):
+            logger.error(f"❌ [SEND-AUTO-TEMPLATE] Erreur lors de l'envoi: {result.get('error')}")
+            raise HTTPException(status_code=400, detail=result.get("message", result.get("error")))
+        # Retourner un format cohérent avec le cas hors fenêtre
+        logger.info(f"✅ [SEND-AUTO-TEMPLATE] Message envoyé avec succès: message_id={result.get('message_id')}")
+        return {
+            "success": True,
+            "message_id": result.get("message_id"),
+            "status": "sent",
+            "message": "Message envoyé avec succès"
+        }
+    
+    # Hors fenêtre gratuite : créer un template automatiquement
+    logger.info("⏳ [SEND-AUTO-TEMPLATE] Hors fenêtre gratuite - création d'un template automatique")
+    
+    # 1. Créer le message en base avec status "pending"
+    from app.core.db import supabase, supabase_execute
+    from datetime import datetime, timezone
+    logger.info("📝 [SEND-AUTO-TEMPLATE] Création du message en base...")
+    
+    message_payload = {
+        "conversation_id": conversation_id,
+        "direction": "outbound",
+        "content_text": content,
+        "status": "pending",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message_type": "text"
+    }
+    
+    # Insérer le message et récupérer l'ID
+    message_result = await supabase_execute(
+        supabase.table("messages").insert(message_payload)
+    )
+    
+    if not message_result.data or len(message_result.data) == 0:
+        logger.error("❌ [SEND-AUTO-TEMPLATE] Échec de la création du message en base")
+        logger.error(f"   Résultat: {message_result}")
+        raise HTTPException(status_code=500, detail="failed_to_create_message")
+    
+    message_id = message_result.data[0]["id"]
+    logger.info(f"✅ [SEND-AUTO-TEMPLATE] Message créé en base: message_id={message_id}")
+    
+    # 2. Valider et créer le template
+    logger.info(f"🔧 [SEND-AUTO-TEMPLATE] Création du template pour account_id={conversation['account_id']}")
+    template_result = await create_and_queue_template(
+        conversation_id=conversation_id,
+        account_id=conversation["account_id"],
+        message_id=message_id,
+        text_content=content
+    )
+    
+    logger.info(f"📋 [SEND-AUTO-TEMPLATE] Résultat de la création du template: success={template_result.get('success')}")
+    
+    if not template_result.get("success"):
+        # Erreur de validation - mettre à jour le message
+        error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
+        logger.error(f"❌ [SEND-AUTO-TEMPLATE] Erreur de validation: {error_message}")
+        await supabase_execute(
+            supabase.table("messages")
+            .update({"status": "failed", "error_message": error_message})
+            .eq("id", message_id)
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Erreur de validation du message",
+                "errors": template_result.get("errors", [])
+            }
+        )
+    
+    # 3. Retourner le message comme s'il était envoyé (optimiste)
+    logger.info(f"✅ [SEND-AUTO-TEMPLATE] Template créé avec succès, retour du message optimiste")
+    logger.info("=" * 80)
+    return {
+        "success": True,
+        "message_id": message_id,
+        "status": "pending",  # En attente de validation Meta
+        "message": "Message en cours de validation par Meta. Il sera envoyé automatiquement une fois approuvé."
+    }
 
 
 @router.post("/send-free")
@@ -371,6 +505,11 @@ async def get_available_templates(
             
             # Exclure le template hello_world / hello-world
             if template_name in ["hello_world", "hello-world"]:
+                continue
+            
+            # Exclure les templates auto-créés (qui commencent par "auto_")
+            # Ces templates sont temporaires et ne doivent pas apparaître dans la liste
+            if template_name.startswith("auto_"):
                 continue
             
             # Filtrer les templates approuvés en catégorie UTILITY, MARKETING ou AUTHENTICATION
@@ -1058,7 +1197,6 @@ async def send_template_message_api(
             if existing.data:
                 # Le message existe déjà, mettre à jour seulement si content_text est vide
                 existing_record = existing.data[0]
-                print(f"📝 [TEMPLATE SEND] Message existe déjà - ID: {existing_record.get('id')}, content_text actuel: '{existing_record.get('content_text')}'")
                 update_data = {
                     "status": "sent",
                     "timestamp": timestamp_iso,
@@ -1067,7 +1205,6 @@ async def send_template_message_api(
                 if not existing_record.get("content_text"):
                     update_data["content_text"] = template_text
                     logger.info(f"  📝 Mise à jour du content_text vide avec: {template_text[:50]}...")
-                    print(f"📝 [TEMPLATE SEND] Mise à jour du content_text vide avec: {template_text[:50]}...")
                 else:
                     logger.info(f"  ℹ️  Le message a déjà un content_text, on ne l'écrase pas")
                     print(f"ℹ️  [TEMPLATE SEND] Le message a déjà un content_text: '{existing_record.get('content_text')}', on ne l'écrase pas")
@@ -1371,6 +1508,73 @@ async def permanently_delete_message(
     )
     
     return {"status": "deleted", "message_id": message_id}
+
+
+@router.post("/check-template-status/{message_id}")
+async def check_template_status_endpoint(
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Force la vérification du statut d'un template et l'envoie si approuvé.
+    Utile pour forcer l'envoi d'un template déjà approuvé.
+    """
+    from app.services.pending_template_service import check_and_update_template_status, send_pending_template, mark_message_as_failed
+    from app.core.db import supabase, supabase_execute
+    
+    # Vérifier que le message existe et que l'utilisateur y a accès
+    message_result = await supabase_execute(
+        supabase.table("messages")
+        .select("conversation_id, conversations!inner(account_id)")
+        .eq("id", message_id)
+        .limit(1)
+    )
+    
+    if not message_result.data or len(message_result.data) == 0:
+        raise HTTPException(status_code=404, detail="message_not_found")
+    
+    conversation = message_result.data[0].get("conversations", {})
+    if isinstance(conversation, list) and len(conversation) > 0:
+        conversation = conversation[0]
+    
+    account_id = conversation.get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    # Vérifier les permissions
+    current_user.require(PermissionCodes.MESSAGES_SEND, account_id)
+    
+    # Vérifier le statut du template
+    result = await check_and_update_template_status(message_id)
+    
+    if result["status"] == "APPROVED":
+        logger.info(f"✅ [MANUAL-CHECK] Template approuvé pour le message {message_id}, envoi en cours...")
+        await send_pending_template(message_id)
+        return {
+            "success": True,
+            "status": "approved",
+            "message": "Template approuvé et message envoyé"
+        }
+    elif result["status"] == "REJECTED":
+        logger.warning(f"❌ [MANUAL-CHECK] Template rejeté pour le message {message_id}")
+        await mark_message_as_failed(message_id, result.get("rejection_reason", "Template rejeté par Meta"))
+        return {
+            "success": False,
+            "status": "rejected",
+            "message": f"Template rejeté: {result.get('rejection_reason', 'Raison inconnue')}"
+        }
+    elif result["status"] == "PENDING":
+        return {
+            "success": True,
+            "status": "pending",
+            "message": "Template encore en attente d'approbation"
+        }
+    else:
+        return {
+            "success": False,
+            "status": result.get("status", "unknown"),
+            "message": "Statut inconnu ou template non trouvé"
+        }
 
 
 @router.post("/reactions/add")

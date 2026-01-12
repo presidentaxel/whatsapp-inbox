@@ -139,7 +139,6 @@ self.addEventListener('sync', (event) => {
         try {
           // Cette fonction sera appelée périodiquement même quand l'app est fermée
           // Vous pouvez faire un fetch vers votre API pour vérifier les nouveaux messages
-          console.log('🔄 Background sync: vérification des nouveaux messages');
           
           // Optionnel : envoyer un message à toutes les fenêtres ouvertes
           const clients = await self.clients.matchAll();

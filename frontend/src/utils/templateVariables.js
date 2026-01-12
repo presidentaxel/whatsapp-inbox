@@ -16,16 +16,8 @@
  */
 export function extractTemplateVariables(text) {
   if (!text || typeof text !== 'string') {
-    console.log("🔍 extractTemplateVariables: texte vide ou non-string", { text, type: typeof text });
     return [];
   }
-  
-  console.log("🔍 extractTemplateVariables: Analyse du texte", {
-    textLength: text.length,
-    textPreview: text.substring(0, 500),
-    containsDoubleBraces: text.includes('{{'),
-    fullText: text
-  });
   
   // Utiliser extractTemplateVariablesWithMapping pour obtenir toutes les variables avec leurs détails
   const allMatches = extractTemplateVariablesWithMapping(text);
@@ -42,15 +34,6 @@ export function extractTemplateVariables(text) {
       seenIds.add(id);
       uniqueIds.push(id);
     }
-  });
-  
-  console.log("🔍 extractTemplateVariables: Résultat final", {
-    variablesCount: uniqueIds.length,
-    variables: uniqueIds,
-    totalMatches: allMatches.length,
-    hasEmptyVars: allMatches.some(m => m.pattern === '{{}}'),
-    hasNamedVars: allMatches.some(m => m.isNamed),
-    allMatches: allMatches.map(m => ({ id: m.name || m.num, num: m.num, name: m.name, pattern: m.pattern, pos: m.position }))
   });
   
   // Retourner les IDs pour compatibilité (mélange de numéros et noms)
@@ -302,14 +285,7 @@ export function extractTemplateVariablesWithMapping(text) {
   
   // Trier par position (ordre d'apparition dans le texte)
   allMatches.sort((a, b) => a.position - b.position);
-  
-  console.log("🔍 extractTemplateVariablesWithMapping: Résultat", {
-    totalMatches: allMatches.length,
-    hasNamedVars: allMatches.some(m => m.isNamed),
-    hasEmptyVars: allMatches.some(m => m.pattern === '{{}}'),
-    matches: allMatches.map(m => ({ num: m.num, name: m.name, pattern: m.pattern, pos: m.position }))
-  });
-  
+
   return allMatches;
 }
 

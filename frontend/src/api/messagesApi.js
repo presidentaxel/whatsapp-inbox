@@ -19,3 +19,4 @@ export const getMessagePrice = (conversationId) => api.get(`/messages/price/${co
 export const checkFreeWindow = (conversationId) => api.get(`/messages/free-window/${conversationId}`);
 export const getAvailableTemplates = (conversationId) => api.get(`/messages/templates/${conversationId}`);
 export const sendTemplateMessage = (conversationId, data) => api.post(`/messages/send-template/${conversationId}`, data);
+export const sendMessageWithAutoTemplate = (data) => api.post("/messages/send-with-auto-template", data);

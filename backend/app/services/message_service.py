@@ -522,6 +522,8 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
 
     if existing.data:
         record = existing.data[0]
+        message_db_id = record["id"]
+        
         # Ne mettre à jour que le statut et le timestamp, ne pas toucher au content_text
         update_data = {"status": status_value, "timestamp": timestamp_iso}
         if error_message:
@@ -529,9 +531,19 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
         await supabase_execute(
             supabase.table("messages")
             .update(update_data)
-            .eq("id", record["id"])
+            .eq("id", message_db_id)
         )
         await _update_conversation_timestamp(record["conversation_id"], timestamp_iso)
+        
+        # Si le message est lu (status = "read") et qu'il a un template auto-créé, le supprimer
+        if status_value == "read":
+            try:
+                from app.services.pending_template_service import delete_auto_template_for_message
+                # Lancer la suppression en arrière-plan (non bloquant)
+                asyncio.create_task(delete_auto_template_for_message(message_db_id))
+            except Exception as e:
+                logger.warning(f"⚠️ Erreur lors de la tentative de suppression du template auto-créé: {e}")
+        
         return
 
     if not recipient_id or not account:

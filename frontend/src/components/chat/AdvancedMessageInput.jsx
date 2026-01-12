@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock, FiLink, FiPhone, FiEdit, FiDollarSign, FiFile } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
-import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage } from "../../api/messagesApi";
+import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage, sendMessageWithAutoTemplate } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 import { useTheme } from "../../hooks/useTheme";
 import TemplateVariablesModal from "./TemplateVariablesModal";
@@ -30,6 +30,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [menuTemplates, setMenuTemplates] = useState([]); // Templates pour le menu (différents des templates hors fenêtre)
   const [loadingMenuTemplates, setLoadingMenuTemplates] = useState(false); // Chargement des templates du menu
   const [menuPreviewTemplate, setMenuPreviewTemplate] = useState(null); // Template sélectionné dans le menu
+  const [useAutoTemplate, setUseAutoTemplate] = useState(true); // Utiliser le système auto-template (true) ou sélection manuelle (false)
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -241,6 +242,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       setPreviewTemplate(null);
       setMenuTemplates([]);
       setMenuPreviewTemplate(null);
+      setUseAutoTemplate(true); // Réinitialiser à true par défaut
       lastCheckedOutboundMessageIdRef.current = null;
       previousIsOutsideFreeWindowRef.current = false;
       return;
@@ -252,6 +254,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setPreviewTemplate(null);
     setMenuTemplates([]);
     setMenuPreviewTemplate(null);
+    // Ne pas réinitialiser useAutoTemplate - garder le choix de l'utilisateur
     lastCheckedOutboundMessageIdRef.current = null;
     previousIsOutsideFreeWindowRef.current = false;
   }, [conversation?.id]);
@@ -350,24 +353,104 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   }, [text, conversation?.id, mode, isOutsideFreeWindow]);
 
   const handleSend = async () => {
-    if (disabled || !text.trim()) return;
+    if (disabled || !text.trim() || !conversation?.id) return;
     
     const messageText = text;
+    console.log("🚀 [FRONTEND] handleSend appelé", {
+      conversationId: conversation.id,
+      messageLength: messageText.length,
+      isOutsideFreeWindow,
+      useAutoTemplate,
+      textPreview: messageText.substring(0, 50)
+    });
+    
     setText("");
     setShowAdvanced(false);
     setMode("text");
     
     try {
-      // Envoyer le message
-      await onSend(messageText);
+      // TOUJOURS utiliser le nouvel endpoint qui gère automatiquement la fenêtre gratuite
+      // Il détecte si on est hors fenêtre et crée automatiquement un template si nécessaire
+      console.log("📤 [FRONTEND] Appel à sendMessageWithAutoTemplate...");
+      const response = await sendMessageWithAutoTemplate({
+        conversation_id: conversation.id,
+        content: messageText
+      });
+      
+      console.log("✅ [FRONTEND] Réponse de sendMessageWithAutoTemplate:", response.data);
+      
+      // Le backend retourne toujours un message_id maintenant
+      // Si status est "pending", c'est qu'on est hors fenêtre et le template est en attente
+      // Si status est "sent", c'est qu'on est dans la fenêtre gratuite et le message est envoyé
+      const messageStatus = response.data?.status || "pending";
+      const messageId = response.data?.message_id || `temp-${Date.now()}`;
+      
+      console.log("📝 [FRONTEND] Création du message optimiste", {
+        messageId,
+        messageStatus,
+        isPending: messageStatus === "pending"
+      });
+      
+      // Créer un message optimiste
+      const optimisticMessage = {
+        id: messageId,
+        conversation_id: conversation.id,
+        direction: "outbound",
+        content_text: messageText,
+        status: messageStatus, // "pending" si hors fenêtre, "sent" si dans fenêtre
+        timestamp: new Date().toISOString(),
+        message_type: "text"
+      };
+      
+      // Ajouter le message optimiste
+      if (onSend) {
+        console.log("📨 [FRONTEND] Ajout du message optimiste via onSend");
+        onSend(messageText, false, optimisticMessage);
+      }
+      
+      // Si le message est déjà envoyé (dans fenêtre gratuite), rafraîchir pour récupérer le vrai message
+      if (messageStatus === "sent") {
+        console.log("🔄 [FRONTEND] Message envoyé, rafraîchissement dans 1s...");
+        setTimeout(() => {
+          if (onSend) {
+            onSend("", true); // Force refresh
+          }
+        }, 1000);
+      } else {
+        console.log("⏳ [FRONTEND] Message en attente (template en validation)");
+      }
       
       // Ne pas réinitialiser templateSent ici
       // templateSent sera calculé dynamiquement à partir des messages
       // Il sera réinitialisé uniquement si un nouveau message client arrive
     } catch (error) {
+      console.error("❌ [FRONTEND] Erreur lors de l'envoi:", error);
+      console.error("❌ [FRONTEND] Détails de l'erreur:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url
+      });
+      
       // En cas d'erreur d'envoi, remettre le texte pour que l'utilisateur puisse réessayer
       setText(messageText);
-      console.error("Error sending message:", error);
+      
+      // Afficher les erreurs de validation si disponibles
+      const errorData = error.response?.data;
+      if (errorData?.detail?.errors) {
+        console.error("❌ [FRONTEND] Erreurs de validation:", errorData.detail.errors);
+        alert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
+      } else if (errorData?.detail?.message) {
+        console.error("❌ [FRONTEND] Message d'erreur:", errorData.detail.message);
+        alert(`Erreur: ${errorData.detail.message}`);
+      } else if (errorData?.detail) {
+        // Si detail est une string directement
+        console.error("❌ [FRONTEND] Erreur (string):", errorData.detail);
+        alert(`Erreur: ${errorData.detail}`);
+      } else {
+        console.error("❌ [FRONTEND] Erreur inconnue:", error);
+        alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
+      }
     }
   };
 
@@ -1317,9 +1400,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
         />
 
-        {/* Boutons à gauche - cachés si hors fenêtre gratuite */}
-        {!isOutsideFreeWindow && (
-          <div className="left-buttons">
+        {/* Boutons à gauche - toujours affichés maintenant */}
+        <div className="left-buttons">
             {/* Bouton emoji */}
             <div className="emoji-container" ref={emojiRef}>
               <button
@@ -1399,10 +1481,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
               )}
             </div>
           </div>
-        )}
 
-        {/* Affichage des templates si hors fenêtre gratuite */}
-        {isOutsideFreeWindow && (
+        {/* Affichage des templates si hors fenêtre gratuite ET mode manuel activé */}
+        {isOutsideFreeWindow && !useAutoTemplate && (
           <div className="templates-selector">
             {hasRecentTemplate && !forceTemplateMode ? (
               // État "En attente d'une réponse client" après l'envoi d'un template
@@ -1441,6 +1522,23 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                           Plus de 24h depuis la dernière interaction client
                         </span>
                         <span className="templates-selector__subtitle">Sélectionnez un template pour envoyer un message</span>
+                        <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                          <button
+                            onClick={() => setUseAutoTemplate(true)}
+                            style={{
+                              background: 'transparent',
+                              border: '1px solid var(--border-light)',
+                              color: 'var(--text-primary)',
+                              padding: '4px 8px',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              fontSize: '11px'
+                            }}
+                            title="Activer l'envoi automatique via template (recommandé)"
+                          >
+                            Activer l'auto-template
+                          </button>
+                        </div>
                       </div>
                       {/* Menu latéral avec la liste des templates */}
                       <div className="templates-selector__sidebar">
@@ -1650,63 +1748,163 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           </div>
         )}
 
-        {/* Champ de saisie - caché si hors fenêtre gratuite ou si template envoyé récemment */}
-        {!isOutsideFreeWindow && !hasRecentTemplate && (
-          <>
-            <div className="input-wrapper input-wrapper--flat">
-              <textarea
-                ref={textAreaRef}
-                rows={1}
-                value={text}
-                spellCheck={discussionPrefs?.spellCheck ?? true}
-                lang="fr"
-                onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
-                placeholder={
-                  discussionPrefs?.enterToSend
-                    ? "Écrire un message..."
-                    : "Écrire un message... (Ctrl+Entrée pour envoyer)"
-                }
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    if (discussionPrefs?.enterToSend) {
-                      if (!e.shiftKey) {
-                        e.preventDefault();
-                        handleSend();
-                      }
-                    } else if (e.metaKey || e.ctrlKey) {
-                      e.preventDefault();
-                      handleSend();
+        {/* Champ de saisie - logique d'affichage améliorée */}
+        {(() => {
+          // Si on est dans la fenêtre gratuite : toujours afficher l'input
+          if (!isOutsideFreeWindow) {
+            return (
+              <>
+                <div className="input-wrapper input-wrapper--flat">
+                  <textarea
+                    ref={textAreaRef}
+                    rows={1}
+                    value={text}
+                    spellCheck={discussionPrefs?.spellCheck ?? true}
+                    lang="fr"
+                    onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
+                    placeholder={
+                      discussionPrefs?.enterToSend
+                        ? "Écrire un message..."
+                        : "Écrire un message... (Ctrl+Entrée pour envoyer)"
                     }
-                  }
-                }}
-                disabled={disabled}
-              />
-            </div>
-            
-            {/* Affichage du prix - seulement si le message n'est pas gratuit */}
-            {priceInfo && mode === "text" && text.trim() && !priceInfo.is_free && (
-              <div className="message-price-indicator">
-                <span className="price-paid">
-                  💰 {parseFloat(priceInfo.price_eur || priceInfo.price_usd || 0).toFixed(2).replace(/\.0+$/, '')} {priceInfo.currency === "USD" ? "USD" : "EUR"}
-                </span>
-              </div>
-            )}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        if (discussionPrefs?.enterToSend) {
+                          if (!e.shiftKey) {
+                            e.preventDefault();
+                            handleSend();
+                          }
+                        } else if (e.metaKey || e.ctrlKey) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }
+                    }}
+                    disabled={disabled}
+                  />
+                </div>
+                
+                {/* Affichage du prix - seulement si le message n'est pas gratuit */}
+                {priceInfo && mode === "text" && text.trim() && !priceInfo.is_free && (
+                  <div className="message-price-indicator">
+                    <span className="price-paid">
+                      💰 {parseFloat(priceInfo.price_eur || priceInfo.price_usd || 0).toFixed(2).replace(/\.0+$/, '')} {priceInfo.currency === "USD" ? "USD" : "EUR"}
+                    </span>
+                  </div>
+                )}
 
-            {/* Bouton d'envoi */}
-            <button
-              className="btn-send-whatsapp btn-send-flat"
-              onClick={() => {
-                if (mode === "buttons") handleButtonsSend();
-                else if (mode === "list") handleListSend();
-                else handleSend();
-              }}
-              disabled={disabled || !text.trim() || uploading || loadingPrice}
-              aria-label={editingMessage ? "Modifier" : "Envoyer"}
-            >
-              <FiSend />
-            </button>
-          </>
-        )}
+                {/* Bouton d'envoi */}
+                <button
+                  className="btn-send-whatsapp btn-send-flat"
+                  onClick={() => {
+                    if (mode === "buttons") handleButtonsSend();
+                    else if (mode === "list") handleListSend();
+                    else handleSend();
+                  }}
+                  disabled={disabled || !text.trim() || uploading || loadingPrice}
+                  aria-label={editingMessage ? "Modifier" : "Envoyer"}
+                >
+                  <FiSend />
+                </button>
+              </>
+            );
+          }
+          
+          // Si on est hors fenêtre gratuite ET mode auto-template : afficher l'input
+          if (isOutsideFreeWindow && useAutoTemplate) {
+            return (
+              <>
+                <div className="input-wrapper input-wrapper--flat">
+                  <textarea
+                    ref={textAreaRef}
+                    rows={1}
+                    value={text}
+                    spellCheck={discussionPrefs?.spellCheck ?? true}
+                    lang="fr"
+                    onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
+                    placeholder="Écrire un message... (sera envoyé via template une fois validé par Meta)"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        if (discussionPrefs?.enterToSend) {
+                          if (!e.shiftKey) {
+                            e.preventDefault();
+                            handleSend();
+                          }
+                        } else if (e.metaKey || e.ctrlKey) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }
+                    }}
+                    disabled={disabled}
+                  />
+                </div>
+                
+                {/* Indicateur pour l'auto-template */}
+                {text.trim() && (
+                  <div className="message-price-indicator" style={{ background: 'rgba(37, 211, 102, 0.1)', color: '#25d366' }}>
+                  </div>
+                )}
+
+                {/* Bouton d'envoi */}
+                <button
+                  className="btn-send-whatsapp btn-send-flat"
+                  onClick={handleSend}
+                  disabled={disabled || !text.trim() || uploading}
+                  aria-label="Envoyer"
+                >
+                  <FiSend />
+                </button>
+              </>
+            );
+          }
+          
+          // Si on est hors fenêtre gratuite ET mode manuel ET pas de template récent : afficher l'input (fallback)
+          if (isOutsideFreeWindow && !useAutoTemplate && !hasRecentTemplate) {
+            return (
+              <>
+                <div className="input-wrapper input-wrapper--flat">
+                  <textarea
+                    ref={textAreaRef}
+                    rows={1}
+                    value={text}
+                    spellCheck={discussionPrefs?.spellCheck ?? true}
+                    lang="fr"
+                    onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
+                    placeholder="Écrire un message..."
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        if (discussionPrefs?.enterToSend) {
+                          if (!e.shiftKey) {
+                            e.preventDefault();
+                            handleSend();
+                          }
+                        } else if (e.metaKey || e.ctrlKey) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }
+                    }}
+                    disabled={disabled}
+                  />
+                </div>
+
+                {/* Bouton d'envoi */}
+                <button
+                  className="btn-send-whatsapp btn-send-flat"
+                  onClick={handleSend}
+                  disabled={disabled || !text.trim() || uploading}
+                  aria-label="Envoyer"
+                >
+                  <FiSend />
+                </button>
+              </>
+            );
+          }
+          
+          // Sinon (hors fenêtre + mode manuel + template récent) : ne rien afficher (le sélecteur de templates est affiché)
+          return null;
+        })()}
       </div>
 
       {editingMessage && (
