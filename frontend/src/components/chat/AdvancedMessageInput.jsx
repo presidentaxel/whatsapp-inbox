@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock, FiLink, FiPhone, FiEdit, FiDollarSign } from "react-icons/fi";
+import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock, FiLink, FiPhone, FiEdit, FiDollarSign, FiFile } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
 import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
@@ -12,7 +12,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [mode, setMode] = useState("text"); // text, media, buttons, list
+  const [mode, setMode] = useState("text"); // text, media, buttons, list, template
   const [uploading, setUploading] = useState(false);
   const [priceInfo, setPriceInfo] = useState(null);
   const [loadingPrice, setLoadingPrice] = useState(false);
@@ -27,6 +27,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [showTemplateModal, setShowTemplateModal] = useState(false); // Afficher la modale de variables
   const [forceTemplateMode, setForceTemplateMode] = useState(false); // État pour forcer l'affichage des templates
   const [previewTemplate, setPreviewTemplate] = useState(null); // Template sélectionné pour l'aperçu dans le menu latéral
+  const [menuTemplates, setMenuTemplates] = useState([]); // Templates pour le menu (différents des templates hors fenêtre)
+  const [loadingMenuTemplates, setLoadingMenuTemplates] = useState(false); // Chargement des templates du menu
+  const [menuPreviewTemplate, setMenuPreviewTemplate] = useState(null); // Template sélectionné dans le menu
   const discussionPrefs = useTheme();
   
   const menuRef = useRef(null);
@@ -236,6 +239,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       setLastInboundMessageId(null);
       setForceTemplateMode(false);
       setPreviewTemplate(null);
+      setMenuTemplates([]);
+      setMenuPreviewTemplate(null);
       lastCheckedOutboundMessageIdRef.current = null;
       previousIsOutsideFreeWindowRef.current = false;
       return;
@@ -245,6 +250,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setLastInboundMessageId(null);
     setForceTemplateMode(false);
     setPreviewTemplate(null);
+    setMenuTemplates([]);
+    setMenuPreviewTemplate(null);
     lastCheckedOutboundMessageIdRef.current = null;
     previousIsOutsideFreeWindowRef.current = false;
   }, [conversation?.id]);
@@ -694,10 +701,29 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     }
   };
 
-  const openMode = (newMode) => {
+  const openMode = async (newMode) => {
     setMode(newMode);
     setShowMenu(false);
     setShowAdvanced(true);
+    
+    // Si on ouvre le mode template, charger les templates
+    if (newMode === "template" && conversation?.id) {
+      setLoadingMenuTemplates(true);
+      try {
+        const templatesResponse = await getAvailableTemplates(conversation.id);
+        const newTemplates = templatesResponse.data?.templates || [];
+        setMenuTemplates(newTemplates);
+        // Sélectionner automatiquement le premier template si disponible
+        if (newTemplates.length > 0 && !menuPreviewTemplate) {
+          setMenuPreviewTemplate(newTemplates[0]);
+        }
+      } catch (error) {
+        console.error("Error loading templates for menu:", error);
+        setMenuTemplates([]);
+      } finally {
+        setLoadingMenuTemplates(false);
+      }
+    }
   };
 
   const handleButtonsSend = async () => {
@@ -869,11 +895,18 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         <div className="advanced-options">
           <div className="advanced-header">
             <h3 className="advanced-title">
-              {mode === "buttons" ? "Message avec boutons" : mode === "list" ? "Message avec liste" : "Options"}
+              {mode === "buttons" ? "Message avec boutons" : mode === "list" ? "Message avec liste" : mode === "template" ? "Envoyer un template" : "Options"}
             </h3>
             <button 
               className="advanced-close"
-              onClick={() => setShowAdvanced(false)}
+              onClick={() => {
+                setShowAdvanced(false);
+                // Réinitialiser les états du template menu si on était en mode template
+                if (mode === "template") {
+                  setMenuPreviewTemplate(null);
+                  setMenuTemplates([]);
+                }
+              }}
               title="Fermer"
             >
               <FiX />
@@ -1049,6 +1082,217 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                 <ListPreview />
               </div>
             )}
+
+            {mode === "template" && (
+              <div className="template-selector-menu">
+                {loadingMenuTemplates ? (
+                  <div className="template-selector-menu__loading">Chargement des templates...</div>
+                ) : menuTemplates.length === 0 ? (
+                  <div className="template-selector-menu__empty">
+                    Aucun template UTILITY, MARKETING ou AUTHENTICATION disponible. Créez-en un dans Meta Business Manager.
+                  </div>
+                ) : (
+                  <div className="template-selector-menu__container">
+                    {/* Liste des templates */}
+                    <div className="template-selector-menu__sidebar">
+                      <div className="template-selector-menu__sidebar-list">
+                        {menuTemplates.map((template, index) => {
+                          const bodyComponent = template.components?.find(c => c.type === "BODY");
+                          const templateText = bodyComponent?.text || template.name;
+                          const hasVariables = hasTemplateVariables(template);
+                          const isSelected = menuPreviewTemplate?.name === template.name;
+                          
+                          return (
+                            <div
+                              key={index}
+                              className={`template-selector-menu__sidebar-item ${isSelected ? 'template-selector-menu__sidebar-item--selected' : ''}`}
+                              onClick={() => !disabled && !uploading && setMenuPreviewTemplate(template)}
+                            >
+                              <div className="template-selector-menu__sidebar-item-header">
+                                <div className="template-selector-menu__sidebar-item-name">
+                                  {template.name}
+                                </div>
+                                {hasVariables && (
+                                  <div className="template-selector-menu__sidebar-item-badge">
+                                    <FiEdit style={{ fontSize: '10px' }} />
+                                    Variables
+                                  </div>
+                                )}
+                              </div>
+                              <div className="template-selector-menu__sidebar-item-preview" title={templateText}>
+                                {templateText}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Aperçu du template */}
+                    <div className="template-selector-menu__preview">
+                      {menuPreviewTemplate ? (
+                        <>
+                          <div className="template-selector-menu__preview-content">
+                            <div className="template-selector-menu__preview-bubble-wrapper">
+                              <div className="bubble me template-selector-menu__preview-bubble">
+                                {(() => {
+                                  const headerComponent = menuPreviewTemplate.components?.find(c => c.type === "HEADER");
+                                  const headerImageUrl = menuPreviewTemplate.header_media_url || 
+                                    (headerComponent?.example?.header_handle?.[0]) ||
+                                    (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
+                                  
+                                  return headerImageUrl ? (
+                                    <div className="template-selector-menu__preview-content-wrapper">
+                                      <div className="template-selector-menu__preview-image-side">
+                                        <img 
+                                          src={headerImageUrl} 
+                                          alt={headerComponent?.text || menuPreviewTemplate.name}
+                                        />
+                                      </div>
+                                      <div className="template-selector-menu__preview-text-side">
+                                        {headerComponent && headerComponent.text && (
+                                          <div className="template-selector-menu__bubble-header">
+                                            {headerComponent.text}
+                                          </div>
+                                        )}
+                                        {(() => {
+                                          const bodyComponent = menuPreviewTemplate.components?.find(c => c.type === "BODY");
+                                          const templateText = bodyComponent?.text || menuPreviewTemplate.name;
+                                          return <span className="bubble__text">{templateText}</span>;
+                                        })()}
+                                        {(() => {
+                                          const footerComponent = menuPreviewTemplate.components?.find(c => c.type === "FOOTER");
+                                          return footerComponent && (
+                                            <div className="template-selector-menu__bubble-footer">
+                                              {footerComponent.text}
+                                            </div>
+                                          );
+                                        })()}
+                                        {(() => {
+                                          const buttonsComponent = menuPreviewTemplate.components?.find(c => c.type === "BUTTONS");
+                                          const buttons = buttonsComponent?.buttons || [];
+                                          return buttons.length > 0 && (
+                                            <div className="template-selector-menu__bubble-buttons">
+                                              {buttons.map((button, btnIndex) => (
+                                                <div key={btnIndex} className="template-selector-menu__bubble-button">
+                                                  {button.type === "URL" && <FiLink style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                  {button.type === "QUICK_REPLY" && <FiSend style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                  {button.type === "PHONE_NUMBER" && <FiPhone style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                  {button.text || button.url || button.phone_number}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          );
+                                        })()}
+                                        <div className="bubble__footer">
+                                          <div className="bubble__footer-left">
+                                            <small className="bubble__timestamp">Maintenant</small>
+                                            {hasTemplateVariables(menuPreviewTemplate) && (
+                                              <small className="template-selector-menu__has-variables" title="Ce template contient des variables à remplir">
+                                                <FiEdit style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                                Variables
+                                              </small>
+                                            )}
+                                          </div>
+                                          <div className="template-selector-menu__price">
+                                            <FiDollarSign style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                            {parseFloat(menuPreviewTemplate.price_eur || menuPreviewTemplate.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {menuPreviewTemplate.price_eur ? 'EUR' : 'USD'}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      {headerComponent && headerComponent.text && (
+                                        <div className="template-selector-menu__bubble-header">
+                                          {headerComponent.text}
+                                        </div>
+                                      )}
+                                      {(() => {
+                                        const bodyComponent = menuPreviewTemplate.components?.find(c => c.type === "BODY");
+                                        const templateText = bodyComponent?.text || menuPreviewTemplate.name;
+                                        return <span className="bubble__text">{templateText}</span>;
+                                      })()}
+                                      {(() => {
+                                        const footerComponent = menuPreviewTemplate.components?.find(c => c.type === "FOOTER");
+                                        return footerComponent && (
+                                          <div className="template-selector-menu__bubble-footer">
+                                            {footerComponent.text}
+                                          </div>
+                                        );
+                                      })()}
+                                      {(() => {
+                                        const buttonsComponent = menuPreviewTemplate.components?.find(c => c.type === "BUTTONS");
+                                        const buttons = buttonsComponent?.buttons || [];
+                                        return buttons.length > 0 && (
+                                          <div className="template-selector-menu__bubble-buttons">
+                                            {buttons.map((button, btnIndex) => (
+                                              <div key={btnIndex} className="template-selector-menu__bubble-button">
+                                                {button.type === "URL" && <FiLink style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                {button.type === "QUICK_REPLY" && <FiSend style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                {button.type === "PHONE_NUMBER" && <FiPhone style={{ marginRight: "6px", verticalAlign: "middle" }} />}
+                                                {button.text || button.url || button.phone_number}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        );
+                                      })()}
+                                      <div className="bubble__footer">
+                                        <div className="bubble__footer-left">
+                                          <small className="bubble__timestamp">Maintenant</small>
+                                          {hasTemplateVariables(menuPreviewTemplate) && (
+                                            <small className="template-selector-menu__has-variables" title="Ce template contient des variables à remplir">
+                                              <FiEdit style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                              Variables
+                                            </small>
+                                          )}
+                                        </div>
+                                        <div className="template-selector-menu__price">
+                                          <FiDollarSign style={{ marginRight: '4px', verticalAlign: 'middle' }} />
+                                          {parseFloat(menuPreviewTemplate.price_eur || menuPreviewTemplate.price_usd || 0.008).toFixed(2).replace(/\.0+$/, '')} {menuPreviewTemplate.price_eur ? 'EUR' : 'USD'}
+                                        </div>
+                                      </div>
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Bouton Envoyer */}
+                          <div className="template-selector-menu__preview-actions">
+                            <button
+                              className="template-selector-menu__send-btn"
+                              onClick={() => {
+                                if (disabled || uploading || !menuPreviewTemplate) return;
+                                handleSendTemplate(menuPreviewTemplate);
+                                // Fermer le menu avancé après l'envoi
+                                setShowAdvanced(false);
+                                setMode("text");
+                                setMenuPreviewTemplate(null);
+                              }}
+                              disabled={disabled || uploading}
+                            >
+                              <FiSend style={{ marginRight: '8px' }} />
+                              Envoyer
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="template-selector-menu__preview-empty">
+                          <div className="template-selector-menu__preview-empty-icon">
+                            <FiFile />
+                          </div>
+                          <div className="template-selector-menu__preview-empty-text">
+                            Sélectionnez un template dans le menu pour voir l'aperçu
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1144,6 +1388,12 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                       <FiList />
                     </div>
                     <span>Liste interactive</span>
+                  </button>
+                  <button className="menu-item" onClick={() => openMode("template")}>
+                    <div className="menu-icon menu-icon--template">
+                      <FiFile />
+                    </div>
+                    <span>Template</span>
                   </button>
                 </div>
               )}
