@@ -33,6 +33,7 @@ from app.api.routes_whatsapp_utils import router as whatsapp_utils_router
 from app.core.config import settings
 from app.core.http_client import close_http_client
 from app.services.profile_picture_service import periodic_profile_picture_update
+from app.services.media_background_service import periodic_media_backfill
 
 app = FastAPI(
     title="WhatsApp Inbox API",
@@ -96,6 +97,10 @@ async def startup_event():
     # Démarrer la tâche périodique de mise à jour des images de profil
     asyncio.create_task(periodic_profile_picture_update())
     logger.info("✅ Profile picture periodic update task started")
+    
+    # Démarrer la tâche périodique de téléchargement des médias manquants
+    asyncio.create_task(periodic_media_backfill())
+    logger.info("✅ Media background backfill task started")
 
 
 @app.on_event("shutdown")

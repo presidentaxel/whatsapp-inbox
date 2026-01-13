@@ -37,8 +37,20 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    console.log(`🔍 [FRONTEND MEDIA DEBUG] MediaRenderer for message ${message.id}:`, {
+      message_id: message.id,
+      message_type: messageType,
+      has_localPreview: !!message._localPreview,
+      has_storage_url: !!message.storage_url,
+      storage_url: message.storage_url,
+      has_media_id: !!message.media_id,
+      media_id: message.media_id,
+      is_fetchable: FETCHABLE_MEDIA.has(messageType)
+    });
+
     // Si on a un aperçu local, l'utiliser directement
     if (message._localPreview) {
+      console.log(`✅ [FRONTEND MEDIA] Using local preview for message ${message.id}`);
       setSource(message._localPreview);
       setLoading(false);
       setError(false);
@@ -48,6 +60,7 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
 
     // Si on a une URL de stockage Supabase, l'utiliser directement
     if (message.storage_url) {
+      console.log(`✅ [FRONTEND MEDIA] Using storage_url for message ${message.id}:`, message.storage_url);
       setSource(message.storage_url);
       setLoading(false);
       setError(false);
@@ -57,19 +70,29 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
 
     // Si on n'a ni media_id ni storage_url, on ne peut pas charger le média
     if ((!message.media_id && !message.storage_url) || !FETCHABLE_MEDIA.has(messageType)) {
+      console.warn(`⚠️ [FRONTEND MEDIA] Cannot load media for message ${message.id}:`, {
+        has_media_id: !!message.media_id,
+        has_storage_url: !!message.storage_url,
+        is_fetchable: FETCHABLE_MEDIA.has(messageType)
+      });
       setSource(null);
       setLoading(false);
       onLoadingChange?.(false, false);
       return;
     }
 
+    console.log(`📥 [FRONTEND MEDIA] Fetching media from API for message ${message.id} (media_id: ${message.media_id})`);
     let cancelled = false;
     let objectUrl = null;
 
     api
       .get(`/messages/media/${message.id}`, { responseType: "blob" })
       .then((res) => {
-        if (cancelled) return;
+        if (cancelled) {
+          console.log(`🚫 [FRONTEND MEDIA] Request cancelled for message ${message.id}`);
+          return;
+        }
+        console.log(`✅ [FRONTEND MEDIA] Media fetched successfully for message ${message.id}, size: ${res.data.size} bytes`);
         objectUrl = URL.createObjectURL(res.data);
         setSource(objectUrl);
         setError(false);
@@ -77,6 +100,7 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
       })
       .catch((err) => {
         if (!cancelled) {
+          console.error(`❌ [FRONTEND MEDIA] Error fetching media for message ${message.id}:`, err);
           setSource(null);
           setError(true);
           onLoadingChange?.(false, true);
@@ -317,6 +341,22 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   const isMedia = (FETCHABLE_MEDIA.has(messageType) || isTemplateWithImage) && hasMedia;
   const isDeletedForAll = !!message.deleted_for_all_at;
   const isEdited = !!message.edited_at;
+
+  // Log de diagnostic pour les messages avec média
+  useEffect(() => {
+    if (hasMedia || FETCHABLE_MEDIA.has(messageType)) {
+      console.log(`🔍 [FRONTEND MESSAGE] Message ${message.id} media info:`, {
+        message_id: message.id,
+        message_type: messageType,
+        has_media_id: !!message.media_id,
+        media_id: message.media_id,
+        has_storage_url: !!message.storage_url,
+        storage_url: message.storage_url,
+        is_media: isMedia,
+        is_fetchable: FETCHABLE_MEDIA.has(messageType)
+      });
+    }
+  }, [message.id, messageType, hasMedia, isMedia]);
 
   const bodyResult = renderBody(message);
   const bodyContent = bodyResult?.content || bodyResult;

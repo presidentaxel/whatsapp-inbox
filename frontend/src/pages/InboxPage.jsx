@@ -13,6 +13,7 @@ import ChatWindow from "../components/chat/ChatWindow";
 import AccountSelector from "../components/accounts/AccountSelector";
 import SidebarNav from "../components/layout/SidebarNav";
 import ContactsPanel from "../components/contacts/ContactsPanel";
+import AccountMediaGallery from "../components/gallery/AccountMediaGallery";
 import { useAuth } from "../context/AuthContext";
 import SettingsPanel from "../components/settings/SettingsPanel";
 import GeminiPanel from "../components/bot/GeminiPanel";
@@ -35,6 +36,7 @@ export default function InboxPage() {
   const [selectedContact, setSelectedContact] = useState(null);
   const [isWindowActive, setIsWindowActive] = useState(true);
   const [conversationSearch, setConversationSearch] = useState("");
+  const [showGallery, setShowGallery] = useState(false);
   const canViewContacts = hasPermission?.("contacts.view");
   
   const loadAccounts = useCallback(async () => {
@@ -261,17 +263,22 @@ export default function InboxPage() {
   }, [activeAccount, navMode, isWindowActive, refreshConversations]);
 
   const filteredConversations = useMemo(() => {
+    // Si la galerie est affichée, ne pas filtrer les conversations
+    if (showGallery) {
+      return [];
+    }
+    
     switch (filter) {
       case "unread":
         return conversations.filter((c) => c.unread_count > 0);
       case "favorites":
         return conversations.filter((c) => c.is_favorite);
-      case "groups":
-        return conversations.filter((c) => c.is_group);
+      case "gallery":
+        return conversations; // Ne pas filtrer quand on affiche la galerie
       default:
         return conversations;
     }
-  }, [conversations, filter]);
+  }, [conversations, filter, showGallery]);
 
   const handleFavoriteToggle = async (conversation, nextState) => {
     await toggleConversationFavorite(conversation.id, nextState);
@@ -404,27 +411,40 @@ export default function InboxPage() {
               <div className="conversation-filters">
                 <button
                   className={filter === "all" ? "active" : ""}
-                  onClick={() => setFilter("all")}
+                  onClick={() => {
+                    setFilter("all");
+                    setShowGallery(false);
+                  }}
                 >
                   Toutes
                 </button>
                 <button
                   className={filter === "unread" ? "active" : ""}
-                  onClick={() => setFilter("unread")}
+                  onClick={() => {
+                    setFilter("unread");
+                    setShowGallery(false);
+                  }}
                 >
                   Non lues
                 </button>
                 <button
                   className={filter === "favorites" ? "active" : ""}
-                  onClick={() => setFilter("favorites")}
+                  onClick={() => {
+                    setFilter("favorites");
+                    setShowGallery(false);
+                  }}
                 >
                   Favoris
                 </button>
                 <button
-                  className={filter === "groups" ? "active" : ""}
-                  onClick={() => setFilter("groups")}
+                  className={filter === "gallery" ? "active" : ""}
+                  onClick={() => {
+                    setFilter("gallery");
+                    setShowGallery(true);
+                    setSelectedConversation(null); // Fermer la conversation si ouverte
+                  }}
                 >
-                  Groupes
+                  Galerie
                 </button>
               </div>
               <div className="conversation-search">
@@ -454,21 +474,29 @@ export default function InboxPage() {
                 />
               </div>
 
-              <ConversationList
-                data={filteredConversations}
-                selectedId={selectedConversation?.id}
-                onSelect={handleSelectConversation}
-                onRefresh={() => refreshConversations(activeAccount)}
-              />
+              {showGallery ? (
+                <AccountMediaGallery accountId={activeAccount} mediaType="image" />
+              ) : (
+                <>
+                  <ConversationList
+                    data={filteredConversations}
+                    selectedId={selectedConversation?.id}
+                    onSelect={handleSelectConversation}
+                    onRefresh={() => refreshConversations(activeAccount)}
+                  />
+                </>
+              )}
             </div>
 
-            <ChatWindow
-              conversation={selectedConversation}
-              onFavoriteToggle={handleFavoriteToggle}
-              onBotModeChange={handleBotModeChange}
-              isWindowActive={isWindowActive && navMode === "chat"}
-              canSend={canSendMessage}
-            />
+            {!showGallery && (
+              <ChatWindow
+                conversation={selectedConversation}
+                onFavoriteToggle={handleFavoriteToggle}
+                onBotModeChange={handleBotModeChange}
+                isWindowActive={isWindowActive && navMode === "chat"}
+                canSend={canSendMessage}
+              />
+            )}
           </div>
         )}
       </div>

@@ -18,6 +18,7 @@ from app.services.account_service import (
 )
 from app.services.conversation_service import get_conversation_by_id, set_conversation_bot_mode
 from app.services.profile_picture_service import queue_profile_picture_update
+from app.services.storage_service import download_and_store_message_media
 from app.services.whatsapp_api_service import (
     get_phone_number_details,
     list_message_templates,
@@ -348,6 +349,13 @@ async def _process_incoming_message(
 
         content_text = _extract_content_text(message)
         media_meta = _extract_media_metadata(message)
+        
+        # Log de diagnostic pour voir ce qui est extrait
+        logger.info(f"🔍 [MESSAGE PROCESSING] Processing message from {wa_id}:")
+        logger.info(f"   - wa_message_id: {message.get('id')}")
+        logger.info(f"   - msg_type: {msg_type}")
+        logger.info(f"   - media_meta: {media_meta}")
+        logger.info(f"   - account_id: {account_id}")
 
         # Pour les réponses de boutons, traiter comme un message texte normal
         # car le contenu est maintenant extrait dans content_text
@@ -393,14 +401,20 @@ async def _process_incoming_message(
             logger.warning("⚠️ Message has no wa_message_id, cannot retrieve database ID")
 
         # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
-        if message_db_id and media_meta.get("media_id") and msg_type in ("image", "video", "audio", "document", "sticker"):
-            logger.info(f"📥 Media detected: message_id={message_db_id}, media_id={media_meta.get('media_id')}, type={msg_type}")
+        # IMPORTANT: Le téléchargement se fait automatiquement dès la réception, sans attendre que l'utilisateur ouvre le chat
+        has_media_id = bool(media_meta.get("media_id"))
+        is_supported_type = msg_type in ("image", "video", "audio", "document", "sticker")
+        
+        if has_media_id and is_supported_type:
+            logger.info(f"📥 [AUTO-DOWNLOAD] Media detected on message receipt: wa_message_id={message.get('id')}, media_id={media_meta.get('media_id')}, type={msg_type}")
+            
             # Récupérer l'account pour le token
             account = await get_account_by_id(account_id)
-            if account:
-                logger.info(f"✅ Account found, starting async media download for message_id={message_db_id}")
-                
-                # Créer la tâche avec gestion d'erreur
+            if not account:
+                logger.error(f"❌ [AUTO-DOWNLOAD] Account not found for account_id={account_id}, cannot download media")
+            elif message_db_id:
+                # Cas idéal : message_db_id disponible immédiatement
+                logger.info(f"✅ [AUTO-DOWNLOAD] Starting immediate download for message_id={message_db_id}")
                 task = asyncio.create_task(_download_and_store_media_async(
                     message_db_id=message_db_id,
                     media_id=media_meta.get("media_id"),
@@ -409,25 +423,73 @@ async def _process_incoming_message(
                     filename=media_meta.get("media_filename")
                 ))
                 
-                # Ajouter un callback pour logger les erreurs
                 def log_task_result(t):
                     try:
                         if t.exception() is not None:
-                            logger.error(f"❌ Media download task failed for message_id={message_db_id}: {t.exception()}", exc_info=t.exception())
+                            logger.error(f"❌ [AUTO-DOWNLOAD] Media download failed for message_id={message_db_id}: {t.exception()}", exc_info=t.exception())
                         else:
-                            logger.debug(f"✅ Media download task completed for message_id={message_db_id}")
+                            logger.info(f"✅ [AUTO-DOWNLOAD] Media download completed for message_id={message_db_id}")
                     except Exception as e:
-                        logger.error(f"❌ Error in task callback: {e}")
+                        logger.error(f"❌ [AUTO-DOWNLOAD] Error in task callback: {e}")
                 
                 task.add_done_callback(log_task_result)
             else:
-                logger.warning(f"❌ Account not found for account_id={account_id}, cannot download media")
-        elif message_db_id and media_meta.get("media_id"):
-            logger.warning(f"⚠️ Media detected but type '{msg_type}' not in supported types for storage")
-        elif message_db_id:
-            logger.debug(f"ℹ️ Message {message_db_id} has no media_id")
-        else:
-            logger.warning(f"⚠️ Could not determine message_db_id for media storage")
+                # Cas où message_db_id n'est pas encore disponible : retry avec délai
+                wa_message_id = message.get("id")
+                logger.info(f"⏳ [AUTO-DOWNLOAD] message_db_id not available yet, will retry for wa_message_id={wa_message_id}")
+                
+                async def retry_download_with_delay():
+                    """Retry le téléchargement après un court délai pour laisser le temps au message d'être inséré"""
+                    max_retries = 3
+                    retry_delay = 1.0  # 1 seconde
+                    
+                    for attempt in range(max_retries):
+                        await asyncio.sleep(retry_delay)
+                        
+                        # Chercher le message par wa_message_id
+                        msg_result = await supabase_execute(
+                            supabase.table("messages")
+                            .select("id")
+                            .eq("wa_message_id", wa_message_id)
+                            .limit(1)
+                        )
+                        
+                        if msg_result.data and msg_result.data[0].get("id"):
+                            retry_message_db_id = msg_result.data[0].get("id")
+                            logger.info(f"✅ [AUTO-DOWNLOAD] Found message_db_id on attempt {attempt + 1}: {retry_message_db_id}")
+                            
+                            # Lancer le téléchargement
+                            task = asyncio.create_task(_download_and_store_media_async(
+                                message_db_id=retry_message_db_id,
+                                media_id=media_meta.get("media_id"),
+                                account=account,
+                                mime_type=media_meta.get("media_mime_type"),
+                                filename=media_meta.get("media_filename")
+                            ))
+                            
+                            def log_retry_result(t):
+                                try:
+                                    if t.exception() is not None:
+                                        logger.error(f"❌ [AUTO-DOWNLOAD] Retry download failed for message_id={retry_message_db_id}: {t.exception()}", exc_info=t.exception())
+                                    else:
+                                        logger.info(f"✅ [AUTO-DOWNLOAD] Retry download completed for message_id={retry_message_db_id}")
+                                except Exception as e:
+                                    logger.error(f"❌ [AUTO-DOWNLOAD] Error in retry task callback: {e}")
+                            
+                            task.add_done_callback(log_retry_result)
+                            return
+                        else:
+                            logger.debug(f"⏳ [AUTO-DOWNLOAD] Attempt {attempt + 1}/{max_retries}: message_db_id still not found for wa_message_id={wa_message_id}")
+                    
+                    # Si après tous les essais, on n'a toujours pas le message_db_id
+                    logger.warning(f"⚠️ [AUTO-DOWNLOAD] Could not find message_db_id after {max_retries} attempts for wa_message_id={wa_message_id}. Media will be downloaded by background task.")
+                
+                # Lancer le retry en arrière-plan
+                asyncio.create_task(retry_download_with_delay())
+        elif has_media_id and not is_supported_type:
+            logger.debug(f"ℹ️ [AUTO-DOWNLOAD] Media detected but type '{msg_type}' not supported for auto-download (supported: image, video, audio, document, sticker)")
+        elif not has_media_id:
+            logger.debug(f"ℹ️ [AUTO-DOWNLOAD] Message has no media_id (not a media message)")
 
         await _update_conversation_timestamp(conversation["id"], timestamp_iso)
         await _increment_unread_count(conversation)
@@ -1932,6 +1994,8 @@ def _extract_media_metadata(message: Dict[str, Any]) -> Dict[str, Optional[str]]
         msg_type = msg_type.lower()
     media_section: Optional[Dict[str, Any]] = None
 
+    logger.debug(f"🔍 [MEDIA EXTRACT] Extracting media metadata for type: {msg_type}")
+
     if msg_type in {"audio", "voice"}:
         media_section = message.get("audio") or message.get("voice")
     elif msg_type == "image":
@@ -1949,12 +2013,20 @@ def _extract_media_metadata(message: Dict[str, Any]) -> Dict[str, Optional[str]]
     elif msg_type == "contacts":
         media_section = None
 
-    if media_section and media_section.get("id"):
-        return {
-            "media_id": media_section.get("id"),
-            "media_mime_type": media_section.get("mime_type"),
-            "media_filename": media_section.get("filename") or media_section.get("sha256"),
-        }
+    if media_section:
+        logger.debug(f"🔍 [MEDIA EXTRACT] Found media_section: {media_section}")
+        if media_section.get("id"):
+            result = {
+                "media_id": media_section.get("id"),
+                "media_mime_type": media_section.get("mime_type"),
+                "media_filename": media_section.get("filename") or media_section.get("sha256"),
+            }
+            logger.info(f"✅ [MEDIA EXTRACT] Extracted media_id: {result.get('media_id')}")
+            return result
+        else:
+            logger.warning(f"⚠️ [MEDIA EXTRACT] media_section found but no 'id' field: {media_section}")
+    else:
+        logger.debug(f"ℹ️ [MEDIA EXTRACT] No media_section found for type: {msg_type}")
 
     return {}
 
@@ -2129,11 +2201,13 @@ async def _download_and_store_media_async(
         
         logger.info(f"💾 Starting storage in Supabase: message_id={message_db_id}, mime_type={detected_mime_type}")
         # Télécharger et stocker dans Supabase Storage
+        # IMPORTANT: Passer le token pour authentifier la requête de téléchargement
         storage_url = await download_and_store_message_media(
             message_id=message_db_id,
             media_url=download_url,
             content_type=detected_mime_type,
-            filename=filename or meta_json.get("file_name")
+            filename=filename or meta_json.get("file_name"),
+            access_token=token  # Passer le token pour authentifier le téléchargement
         )
         
         if storage_url:

@@ -20,3 +20,8 @@ export const checkFreeWindow = (conversationId) => api.get(`/messages/free-windo
 export const getAvailableTemplates = (conversationId) => api.get(`/messages/templates/${conversationId}`);
 export const sendTemplateMessage = (conversationId, data) => api.post(`/messages/send-template/${conversationId}`, data);
 export const sendMessageWithAutoTemplate = (data) => api.post("/messages/send-with-auto-template", data);
+export const checkAndDownloadConversationMedia = (conversationId) => api.post(`/messages/check-media/${conversationId}`);
+export const getConversationMediaGallery = (conversationId, mediaType = "image", limit = 100) => 
+  api.get(`/messages/media-gallery/${conversationId}`, { params: { media_type: mediaType, limit } });
+export const getAccountMediaGallery = (accountId, mediaType = "image", limit = 500) => 
+  api.get(`/messages/media-gallery-account/${accountId}`, { params: { media_type: mediaType, limit } });

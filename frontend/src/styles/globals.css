@@ -2742,13 +2742,16 @@ body {
 }
 
 .chat-info-panel {
-  width: 260px;
+  width: 380px;
   background: rgba(17, 27, 33, 0.95);
   border-left: 1px solid rgba(255, 255, 255, 0.05);
   padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
 }
 
 .chat-info-panel h3 {
@@ -2766,6 +2769,19 @@ body {
 
 .info-row:last-child {
   border-bottom: none;
+}
+
+.info-section {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.info-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 /* Styles spécifiques pour le thème sombre */

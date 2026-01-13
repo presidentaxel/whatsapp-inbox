@@ -19,6 +19,7 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.propagate = True
 from app.core.permissions import CurrentUser, PermissionCodes
+from app.core.db import supabase, supabase_execute
 from app.services.account_service import get_account_by_id
 from app.services.conversation_service import get_conversation_by_id
 from app.services.message_service import (
@@ -39,6 +40,7 @@ from app.services.message_service import (
     update_message_content,
     delete_message_scope,
 )
+from app.services.media_background_service import process_unsaved_media_for_conversation
 from app.services import whatsapp_api_service
 from app.services.whatsapp_api_service import check_phone_number_has_whatsapp
 from app.services.pending_template_service import create_and_queue_template
@@ -1335,6 +1337,195 @@ async def test_storage_for_message(
     )
     
     return {"status": "processing", "message": "Media download and storage started in background"}
+
+
+@router.post("/check-media/{conversation_id}")
+async def check_and_download_conversation_media(
+    conversation_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Vérifie et télécharge automatiquement les médias manquants d'une conversation.
+    Appelé de manière asynchrone quand une conversation est ouverte.
+    Ne bloque pas l'interface utilisateur.
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    # Lancer le traitement en arrière-plan (ne pas attendre)
+    import asyncio
+    asyncio.create_task(process_unsaved_media_for_conversation(conversation_id, limit=50))
+    
+    return {
+        "status": "started",
+        "message": "Media check and download started in background for this conversation"
+    }
+
+
+@router.get("/media-gallery/{conversation_id}")
+async def get_conversation_media_gallery(
+    conversation_id: str,
+    media_type: str = Query("image", description="Type de média: image, video, document, audio"),
+    limit: int = Query(100, ge=1, le=500, description="Nombre maximum de médias à retourner"),
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Récupère tous les médias (images, vidéos, documents) d'une conversation avec leurs URLs de stockage.
+    Utile pour afficher une galerie de médias dans le panneau d'infos contact.
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+    
+    # Types de médias supportés
+    media_types = {
+        "image": ["image", "sticker"],
+        "video": ["video"],
+        "document": ["document"],
+        "audio": ["audio", "voice"],
+        "all": ["image", "video", "document", "audio", "sticker", "voice"]
+    }
+    
+    types_to_fetch = media_types.get(media_type.lower(), media_types["image"])
+    
+    # Récupérer les messages avec média et storage_url
+    # Exclure les images de templates (bucket template-media)
+    query = (
+        supabase.table("messages")
+        .select("id, message_type, storage_url, timestamp, content_text, direction")
+        .eq("conversation_id", conversation_id)
+        .in_("message_type", types_to_fetch)
+        .not_.is_("storage_url", "null")
+        .not_.ilike("storage_url", "%template-media%")  # Exclure les images de templates
+        .order("timestamp", desc=True)
+        .limit(limit)
+    )
+    
+    result = await supabase_execute(query)
+    messages = result.data or []
+    
+    # Formater les résultats pour la galerie
+    # Filtrer les messages de templates (bucket template-media ou message_type template)
+    gallery_items = []
+    for msg in messages:
+        storage_url = msg.get("storage_url", "")
+        message_type = msg.get("message_type", "").lower()
+        
+        # Exclure les templates : soit storage_url contient template-media, soit message_type est "template"
+        if "template-media" in storage_url or message_type == "template":
+            continue
+        
+        gallery_items.append({
+            "id": msg.get("id"),
+            "message_id": msg.get("id"),
+            "type": msg.get("message_type"),
+            "url": storage_url,  # URL complète pour téléchargement
+            "thumbnail_url": storage_url,  # Pour l'instant, même URL (on pourra optimiser plus tard)
+            "timestamp": msg.get("timestamp"),
+            "caption": msg.get("content_text"),
+            "direction": msg.get("direction")
+        })
+    
+    return {
+        "conversation_id": conversation_id,
+        "media_type": media_type,
+        "count": len(gallery_items),
+        "items": gallery_items
+    }
+
+
+@router.get("/media-gallery-account/{account_id}")
+async def get_account_media_gallery(
+    account_id: str,
+    media_type: str = Query("image", description="Type de média: image, video, document, audio"),
+    limit: int = Query(500, ge=1, le=1000, description="Nombre maximum de médias à retourner"),
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """
+    Récupère tous les médias (images, vidéos, documents) de toutes les conversations d'un compte WhatsApp.
+    Utile pour afficher une galerie globale de tous les médias du compte.
+    """
+    # Vérifier que l'utilisateur a accès au compte
+    current_user.require(PermissionCodes.MESSAGES_VIEW, account_id)
+    
+    # Types de médias supportés
+    media_types = {
+        "image": ["image", "sticker"],
+        "video": ["video"],
+        "document": ["document"],
+        "audio": ["audio", "voice"],
+        "all": ["image", "video", "document", "audio", "sticker", "voice"]
+    }
+    
+    types_to_fetch = media_types.get(media_type.lower(), media_types["image"])
+    
+    # Récupérer toutes les conversations du compte
+    conversations_result = await supabase_execute(
+        supabase.table("conversations")
+        .select("id")
+        .eq("account_id", account_id)
+    )
+    
+    conversation_ids = [conv["id"] for conv in (conversations_result.data or [])]
+    
+    if not conversation_ids:
+        return {
+            "account_id": account_id,
+            "media_type": media_type,
+            "count": 0,
+            "items": []
+        }
+    
+    # Récupérer les messages avec média et storage_url de toutes les conversations du compte
+    # Exclure les images de templates (bucket template-media)
+    query = (
+        supabase.table("messages")
+        .select("id, message_type, storage_url, timestamp, content_text, direction, conversation_id")
+        .in_("conversation_id", conversation_ids)
+        .in_("message_type", types_to_fetch)
+        .not_.is_("storage_url", "null")
+        .not_.ilike("storage_url", "%template-media%")  # Exclure les images de templates
+        .order("timestamp", desc=True)
+        .limit(limit)
+    )
+    
+    result = await supabase_execute(query)
+    messages = result.data or []
+    
+    # Formater les résultats pour la galerie
+    # Filtrer les messages de templates (bucket template-media ou message_type template)
+    gallery_items = []
+    for msg in messages:
+        storage_url = msg.get("storage_url", "")
+        message_type = msg.get("message_type", "").lower()
+        
+        # Exclure les templates : soit storage_url contient template-media, soit message_type est "template"
+        if "template-media" in storage_url or message_type == "template":
+            continue
+        
+        gallery_items.append({
+            "id": msg.get("id"),
+            "message_id": msg.get("id"),
+            "type": msg.get("message_type"),
+            "url": storage_url,
+            "thumbnail_url": storage_url,
+            "timestamp": msg.get("timestamp"),
+            "caption": msg.get("content_text"),
+            "direction": msg.get("direction"),
+            "conversation_id": msg.get("conversation_id")
+        })
+    
+    return {
+        "account_id": account_id,
+        "media_type": media_type,
+        "count": len(gallery_items),
+        "items": gallery_items
+    }
 
 
 @router.post("/send-interactive")

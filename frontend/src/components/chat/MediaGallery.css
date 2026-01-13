@@ -1,0 +1,210 @@
+.media-gallery {
+  margin-top: 16px;
+  padding: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.media-gallery__loading,
+.media-gallery__error,
+.media-gallery__empty {
+  text-align: center;
+  padding: 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.media-gallery__error {
+  color: #ff4444;
+}
+
+.media-gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 8px;
+  /* Plus de max-height ni overflow-y - le panneau parent gère le scroll */
+}
+
+.media-gallery__item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg-tertiary);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.media-gallery__item:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 1;
+}
+
+.media-gallery__thumbnail {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.media-gallery__thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.media-gallery__thumbnail--non-image {
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.media-gallery__icon {
+  font-size: 24px;
+  color: var(--text-muted);
+}
+
+.media-gallery__overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.media-gallery__item:hover .media-gallery__overlay {
+  opacity: 1;
+}
+
+.media-gallery__download-btn {
+  background: rgba(255, 255, 255, 0.9);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 16px;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.media-gallery__download-btn:hover {
+  background: #fff;
+  transform: scale(1.1);
+}
+
+.media-gallery__modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000; /* Z-index élevé mais raisonnable, maintenant que la modal est dans le body */
+  padding: 20px;
+}
+
+.media-gallery__modal-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.media-gallery__modal-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #fff;
+  font-size: 20px;
+  transition: background 0.2s ease;
+}
+
+.media-gallery__modal-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.media-gallery__modal-image {
+  max-width: min(85vw, 800px); /* Limite la largeur à 85vw ou 800px max */
+  max-height: min(70vh, 700px); /* Limite la hauteur à 70vh ou 700px max */
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.media-gallery__modal-caption {
+  color: #fff;
+  text-align: center;
+  max-width: 600px;
+  padding: 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.media-gallery__modal-download {
+  background: #25d366;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.2s ease;
+}
+
+.media-gallery__modal-download:hover {
+  background: #20ba5a;
+}
+
+/* Scrollbar personnalisée pour la grille */
+.media-gallery__grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.media-gallery__grid::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 3px;
+}
+
+.media-gallery__grid::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+.media-gallery__grid::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+

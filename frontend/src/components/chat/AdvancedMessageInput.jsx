@@ -1822,7 +1822,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                     spellCheck={discussionPrefs?.spellCheck ?? true}
                     lang="fr"
                     onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
-                    placeholder="Écrire un message... (sera envoyé via template une fois validé par Meta)"
+                    placeholder="Écrire un message..."
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         if (discussionPrefs?.enterToSend) {

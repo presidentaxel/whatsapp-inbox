@@ -1,0 +1,224 @@
+.account-media-gallery {
+  padding: 20px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.account-media-gallery__header {
+  margin-bottom: 20px;
+}
+
+.account-media-gallery__header h3 {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.account-media-gallery__loading,
+.account-media-gallery__error,
+.account-media-gallery__empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.account-media-gallery__error {
+  color: #ff4444;
+}
+
+.account-media-gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  row-gap: 156px;
+  column-gap: 12px;
+  overflow-y: auto;
+  flex: 1;
+  padding-right: 8px;
+}
+
+.account-media-gallery__item {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg-tertiary);
+  transition: box-shadow 0.2s ease;
+}
+
+.account-media-gallery__item:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.account-media-gallery__thumbnail {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.account-media-gallery__thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.account-media-gallery__thumbnail--non-image {
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.account-media-gallery__icon {
+  font-size: 24px;
+  color: var(--text-muted);
+}
+
+.account-media-gallery__overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.account-media-gallery__item:hover .account-media-gallery__overlay {
+  opacity: 1;
+}
+
+.account-media-gallery__download-btn {
+  background: rgba(255, 255, 255, 0.9);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 16px;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.account-media-gallery__download-btn:hover {
+  background: #fff;
+  transform: scale(1.1);
+}
+
+.account-media-gallery__modal {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  background: rgba(0, 0, 0, 0.9) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 999999 !important;
+  padding: 20px !important;
+}
+
+.account-media-gallery__modal-content {
+  position: relative;
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.account-media-gallery__modal-close {
+  position: absolute;
+  top: -40px;
+  right: 0;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #fff;
+  font-size: 20px;
+  transition: background 0.2s ease;
+}
+
+.account-media-gallery__modal-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.account-media-gallery__modal-image {
+  max-width: min(85vw, 800px);
+  max-height: min(70vh, 700px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.account-media-gallery__modal-caption {
+  color: #fff;
+  text-align: center;
+  max-width: 600px;
+  padding: 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.account-media-gallery__modal-download {
+  background: #25d366;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.2s ease;
+}
+
+.account-media-gallery__modal-download:hover {
+  background: #20ba5a;
+}
+
+/* Scrollbar personnalisée */
+.account-media-gallery__grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.account-media-gallery__grid::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 3px;
+}
+
+.account-media-gallery__grid::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+
+.account-media-gallery__grid::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+

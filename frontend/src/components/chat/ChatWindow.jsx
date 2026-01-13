@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiSearch, FiInfo } from "react-icons/fi";
 import { AiFillStar, AiOutlineStar } from "react-icons/ai";
-import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage } from "../../api/messagesApi";
+import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage, checkAndDownloadConversationMedia } from "../../api/messagesApi";
 import { markConversationRead } from "../../api/conversationsApi";
 import MessageBubble from "./MessageBubble";
 import AdvancedMessageInput from "./AdvancedMessageInput";
 import TypingIndicator from "./TypingIndicator";
+import MediaGallery from "./MediaGallery";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 import { notifyNewMessage, isNotificationEnabledForAccount } from "../../utils/notifications";
@@ -82,6 +83,23 @@ export default function ChatWindow({
         }
         return true;
       });
+
+      // Log de diagnostic pour les messages avec média
+      const mediaMessages = filtered.filter(msg => {
+        const type = (msg.message_type || "").toLowerCase();
+        return ["image", "video", "audio", "document", "sticker"].includes(type);
+      });
+      if (mediaMessages.length > 0) {
+        console.log(`📥 [FRONTEND CHAT] Received ${mediaMessages.length} media messages:`, 
+          mediaMessages.map(msg => ({
+            id: msg.id,
+            type: msg.message_type,
+            has_media_id: !!msg.media_id,
+            has_storage_url: !!msg.storage_url,
+            storage_url: msg.storage_url
+          }))
+        );
+      }
       
       // Mettre à jour les messages : fusionner avec les messages existants
       // en gardant les plus récents et en évitant les doublons
@@ -215,6 +233,17 @@ export default function ChatWindow({
     setHasMoreMessages(true);
     setOldestMessageTimestamp(null);
     setIsInitialLoad(true);
+    
+    // Vérifier et télécharger les médias manquants en arrière-plan (ne bloque pas)
+    // Appelé de manière asynchrone pour ne pas ralentir le chargement des messages
+    checkAndDownloadConversationMedia(conversationId)
+      .then(() => {
+        console.log(`✅ [FRONTEND] Media check started for conversation ${conversationId}`);
+      })
+      .catch((err) => {
+        console.warn(`⚠️ [FRONTEND] Failed to start media check for conversation ${conversationId}:`, err);
+        // Ne pas bloquer si ça échoue, c'est juste un bonus
+      });
     
     // Charger automatiquement tout l'historique
     const loadAllHistory = async () => {
@@ -921,6 +950,12 @@ export default function ChatWindow({
             <div className="info-row">
               <span>Messages non lus</span>
               <strong>{conversation.unread_count || 0}</strong>
+            </div>
+            
+            {/* Bibliothèque d'images */}
+            <div className="info-section">
+              <h4>Bibliothèque d'images</h4>
+              <MediaGallery conversationId={conversationId} mediaType="image" />
             </div>
           </aside>
         )}

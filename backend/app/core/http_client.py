@@ -2,9 +2,14 @@
 Module de gestion centralisée des clients HTTP avec configuration optimisée.
 """
 import httpx
+import sys
 from typing import Optional
 
 _http_client: Optional[httpx.AsyncClient] = None
+
+# Désactiver HTTP/2 sur Windows pour éviter WinError 10035
+# HTTP/2 cause des problèmes avec les sockets non bloquants sur Windows
+USE_HTTP2 = sys.platform != "win32"
 
 
 def get_timeout_config() -> httpx.Timeout:
@@ -51,7 +56,7 @@ async def get_http_client() -> httpx.AsyncClient:
         _http_client = httpx.AsyncClient(
             timeout=get_timeout_config(),
             limits=get_limits_config(),
-            http2=True,  # Active HTTP/2 pour de meilleures performances
+            http2=USE_HTTP2,  # HTTP/2 désactivé sur Windows pour éviter WinError 10035
             follow_redirects=True,
             headers={
                 "Accept-Encoding": "gzip, deflate",  # Compression
@@ -85,6 +90,6 @@ async def get_http_client_for_media() -> httpx.AsyncClient:
             pool=5.0
         ),
         limits=get_limits_config(),
-        http2=True
+        http2=USE_HTTP2  # HTTP/2 désactivé sur Windows pour éviter WinError 10035
     )
 

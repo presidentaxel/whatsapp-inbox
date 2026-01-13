@@ -186,6 +186,18 @@ async def upload_message_media(
         
         def _upload():
             try:
+                # Vérifier d'abord que le bucket existe
+                try:
+                    buckets = supabase.storage.list_buckets()
+                    bucket_names = [b.name if hasattr(b, 'name') else (b.get("name") if isinstance(b, dict) else str(b)) for b in buckets]
+                    if MESSAGE_MEDIA_BUCKET not in bucket_names:
+                        error_msg = f"Bucket '{MESSAGE_MEDIA_BUCKET}' does not exist! Available buckets: {bucket_names}"
+                        logger.error(f"❌ {error_msg}")
+                        raise ValueError(error_msg)
+                except Exception as bucket_check_error:
+                    logger.warning(f"⚠️ Could not verify bucket existence: {bucket_check_error}")
+                    # Continue quand même, peut-être que c'est juste un problème de permissions pour lister
+                
                 result = supabase.storage.from_(MESSAGE_MEDIA_BUCKET).upload(
                     path=file_path,
                     file=media_data,
@@ -197,7 +209,17 @@ async def upload_message_media(
                 logger.info(f"✅ Upload result: {result}")
                 return result
             except Exception as upload_error:
-                logger.error(f"❌ Upload error in thread: {upload_error}", exc_info=True)
+                error_str = str(upload_error)
+                # Messages d'erreur plus explicites
+                if "bucket" in error_str.lower() or "not found" in error_str.lower():
+                    logger.error(f"❌ Bucket error: {upload_error}")
+                    logger.error(f"   Vérifiez que le bucket '{MESSAGE_MEDIA_BUCKET}' existe dans Supabase Dashboard > Storage")
+                elif "permission" in error_str.lower() or "forbidden" in error_str.lower() or "401" in error_str or "403" in error_str:
+                    logger.error(f"❌ Permission error: {upload_error}")
+                    logger.error(f"   Vérifiez que SUPABASE_KEY est la clé 'service_role' (pas 'anon')")
+                    logger.error(f"   Les uploads nécessitent la clé service_role pour bypasser RLS")
+                else:
+                    logger.error(f"❌ Upload error in thread: {upload_error}", exc_info=True)
                 raise
         
         result = await run_in_threadpool(_upload)
@@ -222,7 +244,8 @@ async def download_and_store_message_media(
     message_id: str,
     media_url: str,
     content_type: str,
-    filename: Optional[str] = None
+    filename: Optional[str] = None,
+    access_token: Optional[str] = None
 ) -> Optional[str]:
     """
     Télécharge un média depuis une URL (WhatsApp) et le stocke dans Supabase Storage
@@ -232,6 +255,7 @@ async def download_and_store_message_media(
         media_url: URL du média à télécharger (WhatsApp Graph API)
         content_type: Type MIME du média
         filename: Nom de fichier original (optionnel)
+        access_token: Token d'accès WhatsApp (requis pour télécharger depuis WhatsApp)
     
     Returns:
         URL publique Supabase du média ou None en cas d'erreur
@@ -242,9 +266,15 @@ async def download_and_store_message_media(
         
         logger.info(f"📥 Downloading media from WhatsApp: message_id={message_id}, url_length={len(media_url)}")
         
+        # Préparer les headers avec le token si fourni
+        headers = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+            logger.debug(f"🔑 Using access token for media download: message_id={message_id}")
+        
         # Télécharger le média avec le client HTTP configuré
         client = await get_http_client_for_media()
-        response = await client.get(media_url)
+        response = await client.get(media_url, headers=headers)
         response.raise_for_status()
         
         # Utiliser le content-type fourni ou celui de la réponse

@@ -77,6 +77,7 @@ async def backfill_media_storage(limit: int = 50):
                 continue
             
             # Télécharger et stocker (synchronement pour ce script)
+            print(f"  📥 Downloading media from WhatsApp...")
             await _download_and_store_media_async(
                 message_db_id=msg_id,
                 media_id=media_id,
@@ -84,6 +85,9 @@ async def backfill_media_storage(limit: int = 50):
                 mime_type=msg.get("media_mime_type"),
                 filename=msg.get("media_filename")
             )
+            
+            # Attendre un peu pour que le stockage se termine (la fonction est async)
+            await asyncio.sleep(1)
             
             # Vérifier que storage_url a été mis à jour
             check_result = await supabase_execute(
@@ -94,12 +98,13 @@ async def backfill_media_storage(limit: int = 50):
             )
             
             if check_result.data and check_result.data[0].get("storage_url"):
-                print(f"  ✅ Storage URL: {check_result.data[0].get('storage_url')[:60]}...")
+                storage_url = check_result.data[0].get("storage_url")
+                print(f"  ✅ Storage URL: {storage_url[:80]}...")
                 success_count += 1
             else:
-                print(f"  ⚠️  Storage URL not set (may be processing in background)")
-                # Attendre un peu et réessayer
-                await asyncio.sleep(2)
+                print(f"  ⚠️  Storage URL not set yet, waiting...")
+                # Attendre un peu plus et réessayer (le téléchargement peut prendre du temps)
+                await asyncio.sleep(3)
                 check_result = await supabase_execute(
                     supabase.table("messages")
                     .select("storage_url")
@@ -107,9 +112,11 @@ async def backfill_media_storage(limit: int = 50):
                     .limit(1)
                 )
                 if check_result.data and check_result.data[0].get("storage_url"):
-                    print(f"  ✅ Storage URL set after wait")
+                    storage_url = check_result.data[0].get("storage_url")
+                    print(f"  ✅ Storage URL set after wait: {storage_url[:80]}...")
                     success_count += 1
                 else:
+                    print(f"  ❌ Storage URL still not set after wait (media may be expired or download failed)")
                     error_count += 1
             
         except Exception as e:
