@@ -17,7 +17,7 @@ try:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
     from googleapiclient.errors import HttpError
-    from google.auth.transport.requests import Request
+    from google.auth.transport.requests import Request as GoogleAuthRequest
     GOOGLE_DRIVE_AVAILABLE = True
 except ImportError:
     GOOGLE_DRIVE_AVAILABLE = False
@@ -190,7 +190,7 @@ async def upload_document_to_google_drive(
         # Rafraîchir le token si nécessaire
         if credentials.expired and credentials.refresh_token:
             try:
-                credentials.refresh(Request())
+                credentials.refresh(GoogleAuthRequest())
                 # Mettre à jour les tokens dans la base de données
                 from app.core.db import supabase, supabase_execute
                 await supabase_execute(

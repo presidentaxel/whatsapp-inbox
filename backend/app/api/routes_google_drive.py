@@ -26,7 +26,7 @@ try:
     from google_auth_oauthlib.flow import Flow
     from google.oauth2.credentials import Credentials
     from googleapiclient.discovery import build
-    from google.auth.transport.requests import Request
+    from google.auth.transport.requests import Request as GoogleAuthRequest
     GOOGLE_OAUTH_AVAILABLE = True
 except ImportError:
     GOOGLE_OAUTH_AVAILABLE = False
@@ -70,7 +70,7 @@ def _get_google_drive_service_from_account(account: dict):
     
     # Rafraîchir le token si nécessaire
     if credentials.expired and credentials.refresh_token:
-        credentials.refresh(Request())
+        credentials.refresh(GoogleAuthRequest())
         # Mettre à jour dans la base de données (optionnel, pour optimiser)
     
     return build('drive', 'v3', credentials=credentials)
