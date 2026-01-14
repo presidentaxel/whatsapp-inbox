@@ -441,7 +441,6 @@ async def _process_incoming_message(
                 if 'google_drive_enabled' not in account:
                     # Forcer un refresh depuis la DB si les colonnes Google Drive ne sont pas présentes
                     logger.warning(f"⚠️ [AUTO-DOWNLOAD] Account cache might be stale, forcing refresh for Google Drive columns")
-                    from app.core.db import supabase_execute
                     fresh_account = await supabase_execute(
                         supabase.table("whatsapp_accounts").select("*").eq("id", account_id).limit(1)
                     )

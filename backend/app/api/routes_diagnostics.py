@@ -42,12 +42,12 @@ async def webhook_status():
     Retourne l'état des webhooks et des messages récents
     """
     try:
-        # Vérifier les messages récents
+        # Vérifier les messages récents (50 derniers)
         messages_result = await supabase_execute(
             supabase.table("messages")
-            .select("id, direction, content_text, timestamp, wa_message_id, message_type")
+            .select("id, direction, content_text, timestamp, wa_message_id, message_type, conversation_id")
             .order("timestamp", desc=True)
-            .limit(20)
+            .limit(50)
         )
         
         messages = messages_result.data if messages_result.data else []
@@ -65,8 +65,31 @@ async def webhook_status():
         )
         recent_count = recent_result.count if hasattr(recent_result, 'count') else len(recent_result.data) if recent_result.data else 0
         
+        # Messages entrants de la dernière heure (CRITIQUE pour le diagnostic)
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        incoming_last_hour_result = await supabase_execute(
+            supabase.table("messages")
+            .select("id, timestamp, content_text, wa_message_id")
+            .eq("direction", "inbound")
+            .gte("timestamp", one_hour_ago.isoformat())
+            .order("timestamp", desc=True)
+        )
+        incoming_last_hour = incoming_last_hour_result.data if incoming_last_hour_result.data else []
+        
+        # Messages entrants des dernières 24h
+        incoming_last_24h_result = await supabase_execute(
+            supabase.table("messages")
+            .select("id", count="exact")
+            .eq("direction", "inbound")
+            .gte("timestamp", yesterday.isoformat())
+        )
+        incoming_last_24h_count = incoming_last_24h_result.count if hasattr(incoming_last_24h_result, 'count') else len(incoming_last_24h_result.data) if incoming_last_24h_result.data else 0
+        
         # Vérifier les comptes
         accounts = await get_all_accounts()
+        
+        # Dernier message entrant (toutes périodes confondues)
+        last_incoming = incoming[0] if incoming else None
         
         return {
             "status": "ok",
@@ -75,6 +98,21 @@ async def webhook_status():
                 "incoming_recent": len(incoming),
                 "outgoing_recent": len(outgoing),
                 "last_24h": recent_count,
+                "incoming_last_24h": incoming_last_24h_count,
+                "incoming_last_hour": len(incoming_last_hour),
+                "incoming_last_hour_list": [
+                    {
+                        "id": m.get("id"),
+                        "timestamp": m.get("timestamp"),
+                        "content_preview": (m.get("content_text") or "")[:50]
+                    }
+                    for m in incoming_last_hour[:10]
+                ],
+                "last_incoming_message": {
+                    "id": last_incoming.get("id"),
+                    "timestamp": last_incoming.get("timestamp"),
+                    "content_preview": (last_incoming.get("content_text") or "")[:50] if last_incoming else None
+                } if last_incoming else None,
                 "latest_incoming": incoming[:5] if incoming else [],
                 "latest_outgoing": outgoing[:5] if outgoing else []
             },
@@ -91,6 +129,15 @@ async def webhook_status():
                 ]
             },
             "webhook_endpoint": "/webhook/whatsapp",
+            "diagnosis": {
+                "has_recent_incoming": len(incoming_last_hour) > 0,
+                "last_incoming_age_minutes": (
+                    (datetime.now() - datetime.fromisoformat(last_incoming.get("timestamp").replace("Z", "+00:00")))
+                    .total_seconds() / 60
+                    if last_incoming and last_incoming.get("timestamp") else None
+                ),
+                "warning": "Aucun message entrant dans la dernière heure" if len(incoming_last_hour) == 0 else None
+            },
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
