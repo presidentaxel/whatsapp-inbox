@@ -122,7 +122,7 @@ async def init_google_drive_auth(
                 missing_vars.append("GOOGLE_DRIVE_CLIENT_SECRET")
             
             error_msg = f"Google Drive OAuth2 not configured. Missing environment variables: {', '.join(missing_vars)}. "
-            error_msg += "Please set these variables in your Render dashboard (Environment tab) for the whatsapp-inbox-backend service."
+            error_msg += "Please set these variables as GitHub Secrets (Settings → Secrets and variables → Actions) or in the backend/.env file on your server."
             logger.error(f"❌ {error_msg}")
             raise HTTPException(status_code=500, detail=error_msg)
         

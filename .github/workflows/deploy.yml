@@ -168,6 +168,28 @@ jobs:
               sleep 2
             done
             
+            # Vérifier que les variables Google Drive sont bien configurées
+            echo "🔍 Vérification des variables Google Drive dans backend/.env:"
+            if [ -f "../backend/.env" ]; then
+              if grep -q "^GOOGLE_DRIVE_CLIENT_ID=" "../backend/.env"; then
+                echo "✅ GOOGLE_DRIVE_CLIENT_ID est configuré"
+              else
+                echo "⚠️  GOOGLE_DRIVE_CLIENT_ID manquant dans backend/.env"
+              fi
+              if grep -q "^GOOGLE_DRIVE_CLIENT_SECRET=" "../backend/.env"; then
+                echo "✅ GOOGLE_DRIVE_CLIENT_SECRET est configuré"
+              else
+                echo "⚠️  GOOGLE_DRIVE_CLIENT_SECRET manquant dans backend/.env"
+              fi
+              if grep -q "^GOOGLE_DRIVE_REDIRECT_URI=" "../backend/.env"; then
+                echo "✅ GOOGLE_DRIVE_REDIRECT_URI est configuré"
+              else
+                echo "⚠️  GOOGLE_DRIVE_REDIRECT_URI manquant dans backend/.env"
+              fi
+            else
+              echo "⚠️  Fichier backend/.env non trouvé"
+            fi
+            
             # Afficher les logs récents
             echo "📋 Logs récents:"
             docker compose -f docker-compose.prod.yml logs --tail=20 backend | tail -10 || true
