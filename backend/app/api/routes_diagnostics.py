@@ -53,8 +53,8 @@ async def webhook_status():
         messages = messages_result.data if messages_result.data else []
         
         # Séparer entrants et sortants
-        incoming = [m for m in messages if m.get("direction") == "incoming"]
-        outgoing = [m for m in messages if m.get("direction") == "outgoing"]
+        incoming = [m for m in messages if m.get("direction") == "inbound"]
+        outgoing = [m for m in messages if m.get("direction") == "outbound"]
         
         # Messages des dernières 24h
         yesterday = datetime.now() - timedelta(days=1)

@@ -41,7 +41,7 @@ async def get_message_stats():
         incoming = await supabase_execute(
             supabase.table("messages")
             .select("id", count="exact")
-            .eq("direction", "incoming")
+            .eq("direction", "inbound")
         )
         incoming_count = incoming.count if hasattr(incoming, 'count') else len(incoming.data) if incoming.data else 0
         
@@ -49,7 +49,7 @@ async def get_message_stats():
         outgoing = await supabase_execute(
             supabase.table("messages")
             .select("id", count="exact")
-            .eq("direction", "outgoing")
+            .eq("direction", "outbound")
         )
         outgoing_count = outgoing.count if hasattr(outgoing, 'count') else len(outgoing.data) if outgoing.data else 0
         
@@ -147,7 +147,7 @@ async def main():
     else:
         print(f"   ✓ {len(messages)} message(s) trouvé(s):")
         for idx, msg in enumerate(messages[:5], 1):
-            direction = "📥 Entrant" if msg.get("direction") == "incoming" else "📤 Sortant"
+            direction = "📥 Entrant" if msg.get("direction") == "inbound" else "📤 Sortant"
             timestamp = msg.get("timestamp", "N/A")
             content = msg.get("content_text", "")[:50] if msg.get("content_text") else "(pas de contenu)"
             print(f"      {idx}. {direction} - {timestamp} - {content}...")
