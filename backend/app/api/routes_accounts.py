@@ -5,10 +5,11 @@ from app.core.permissions import CurrentUser, PermissionCodes
 from app.services.account_service import (
     create_account,
     delete_account,
+    update_account,
     expose_accounts_limited,
     get_account_by_id,
 )
-from app.schemas.accounts import AccountCreate
+from app.schemas.accounts import AccountCreate, AccountGoogleDriveUpdate
 
 router = APIRouter()
 
@@ -41,6 +42,34 @@ async def create_account_api(
 ):
     current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
     return await create_account(payload.dict())
+
+
+@router.patch("/{account_id}/google-drive")
+async def update_account_google_drive(
+    account_id: str,
+    payload: AccountGoogleDriveUpdate,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    """Met à jour la configuration Google Drive d'un compte WhatsApp"""
+    current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
+    account = await get_account_by_id(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    
+    updates = payload.dict(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    
+    updated = await update_account(account_id, updates)
+    if not updated:
+        raise HTTPException(status_code=500, detail="Failed to update account")
+    
+    return {
+        "status": "updated",
+        "account_id": account_id,
+        "google_drive_enabled": updated.get("google_drive_enabled", False),
+        "google_drive_folder_id": updated.get("google_drive_folder_id")
+    }
 
 
 @router.delete("/{account_id}")

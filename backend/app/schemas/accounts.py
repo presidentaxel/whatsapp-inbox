@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from typing import Optional
 
 
 class AccountCreate(BaseModel):
@@ -8,5 +9,10 @@ class AccountCreate(BaseModel):
     phone_number_id: str
     access_token: str
     verify_token: str
+
+
+class AccountGoogleDriveUpdate(BaseModel):
+    google_drive_folder_id: Optional[str] = None
+    google_drive_enabled: Optional[bool] = None
 
 

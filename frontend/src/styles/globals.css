@@ -2412,6 +2412,63 @@ body {
   background: rgba(255, 255, 255, 0.15);
 }
 
+/* Prévisualisation PDF dans les messages avec boutons */
+.bubble-media__document-preview {
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+}
+
+.bubble-media__document-preview-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 300px;
+  height: 400px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.bubble-media__document-preview-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.bubble-media__document-preview-canvas canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #fff;
+  display: block;
+}
+
+.bubble-media__document-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #00a884;
+  text-decoration: none;
+  font-weight: 500;
+  transition: background 0.2s;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: auto;
+}
+
+.bubble-media__document-link:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
 /* Caption sous les médias */
 .bubble-media__caption {
   margin: 8px 0 0 0;
@@ -3229,6 +3286,105 @@ body {
   font-family: monospace;
 }
 
+.account-card__section {
+  margin: 1rem 0;
+  border-top: 1px solid var(--border-light);
+  padding-top: 1rem;
+}
+
+.account-card__section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 6px;
+  transition: background 0.2s;
+  font-size: 0.9rem;
+}
+
+.account-card__section-toggle:hover {
+  background: var(--bg-hover);
+}
+
+.account-card__section-icon {
+  font-size: 1rem;
+}
+
+.account-card__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(134, 150, 160, 0.2);
+  color: rgba(255, 255, 255, 0.6);
+  margin-left: auto;
+}
+
+.account-card__badge--enabled {
+  background: rgba(37, 211, 102, 0.2);
+  color: #25d366;
+}
+
+.account-card__section-content {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--border-light);
+}
+
+.account-card__toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.account-card__toggle-label input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.account-card__input-group {
+  margin-top: 0.75rem;
+}
+
+.account-card__input-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.account-card__input-group input {
+  width: 100%;
+  padding: 0.625rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+.account-card__input-group small {
+  display: block;
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 /* Account Form */
 .account-form {
   margin-top: 2rem;
@@ -3736,4 +3892,266 @@ body {
   align-items: center;
   justify-content: center;
   color: #fff;
+}
+
+/* Google Drive Folder Picker */
+.google-drive-folder-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.google-drive-folder-selector__current {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  font-size: 0.85rem;
+}
+
+.google-drive-folder-selector__current .folder-path {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-primary);
+}
+
+.google-drive-folder-selector__current .folder-path.muted {
+  color: var(--text-muted);
+}
+
+.google-drive-folder-selector__current .folder-path svg {
+  font-size: 1rem;
+}
+
+/* Modal Styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  background: var(--bg-primary);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  max-width: 600px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-light);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.5rem;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  font-size: 1.25rem;
+}
+
+.modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5rem;
+  border-top: 1px solid var(--border-light);
+  gap: 1rem;
+}
+
+.modal-footer__actions {
+  display: flex;
+  gap: 0.75rem;
+}
+
+/* Google Drive Picker Specific Styles */
+.google-drive-picker {
+  max-width: 700px;
+}
+
+.google-drive-picker__navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+}
+
+.google-drive-picker__breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.breadcrumb-item {
+  display: flex;
+  align-items: center;
+}
+
+.breadcrumb-separator {
+  margin: 0 0.5rem;
+  color: var(--text-muted);
+}
+
+.breadcrumb-current {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.google-drive-picker__back-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+  align-self: flex-start;
+}
+
+.google-drive-picker__back-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+.google-drive-picker__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+  min-height: 300px;
+  max-height: 400px;
+}
+
+.google-drive-picker__loading,
+.google-drive-picker__error,
+.google-drive-picker__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.google-drive-picker__error {
+  color: #f15a5a;
+}
+
+.google-drive-picker__folders {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.google-drive-picker__folder-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.google-drive-picker__folder-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+.google-drive-picker__folder-item.selected {
+  background: rgba(37, 211, 102, 0.1);
+  border-color: #25d366;
+}
+
+.google-drive-picker__folder-item .folder-icon {
+  font-size: 1.25rem;
+  color: #25d366;
+  flex-shrink: 0;
+}
+
+.google-drive-picker__folder-item .folder-name {
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.google-drive-picker__folder-item .folder-check {
+  font-size: 1.1rem;
+  color: #25d366;
+  flex-shrink: 0;
+}
+
+.google-drive-picker__selected {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.google-drive-picker__selected strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Spinning animation for loading icons */
+.spinning {
+  animation: spinIcon 1s linear infinite;
+}
+
+@keyframes spinIcon {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }

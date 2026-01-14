@@ -188,13 +188,15 @@ export default function MediaGallery({ conversationId, mediaType = "image" }) {
     <>
       <div className="media-gallery">
         <div className="media-gallery__grid">
-          {mediaItems.map((item) => (
-            <div
-              key={item.id}
-              className="media-gallery__item"
-              onClick={() => handleImageClick(item)}
-            >
-              {item.type === "image" || item.type === "sticker" ? (
+          {mediaItems.map((item) => {
+            const itemType = (item.type || "").toLowerCase();
+            return (
+              <div
+                key={item.id}
+                className="media-gallery__item"
+                onClick={() => handleImageClick(item)}
+              >
+                {itemType === "image" || itemType === "sticker" ? (
                 <div className="media-gallery__thumbnail">
                   <img
                     src={getThumbnailUrl(item.url)}
@@ -219,13 +221,18 @@ export default function MediaGallery({ conversationId, mediaType = "image" }) {
               ) : (
                 <div className="media-gallery__thumbnail media-gallery__thumbnail--non-image">
                   <div className="media-gallery__icon">{getMediaIcon(item.type)}</div>
-                  <div className="media-gallery__download-btn">
+                  <button
+                    className="media-gallery__download-btn"
+                    onClick={(e) => handleDownload(item, e)}
+                    title="Télécharger"
+                  >
                     <FiDownload />
-                  </div>
+                  </button>
                 </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

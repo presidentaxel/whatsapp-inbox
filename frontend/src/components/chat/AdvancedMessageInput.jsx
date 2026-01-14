@@ -364,13 +364,32 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       textPreview: messageText.substring(0, 50)
     });
     
+    // Créer le message optimiste IMMÉDIATEMENT avant l'appel API pour un affichage instantané
+    const tempId = `temp-${Date.now()}`;
+    const optimisticMessage = {
+      id: tempId,
+      conversation_id: conversation.id,
+      direction: "outbound",
+      content_text: messageText,
+      status: "pending", // Statut par défaut, sera mis à jour par le serveur
+      timestamp: new Date().toISOString(),
+      message_type: "text"
+    };
+    
+    // Ajouter le message optimiste IMMÉDIATEMENT
+    if (onSend) {
+      console.log("📨 [FRONTEND] Ajout du message optimiste IMMÉDIATEMENT");
+      onSend(messageText, false, optimisticMessage);
+    }
+    
+    // Vider le champ de texte immédiatement
     setText("");
     setShowAdvanced(false);
     setMode("text");
     
     try {
-      // TOUJOURS utiliser le nouvel endpoint qui gère automatiquement la fenêtre gratuite
-      // Il détecte si on est hors fenêtre et crée automatiquement un template si nécessaire
+      // Appeler l'API en arrière-plan
+      // Le message réel remplacera l'optimiste quand il arrivera via le webhook
       console.log("📤 [FRONTEND] Appel à sendMessageWithAutoTemplate...");
       const response = await sendMessageWithAutoTemplate({
         conversation_id: conversation.id,
@@ -379,50 +398,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       
       console.log("✅ [FRONTEND] Réponse de sendMessageWithAutoTemplate:", response.data);
       
-      // Le backend retourne toujours un message_id maintenant
-      // Si status est "pending", c'est qu'on est hors fenêtre et le template est en attente
-      // Si status est "sent", c'est qu'on est dans la fenêtre gratuite et le message est envoyé
-      const messageStatus = response.data?.status || "pending";
-      const messageId = response.data?.message_id || `temp-${Date.now()}`;
-      
-      console.log("📝 [FRONTEND] Création du message optimiste", {
-        messageId,
-        messageStatus,
-        isPending: messageStatus === "pending"
-      });
-      
-      // Créer un message optimiste
-      const optimisticMessage = {
-        id: messageId,
-        conversation_id: conversation.id,
-        direction: "outbound",
-        content_text: messageText,
-        status: messageStatus, // "pending" si hors fenêtre, "sent" si dans fenêtre
-        timestamp: new Date().toISOString(),
-        message_type: "text"
-      };
-      
-      // Ajouter le message optimiste
-      if (onSend) {
-        console.log("📨 [FRONTEND] Ajout du message optimiste via onSend");
-        onSend(messageText, false, optimisticMessage);
-      }
-      
-      // Si le message est déjà envoyé (dans fenêtre gratuite), rafraîchir pour récupérer le vrai message
-      if (messageStatus === "sent") {
-        console.log("🔄 [FRONTEND] Message envoyé, rafraîchissement dans 1s...");
-        setTimeout(() => {
-          if (onSend) {
-            onSend("", true); // Force refresh
-          }
-        }, 1000);
-      } else {
-        console.log("⏳ [FRONTEND] Message en attente (template en validation)");
-      }
-      
-      // Ne pas réinitialiser templateSent ici
-      // templateSent sera calculé dynamiquement à partir des messages
-      // Il sera réinitialisé uniquement si un nouveau message client arrive
+      // Le message optimiste sera remplacé automatiquement par le message réel
+      // via le webhook Supabase ou le refreshMessages
     } catch (error) {
       console.error("❌ [FRONTEND] Erreur lors de l'envoi:", error);
       console.error("❌ [FRONTEND] Détails de l'erreur:", {
@@ -432,7 +409,11 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         url: error.config?.url
       });
       
-      // En cas d'erreur d'envoi, remettre le texte pour que l'utilisateur puisse réessayer
+      // En cas d'erreur, supprimer le message optimiste et remettre le texte
+      // Le refreshMessages supprimera automatiquement le message optimiste
+      if (onSend) {
+        onSend("", true); // Force refresh pour supprimer le message optimiste
+      }
       setText(messageText);
       
       // Afficher les erreurs de validation si disponibles

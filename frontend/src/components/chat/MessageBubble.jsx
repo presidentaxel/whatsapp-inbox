@@ -15,6 +15,7 @@ import {
 import { api } from "../../api/axiosClient";
 import MessageReactions from "./MessageReactions";
 import MessageStatus from "./MessageStatus";
+import PDFThumbnail from "../gallery/PDFThumbnail";
 
 const FETCHABLE_MEDIA = new Set(["audio", "voice", "image", "video", "document", "sticker"]);
 
@@ -141,9 +142,48 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
   }
 
   if (messageType === "document") {
+    // Vérifier si c'est un PDF
+    const isPDF = source && (
+      source.toLowerCase().endsWith(".pdf") || 
+      source.includes(".pdf") || 
+      message.media_mime_type?.toLowerCase().includes("pdf") ||
+      message.media_filename?.toLowerCase().endsWith(".pdf")
+    );
+    
+    if (isPDF && source) {
+      // Afficher une prévisualisation PDF comme dans la galerie
+      // Utiliser useMemo pour éviter les re-renders inutiles
+      const pdfUrl = source; // Mémoriser l'URL pour éviter les changements de référence
+      
+      return (
+        <div className="bubble-media__document-preview">
+          <div className="bubble-media__document-preview-wrapper">
+            <div className="bubble-media__document-preview-canvas">
+              <PDFThumbnail 
+                key={pdfUrl} // Utiliser key pour forcer le remontage si l'URL change vraiment
+                url={pdfUrl} 
+                width={300} 
+                height={350}
+              />
+            </div>
+            <a 
+              href={pdfUrl} 
+              download 
+              className="bubble-media__document-link" 
+              target="_blank" 
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <FiFileText /> Télécharger le PDF
+            </a>
+          </div>
+        </div>
+      );
+    }
+    
     return (
       <a href={source} download className="bubble-media__document" target="_blank" rel="noreferrer">
-        📄 Télécharger le document
+        <FiFileText /> Télécharger le document
       </a>
     );
   }

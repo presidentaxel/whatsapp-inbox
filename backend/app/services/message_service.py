@@ -408,11 +408,25 @@ async def _process_incoming_message(
         if has_media_id and is_supported_type:
             logger.info(f"📥 [AUTO-DOWNLOAD] Media detected on message receipt: wa_message_id={message.get('id')}, media_id={media_meta.get('media_id')}, type={msg_type}")
             
-            # Récupérer l'account pour le token
+            # Récupérer l'account pour le token (forcer le refresh pour avoir les dernières données Google Drive)
             account = await get_account_by_id(account_id)
             if not account:
                 logger.error(f"❌ [AUTO-DOWNLOAD] Account not found for account_id={account_id}, cannot download media")
-            elif message_db_id:
+            else:
+                # Vérifier que le compte a bien les colonnes Google Drive
+                logger.info(f"🔍 [AUTO-DOWNLOAD] Account retrieved: id={account.get('id')}, has_google_drive_enabled={'google_drive_enabled' in account}, has_google_drive_connected={'google_drive_connected' in account}")
+                if 'google_drive_enabled' not in account:
+                    # Forcer un refresh depuis la DB si les colonnes Google Drive ne sont pas présentes
+                    logger.warning(f"⚠️ [AUTO-DOWNLOAD] Account cache might be stale, forcing refresh for Google Drive columns")
+                    from app.core.db import supabase_execute
+                    fresh_account = await supabase_execute(
+                        supabase.table("whatsapp_accounts").select("*").eq("id", account_id).limit(1)
+                    )
+                    if fresh_account.data:
+                        account = fresh_account.data[0]
+                        logger.info(f"✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
+            
+            if message_db_id:
                 # Cas idéal : message_db_id disponible immédiatement
                 logger.info(f"✅ [AUTO-DOWNLOAD] Starting immediate download for message_id={message_db_id}")
                 task = asyncio.create_task(_download_and_store_media_async(
@@ -2166,7 +2180,7 @@ async def _download_and_store_media_async(
     Télécharge un média depuis WhatsApp et le stocke dans Supabase Storage en arrière-plan.
     Cette fonction est appelée de manière asynchrone pour ne pas bloquer le traitement du webhook.
     """
-    logger.info(f"🚀 Starting media download and storage: message_id={message_db_id}, media_id={media_id}")
+    logger.info(f"🚀 [MEDIA DOWNLOAD] Starting media download and storage: message_id={message_db_id}, media_id={media_id}, account_id={account.get('id')}, account_name={account.get('name')}")
     try:
         from app.core.http_client import get_http_client_for_media
         
@@ -2218,8 +2232,314 @@ async def _download_and_store_media_async(
                 .eq("id", message_db_id)
             )
             logger.info(f"✅ Media stored in Supabase Storage: message_id={message_db_id}, storage_url={storage_url}")
+            
+            # Upload vers Google Drive si configuré (de manière asynchrone et non-bloquante)
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] Checking Google Drive configuration for account_id={account.get('id')}, account_name={account.get('name')}")
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] Account keys available: {list(account.keys())}")
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_enabled={account.get('google_drive_enabled')} (type: {type(account.get('google_drive_enabled'))})")
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_connected={account.get('google_drive_connected')} (type: {type(account.get('google_drive_connected'))})")
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] has_access_token={bool(account.get('google_drive_access_token'))} (value present: {account.get('google_drive_access_token') is not None})")
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] has_refresh_token={bool(account.get('google_drive_refresh_token'))} (value present: {account.get('google_drive_refresh_token') is not None})")
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_folder_id={account.get('google_drive_folder_id')}")
+            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_token_expiry={account.get('google_drive_token_expiry')}")
+            
+            google_drive_enabled = account.get("google_drive_enabled")
+            google_drive_connected = account.get("google_drive_connected")
+            has_access_token = bool(account.get("google_drive_access_token"))
+            has_refresh_token = bool(account.get("google_drive_refresh_token"))
+            
+            if (google_drive_enabled and 
+                google_drive_connected and 
+                has_access_token and 
+                has_refresh_token):
+                
+                logger.info(f"✅ [GOOGLE DRIVE] All conditions met, creating upload task for message_id={message_db_id}")
+                # Créer une tâche asynchrone pour l'upload Google Drive (non-bloquant)
+                asyncio.create_task(_upload_to_google_drive_async(
+                    message_db_id=message_db_id,
+                    account=account,
+                    storage_url=storage_url,
+                    filename=filename or meta_json.get("file_name") or f"file_{message_db_id}",
+                    mime_type=detected_mime_type
+                ))
+                logger.info(f"🚀 [GOOGLE DRIVE] Upload task created successfully for message_id={message_db_id}")
+            else:
+                missing_conditions = []
+                if not google_drive_enabled:
+                    missing_conditions.append("google_drive_enabled=False")
+                if not google_drive_connected:
+                    missing_conditions.append("google_drive_connected=False")
+                if not has_access_token:
+                    missing_conditions.append("access_token missing")
+                if not has_refresh_token:
+                    missing_conditions.append("refresh_token missing")
+                
+                logger.warning(f"⚠️ [GOOGLE DRIVE] Upload skipped for message_id={message_db_id}, account_id={account.get('id')}. Missing conditions: {', '.join(missing_conditions)}")
         else:
             logger.warning(f"❌ Failed to store media in Supabase Storage: message_id={message_db_id}")
             
     except Exception as e:
         logger.error(f"❌ Error downloading and storing media: message_id={message_db_id}, error={e}", exc_info=True)
+
+
+async def _upload_to_google_drive_async(
+    message_db_id: str,
+    account: Dict[str, Any],
+    storage_url: str,
+    filename: str,
+    mime_type: str
+):
+    """
+    Upload un fichier vers Google Drive de manière asynchrone et non-bloquante.
+    Cette fonction est appelée dans une tâche séparée pour ne pas bloquer le traitement principal.
+    """
+    try:
+        logger.info(f"🚀 [GOOGLE DRIVE] Starting upload task: message_id={message_db_id}, account_id={account.get('id')}, filename={filename}")
+        
+        # Récupérer le message pour obtenir conversation_id
+        logger.info(f"🔍 [GOOGLE DRIVE] Fetching conversation_id for message_id={message_db_id}")
+        msg_result = await supabase_execute(
+            supabase.table("messages")
+            .select("conversation_id")
+            .eq("id", message_db_id)
+            .limit(1)
+        )
+        
+        if not msg_result.data or not msg_result.data[0].get("conversation_id"):
+            logger.warning(f"⚠️ [GOOGLE DRIVE] No conversation_id found for message_id={message_db_id}")
+            return
+        
+        conversation_id = msg_result.data[0]["conversation_id"]
+        logger.info(f"✅ [GOOGLE DRIVE] Found conversation_id={conversation_id} for message_id={message_db_id}")
+        
+        # Récupérer la conversation pour obtenir client_number
+        logger.info(f"🔍 [GOOGLE DRIVE] Fetching client_number for conversation_id={conversation_id}")
+        conv_result = await supabase_execute(
+            supabase.table("conversations")
+            .select("client_number")
+            .eq("id", conversation_id)
+            .limit(1)
+        )
+        
+        if not conv_result.data or not conv_result.data[0].get("client_number"):
+            logger.warning(f"⚠️ [GOOGLE DRIVE] No client_number found for conversation_id={conversation_id}")
+            return
+        
+        client_number = conv_result.data[0]["client_number"]
+        logger.info(f"✅ [GOOGLE DRIVE] Found client_number={client_number} for conversation_id={conversation_id}")
+        
+        # Télécharger le fichier depuis Supabase Storage pour l'upload vers Google Drive
+        from app.services.google_drive_service import upload_document_to_google_drive
+        import httpx
+        
+        logger.info(f"📥 [GOOGLE DRIVE] Downloading file from Supabase Storage: storage_url={storage_url}, message_id={message_db_id}")
+        # Télécharger depuis storage_url
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            file_response = await client.get(storage_url)
+            file_response.raise_for_status()
+            file_data = file_response.content
+            logger.info(f"✅ [GOOGLE DRIVE] File downloaded successfully: size={len(file_data)} bytes, message_id={message_db_id}")
+        
+        logger.info(f"📤 [GOOGLE DRIVE] Calling upload_document_to_google_drive: message_id={message_db_id}, phone={client_number}, filename={filename}, mime_type={mime_type}, account_id={account.get('id')}")
+        # Upload vers Google Drive
+        drive_file_id = await upload_document_to_google_drive(
+            account=account,
+            phone_number=client_number,
+            file_data=file_data,
+            filename=filename,
+            mime_type=mime_type
+        )
+        
+        if drive_file_id:
+            logger.info(f"✅ [GOOGLE DRIVE] Upload successful: message_id={message_db_id}, drive_file_id={drive_file_id}, phone={client_number}, filename={filename}")
+            # Marquer le message comme uploadé dans la DB
+            await supabase_execute(
+                supabase.table("messages")
+                .update({"google_drive_file_id": drive_file_id})
+                .eq("id", message_db_id)
+            )
+            logger.info(f"✅ [GOOGLE DRIVE] Message marked as uploaded in DB: message_id={message_db_id}")
+        else:
+            logger.warning(f"⚠️ [GOOGLE DRIVE] Upload returned None: message_id={message_db_id}, phone={client_number}, filename={filename}. Check Google Drive service logs for details.")
+            
+    except Exception as gd_error:
+        # Ne pas faire échouer le stockage Supabase si Google Drive échoue
+        logger.error(f"❌ [GOOGLE DRIVE] Upload error (non-blocking): message_id={message_db_id}, account_id={account.get('id')}, error={gd_error}", exc_info=True)
+
+
+async def backfill_media_to_google_drive(account_id: str, limit: int = 100) -> Dict[str, Any]:
+    """
+    Upload les médias existants vers Google Drive pour un compte donné.
+    Ne télécharge que les médias qui n'ont pas encore été uploadés (google_drive_file_id is null).
+    
+    Args:
+        account_id: ID du compte WhatsApp
+        limit: Nombre maximum de médias à traiter par batch
+    
+    Returns:
+        Dict avec les statistiques du backfill
+    """
+    logger.info(f"🔄 [GOOGLE DRIVE BACKFILL] Starting backfill for account_id={account_id}, limit={limit}")
+    
+    # Récupérer le compte (forcer le refresh depuis la DB pour éviter le cache)
+    from app.services.account_service import invalidate_account_cache
+    invalidate_account_cache(account_id)
+    account = await get_account_by_id(account_id)
+    if not account:
+        raise ValueError(f"Account {account_id} not found")
+    
+    # Vérifier que Google Drive est configuré avec des logs détaillés
+    google_drive_enabled = account.get("google_drive_enabled", False)
+    has_access_token = bool(account.get("google_drive_access_token"))
+    has_refresh_token = bool(account.get("google_drive_refresh_token"))
+    google_drive_connected = has_access_token and has_refresh_token
+    
+    logger.info(f"🔍 [GOOGLE DRIVE BACKFILL] Account check: enabled={google_drive_enabled}, has_access_token={has_access_token}, has_refresh_token={has_refresh_token}, connected={google_drive_connected}")
+    logger.info(f"🔍 [GOOGLE DRIVE BACKFILL] Account keys: {list(account.keys())}")
+    
+    if not (google_drive_enabled and google_drive_connected):
+        missing = []
+        if not google_drive_enabled:
+            missing.append("google_drive_enabled=False")
+        if not has_access_token:
+            missing.append("access_token missing")
+        if not has_refresh_token:
+            missing.append("refresh_token missing")
+        
+        logger.warning(f"⚠️ [GOOGLE DRIVE BACKFILL] Google Drive not configured for account_id={account_id}. Missing: {', '.join(missing)}")
+        return {
+            "status": "skipped",
+            "reason": f"Google Drive not configured: {', '.join(missing)}",
+            "processed": 0,
+            "uploaded": 0,
+            "failed": 0
+        }
+    
+    # Récupérer les conversations pour ce compte
+    convs_result = await supabase_execute(
+        supabase.table("conversations")
+        .select("id, client_number")
+        .eq("account_id", account_id)
+    )
+    
+    if not convs_result.data:
+        logger.info(f"✅ [GOOGLE DRIVE BACKFILL] No conversations found for account_id={account_id}")
+        return {
+            "status": "completed",
+            "processed": 0,
+            "uploaded": 0,
+            "failed": 0
+        }
+    
+    conversation_ids = [conv["id"] for conv in convs_result.data]
+    conv_map = {conv["id"]: conv["client_number"] for conv in convs_result.data}
+    
+    # Récupérer les messages avec médias qui n'ont pas encore été uploadés vers Google Drive
+    # Vérifier d'abord si la colonne google_drive_file_id existe
+    column_exists = False
+    try:
+        # Tester si la colonne existe en essayant de la sélectionner
+        test_query = supabase.table("messages").select("google_drive_file_id").limit(1)
+        await supabase_execute(test_query)
+        column_exists = True
+        logger.info("✅ [GOOGLE DRIVE BACKFILL] Column google_drive_file_id exists")
+    except Exception:
+        # La colonne n'existe pas encore
+        logger.warning("⚠️ [GOOGLE DRIVE BACKFILL] Column google_drive_file_id does not exist yet. Will process all media files. Please apply migration 029_add_google_drive_file_id_to_messages.sql")
+    
+    # Construire la requête
+    query = (
+        supabase.table("messages")
+        .select("id, storage_url, media_filename, media_mime_type, conversation_id")
+        .not_.is_("storage_url", "null")
+        .in_("conversation_id", conversation_ids)
+        .in_("message_type", ["image", "video", "audio", "document", "sticker"])
+    )
+    
+    # Ajouter le filtre seulement si la colonne existe
+    if column_exists:
+        query = query.is_("google_drive_file_id", "null")
+        logger.info("✅ [GOOGLE DRIVE BACKFILL] Filtering out already uploaded files")
+    
+    query = query.limit(limit)
+    
+    result = await supabase_execute(query)
+    
+    if not result.data:
+        logger.info(f"✅ [GOOGLE DRIVE BACKFILL] No media to upload for account_id={account_id}")
+        return {
+            "status": "completed",
+            "processed": 0,
+            "uploaded": 0,
+            "failed": 0
+        }
+    
+    logger.info(f"📋 [GOOGLE DRIVE BACKFILL] Found {len(result.data)} media files to upload for account_id={account_id}")
+    
+    uploaded = 0
+    failed = 0
+    
+    for msg in result.data:
+        message_id = msg["id"]
+        storage_url = msg["storage_url"]
+        conversation_id = msg["conversation_id"]
+        client_number = conv_map.get(conversation_id)
+        
+        if not client_number:
+            logger.warning(f"⚠️ [GOOGLE DRIVE BACKFILL] No client_number for conversation_id={conversation_id}, message_id={message_id}, skipping")
+            failed += 1
+            continue
+        
+        try:
+            logger.info(f"🔄 [GOOGLE DRIVE BACKFILL] Processing message_id={message_id}, phone={client_number}")
+            
+            # Télécharger le fichier depuis Supabase Storage
+            import httpx
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                file_response = await client.get(storage_url)
+                file_response.raise_for_status()
+                file_data = file_response.content
+            
+            # Upload vers Google Drive
+            from app.services.google_drive_service import upload_document_to_google_drive
+            
+            filename = msg.get("media_filename") or f"file_{message_id}"
+            mime_type = msg.get("media_mime_type") or "application/octet-stream"
+            
+            drive_file_id = await upload_document_to_google_drive(
+                account=account,
+                phone_number=client_number,
+                file_data=file_data,
+                filename=filename,
+                mime_type=mime_type
+            )
+            
+            if drive_file_id:
+                # Marquer le message comme uploadé (si la colonne existe)
+                try:
+                    await supabase_execute(
+                        supabase.table("messages")
+                        .update({"google_drive_file_id": drive_file_id})
+                        .eq("id", message_id)
+                    )
+                    logger.info(f"✅ [GOOGLE DRIVE BACKFILL] Uploaded and marked message_id={message_id}, drive_file_id={drive_file_id}")
+                except Exception as update_error:
+                    # La colonne n'existe peut-être pas encore, mais l'upload a réussi
+                    logger.warning(f"⚠️ [GOOGLE DRIVE BACKFILL] Uploaded message_id={message_id} but could not mark in DB (column may not exist): {update_error}")
+                uploaded += 1
+            else:
+                failed += 1
+                logger.warning(f"⚠️ [GOOGLE DRIVE BACKFILL] Upload failed for message_id={message_id}")
+                
+        except Exception as e:
+            failed += 1
+            logger.error(f"❌ [GOOGLE DRIVE BACKFILL] Error processing message_id={message_id}: {e}", exc_info=True)
+    
+    logger.info(f"✅ [GOOGLE DRIVE BACKFILL] Completed for account_id={account_id}: uploaded={uploaded}, failed={failed}, total={len(result.data)}")
+    
+    return {
+        "status": "completed",
+        "processed": len(result.data),
+        "uploaded": uploaded,
+        "failed": failed
+    }

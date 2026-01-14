@@ -53,5 +53,11 @@ class Settings:
     # NOTE: empty_header fonctionne mais les URLs WhatsApp peuvent expirer - pour une solution robuste,
     # il faudrait uploader l'image via l'API et utiliser media_id
     TEMPLATE_HEADER_STRATEGY: str = os.getenv("TEMPLATE_HEADER_STRATEGY", "empty_header")
+    
+    # Google Drive OAuth2 (optionnel)
+    GOOGLE_DRIVE_CLIENT_ID: str | None = os.getenv("GOOGLE_DRIVE_CLIENT_ID")
+    GOOGLE_DRIVE_CLIENT_SECRET: str | None = os.getenv("GOOGLE_DRIVE_CLIENT_SECRET")
+    GOOGLE_DRIVE_REDIRECT_URI: str = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:5174/api/auth/google-drive/callback")
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
 
 settings = Settings()

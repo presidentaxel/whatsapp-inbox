@@ -12,6 +12,10 @@ import {
   FiSearch,
   FiUser,
   FiShield,
+  FiCloud,
+  FiFolder,
+  FiUpload,
+  FiLoader,
 } from "react-icons/fi";
 import {
   createRole,
@@ -23,11 +27,12 @@ import {
   setUserRoles,
   updateUserStatus,
 } from "../../api/adminApi";
-import { createAccount, deleteAccount } from "../../api/accountsApi";
+import { createAccount, deleteAccount, updateAccountGoogleDrive, initGoogleDriveAuth, disconnectGoogleDrive, listGoogleDriveFolders, backfillGoogleDrive } from "../../api/accountsApi";
 import NotificationSettings from "./NotificationSettings";
 import PermissionsTable from "./PermissionsTable";
 import DiscussionSettings from "./DiscussionSettings";
 import GeneralSettings from "./GeneralSettings";
+import GoogleDriveFolderPicker from "./GoogleDriveFolderPicker";
 
 const INITIAL_ACCOUNT_FORM = {
   name: "",
@@ -69,6 +74,11 @@ export default function SettingsPanel({
   const [statusMessage, setStatusMessage] = useState("");
   const [activePanel, setActivePanel] = useState("general");
   const [searchQuery, setSearchQuery] = useState("");
+  const [expandedGoogleDrive, setExpandedGoogleDrive] = useState({});
+  const [googleDriveFolderIds, setGoogleDriveFolderIds] = useState({});
+  const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [folderPickerAccountId, setFolderPickerAccountId] = useState(null);
+  const [backfilling, setBackfilling] = useState({});
 
   const accountMap = useMemo(
     () => Object.fromEntries(accounts.map((acc) => [acc.id, acc])),
@@ -131,6 +141,90 @@ export default function SettingsPanel({
     if (!window.confirm("Supprimer ce compte WhatsApp ?")) return;
     await deleteAccount(accountId);
     onAccountsRefresh?.();
+  };
+
+  const handleUpdateGoogleDrive = async (accountId, config) => {
+    try {
+      await updateAccountGoogleDrive(accountId, config);
+      setStatusMessage("Configuration Google Drive mise à jour avec succès.");
+      onAccountsRefresh?.();
+    } catch (error) {
+      console.error("update google drive error", error);
+      setStatusMessage("Erreur lors de la mise à jour de Google Drive.");
+    }
+  };
+
+  const toggleGoogleDriveExpanded = (accountId) => {
+    setExpandedGoogleDrive((prev) => ({
+      ...prev,
+      [accountId]: !prev[accountId],
+    }));
+  };
+
+  const handleConnectGoogleDrive = async (accountId) => {
+    try {
+      const response = await initGoogleDriveAuth(accountId);
+      if (response.data?.authorization_url) {
+        window.location.href = response.data.authorization_url;
+      }
+    } catch (error) {
+      console.error("init google drive auth error", error);
+      setStatusMessage("Erreur lors de l'initialisation de la connexion Google Drive.");
+    }
+  };
+
+  const handleDisconnectGoogleDrive = async (accountId) => {
+    if (!window.confirm("Déconnecter Google Drive de ce compte ?")) return;
+    try {
+      await disconnectGoogleDrive(accountId);
+      setStatusMessage("Google Drive déconnecté avec succès.");
+      onAccountsRefresh?.();
+    } catch (error) {
+      console.error("disconnect google drive error", error);
+      setStatusMessage("Erreur lors de la déconnexion de Google Drive.");
+    }
+  };
+
+  const handleOpenFolderPicker = (accountId) => {
+    setFolderPickerAccountId(accountId);
+    setShowFolderPicker(true);
+  };
+
+  const handleFolderSelect = (accountId, folderId) => {
+    setGoogleDriveFolderIds((prev) => ({
+      ...prev,
+      [accountId]: folderId,
+    }));
+    handleUpdateGoogleDrive(accountId, {
+      google_drive_folder_id: folderId,
+    });
+    setShowFolderPicker(false);
+    setFolderPickerAccountId(null);
+  };
+
+  const handleBackfillGoogleDrive = async (accountId) => {
+    if (!window.confirm("Uploader tous les médias existants vers Google Drive ? Cela peut prendre du temps.")) return;
+    
+    setBackfilling((prev) => ({ ...prev, [accountId]: true }));
+    setStatusMessage("Upload des médias en cours...");
+    
+    try {
+      const response = await backfillGoogleDrive(accountId, 100);
+      if (response.data?.status === "skipped") {
+        setStatusMessage(`Backfill ignoré : ${response.data.reason || "Google Drive non configuré"}`);
+      } else {
+        setStatusMessage(
+          `Backfill terminé : ${response.data.uploaded || 0} uploadés, ${response.data.failed || 0} échecs sur ${response.data.processed || 0} traités.`
+        );
+      }
+      onAccountsRefresh?.();
+    } catch (error) {
+      console.error("Error backfilling Google Drive:", error);
+      const errorMessage = error.response?.data?.detail || error.message || "Erreur lors de l'upload des médias vers Google Drive.";
+      setStatusMessage(`Erreur : ${errorMessage}`);
+    } finally {
+      setBackfilling((prev) => ({ ...prev, [accountId]: false }));
+    }
   };
 
   const toggleRolePermission = (code) => {
@@ -444,27 +538,151 @@ export default function SettingsPanel({
             {statusMessage && <p>{statusMessage}</p>}
           {accounts.length ? (
             <div className="account-grid">
-              {accounts.map((acc) => (
-                <article key={acc.id} className="account-card">
-                  <header>
-                    <strong>{acc.name}</strong>
-                    <span>{acc.phone_number || "Numéro inconnu"}</span>
-                  </header>
-                  <div className="account-meta">
-                    <span>ID : {acc.id}</span>
-                    <span>Phone ID : {acc.phone_number_id}</span>
-                  </div>
-                  {canManageAccounts && (
-                    <button
-                      className="danger subtle"
-                      onClick={() => handleDeleteAccount(acc.id)}
-                      type="button"
-                    >
-                      Supprimer
-                    </button>
-                  )}
-                </article>
-              ))}
+              {accounts.map((acc) => {
+                const isGoogleDriveExpanded = expandedGoogleDrive[acc.id];
+                const googleDriveConnected = acc.google_drive_connected || false;
+                const googleDriveEnabled = acc.google_drive_enabled || false;
+                const googleDriveFolderId = acc.google_drive_folder_id || "";
+                return (
+                  <article key={acc.id} className="account-card">
+                    <header>
+                      <strong>{acc.name}</strong>
+                      <span>{acc.phone_number || "Numéro inconnu"}</span>
+                    </header>
+                    <div className="account-meta">
+                      <span>ID : {acc.id}</span>
+                      <span>Phone ID : {acc.phone_number_id}</span>
+                    </div>
+                    
+                    {canManageAccounts && (
+                      <>
+                        <div className="account-card__section">
+                          <button
+                            className="account-card__section-toggle"
+                            onClick={() => toggleGoogleDriveExpanded(acc.id)}
+                            type="button"
+                          >
+                            <FiCloud className="account-card__section-icon" />
+                            <span>Google Drive</span>
+                            <span className={googleDriveConnected ? "account-card__badge account-card__badge--enabled" : "account-card__badge"}>
+                              {googleDriveConnected ? "Connecté" : "Non connecté"}
+                            </span>
+                          </button>
+                          
+                          {isGoogleDriveExpanded && (
+                            <div className="account-card__section-content">
+                              {!googleDriveConnected ? (
+                                <>
+                                  <p className="muted" style={{ marginBottom: "1rem" }}>
+                                    Connectez votre compte Google Drive pour activer l'upload automatique des documents.
+                                    Les fichiers seront organisés par numéro de téléphone.
+                                  </p>
+                                  <button
+                                    className="settings-btn"
+                                    onClick={() => handleConnectGoogleDrive(acc.id)}
+                                    type="button"
+                                  >
+                                    <FiCloud style={{ marginRight: "0.5rem" }} />
+                                    Se connecter avec Google Drive
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                                    <span style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
+                                      Compte Google connecté
+                                    </span>
+                                    <button
+                                      className="danger subtle"
+                                      onClick={() => handleDisconnectGoogleDrive(acc.id)}
+                                      type="button"
+                                    >
+                                      Déconnecter
+                                    </button>
+                                  </div>
+                                  
+                                  <label className="account-card__toggle-label">
+                                    <input
+                                      type="checkbox"
+                                      checked={googleDriveEnabled}
+                                      onChange={(e) =>
+                                        handleUpdateGoogleDrive(acc.id, {
+                                          google_drive_enabled: e.target.checked,
+                                        })
+                                      }
+                                    />
+                                    <span>Activer l'upload automatique vers Google Drive</span>
+                                  </label>
+                                  
+                                  {googleDriveEnabled && (
+                                    <div className="account-card__input-group">
+                                      <label>
+                                        Dossier racine Google Drive
+                                        <div className="google-drive-folder-selector">
+                                          <div className="google-drive-folder-selector__current">
+                                            {googleDriveFolderId ? (
+                                              <span className="folder-path">
+                                                <FiFolder /> Dossier sélectionné
+                                              </span>
+                                            ) : (
+                                              <span className="folder-path muted">
+                                                <FiFolder /> Racine du Drive
+                                              </span>
+                                            )}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            className="btn-secondary"
+                                            onClick={() => handleOpenFolderPicker(acc.id)}
+                                          >
+                                            <FiFolder /> Parcourir les dossiers
+                                          </button>
+                                        </div>
+                                      </label>
+                                      <small className="muted">
+                                        Le dossier racine où seront créés les dossiers par numéro de téléphone.
+                                        Les documents seront organisés dans des dossiers nommés d'après le numéro de téléphone de chaque contact.
+                                        Si aucun dossier n'est sélectionné, la racine de votre Google Drive sera utilisée.
+                                      </small>
+                                      <button
+                                        type="button"
+                                        className="btn-secondary"
+                                        onClick={() => handleBackfillGoogleDrive(acc.id)}
+                                        disabled={backfilling[acc.id]}
+                                        style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}
+                                      >
+                                        {backfilling[acc.id] ? (
+                                          <>
+                                            <FiLoader className="spinning" />
+                                            Upload en cours...
+                                          </>
+                                        ) : (
+                                          <>
+                                            <FiUpload />
+                                            Uploader les médias existants
+                                          </>
+                                        )}
+                                      </button>
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        
+                        <button
+                          className="danger subtle"
+                          onClick={() => handleDeleteAccount(acc.id)}
+                          type="button"
+                        >
+                          Supprimer
+                        </button>
+                      </>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           ) : (
             <p>Aucun compte pour le moment.</p>
@@ -697,6 +915,18 @@ export default function SettingsPanel({
         </div>
       )}
       </div>
+
+      {showFolderPicker && folderPickerAccountId && (
+        <GoogleDriveFolderPicker
+          accountId={folderPickerAccountId}
+          currentFolderId={googleDriveFolderIds[folderPickerAccountId] || accounts.find(acc => acc.id === folderPickerAccountId)?.google_drive_folder_id || "root"}
+          onSelect={(folderId) => handleFolderSelect(folderPickerAccountId, folderId)}
+          onClose={() => {
+            setShowFolderPicker(false);
+            setFolderPickerAccountId(null);
+          }}
+        />
+      )}
     </div>
   );
 }

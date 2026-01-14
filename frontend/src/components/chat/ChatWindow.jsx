@@ -143,8 +143,8 @@ export default function ChatWindow({
               return timeDiff < 10000;
             });
             
-            // Supprimer si correspondant trouvé OU si trop ancien (plus de 3 secondes)
-            if (matching || age > 3000) {
+            // Supprimer si correspondant trouvé OU si trop ancien (plus de 30 secondes)
+            if (matching || age > 30000) {
               optimisticToRemove.add(msg.id);
             }
           }
@@ -245,14 +245,59 @@ export default function ChatWindow({
         // Ne pas bloquer si ça échoue, c'est juste un bonus
       });
     
-    // Charger automatiquement tout l'historique
-    const loadAllHistory = async () => {
-      let hasMore = true;
-      let before = null;
-      let allMessages = [];
+    // Charger d'abord les 100 derniers messages pour un affichage immédiat
+    const loadMessages = async () => {
+      // ÉTAPE 1: Charger les 100 derniers messages immédiatement
+      const firstRes = await getMessages(conversationId, { limit: 100 });
+      const firstFiltered = firstRes.data.filter((msg) => {
+        const type = (msg.message_type || "").toLowerCase();
+        if (["reaction", "status"].includes(type)) return false;
+        if (profile?.id && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(profile.id)) {
+          return false;
+        }
+        return true;
+      });
       
-      while (hasMore && conversationId) {
-        const res = await getMessages(conversationId, before ? { before, limit: 100 } : { limit: 100 });
+      // Afficher immédiatement les premiers messages
+      setMessages(sortMessages(firstFiltered));
+      setIsInitialLoad(false);
+      
+      // Scroll en bas immédiatement
+      setTimeout(() => {
+        if (messagesEndRef.current && messagesContainerRef.current) {
+          const container = messagesContainerRef.current;
+          container.scrollTop = container.scrollHeight;
+          messagesEndRef.current.scrollIntoView({ behavior: "auto" });
+        }
+      }, 50);
+      
+      // Si on a moins de 100 messages, on a tout chargé
+      if (firstFiltered.length < 100) {
+        setHasMoreMessages(false);
+        return;
+      }
+      
+      // ÉTAPE 2: Charger l'historique plus ancien en arrière-plan progressivement
+      let hasMore = true;
+      let before = firstFiltered.reduce((oldest, msg) => {
+        const ts = msg.timestamp || msg.created_at;
+        if (!ts) return oldest;
+        const date = new Date(ts);
+        if (isNaN(date.getTime())) return oldest;
+        const time = date.getTime();
+        return !oldest || time < oldest ? time : oldest;
+      }, null);
+      
+      if (before) {
+        before = new Date(before).toISOString();
+        setOldestMessageTimestamp(before);
+      }
+      
+      let allMessages = [...firstFiltered];
+      
+      // Charger progressivement l'historique (batch par batch)
+      while (hasMore && conversationId && before) {
+        const res = await getMessages(conversationId, { before, limit: 100 });
         const filtered = res.data.filter((msg) => {
           const type = (msg.message_type || "").toLowerCase();
           if (["reaction", "status"].includes(type)) return false;
@@ -269,6 +314,9 @@ export default function ChatWindow({
         
         // Ajouter les nouveaux messages à la liste complète
         allMessages = [...allMessages, ...filtered];
+        
+        // Mettre à jour la liste complète (sans bloquer l'UI)
+        setMessages(sortMessages(allMessages));
         
         // Trouver le timestamp du message le plus ancien
         const oldest = filtered.reduce((oldest, msg) => {
@@ -293,22 +341,10 @@ export default function ChatWindow({
         }
       }
       
-      // Trier et afficher tous les messages
-      setMessages(sortMessages(allMessages));
       setHasMoreMessages(false);
-      setIsInitialLoad(false);
-      
-      // Scroll en bas après le chargement complet
-      setTimeout(() => {
-        if (messagesEndRef.current && messagesContainerRef.current) {
-          const container = messagesContainerRef.current;
-          container.scrollTop = container.scrollHeight;
-          messagesEndRef.current.scrollIntoView({ behavior: "auto" });
-        }
-      }, 100);
     };
     
-    loadAllHistory();
+    loadMessages();
   }, [conversationId, sortMessages, profile?.id]);
 
   // Marquer la conversation comme lue quand elle est ouverte et active
@@ -485,26 +521,36 @@ export default function ChatWindow({
               const cleaned = prev.filter((msg) => {
                 // Supprimer les messages optimistes (temp-*) qui correspondent au nouveau message
                 if (msg.id && msg.id.startsWith("temp-")) {
-                  const contentMatch = msg.content_text === incoming.content_text;
-                  const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
-                  const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
-                  const timeDiff = Math.abs(msgTime - incomingTime);
+                  const msgContent = (msg.content_text || "").trim();
+                  const incomingContent = (incoming.content_text || "").trim();
+                  const contentMatch = msgContent === incomingContent && msgContent.length > 0;
                   
-                  // Si le contenu correspond et que c'est dans les 60 secondes, c'est le même message
-                  if (contentMatch && timeDiff < 60000) {
-                    return false; // Supprimer ce message optimiste
+                  if (contentMatch) {
+                    const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
+                    const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
+                    const timeDiff = Math.abs(msgTime - incomingTime);
+                    
+                    // Si le contenu correspond et que c'est dans les 30 secondes, c'est le même message
+                    if (timeDiff < 30000) {
+                      return false; // Supprimer ce message optimiste
+                    }
                   }
                 }
                 // Supprimer aussi les messages réels qui ont le même contenu et timestamp proche (doublons)
                 if (msg.id && !msg.id.startsWith("temp-") && msg.direction === "outbound") {
-                  const contentMatch = msg.content_text === incoming.content_text;
-                  const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
-                  const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
-                  const timeDiff = Math.abs(msgTime - incomingTime);
+                  const msgContent = (msg.content_text || "").trim();
+                  const incomingContent = (incoming.content_text || "").trim();
+                  const contentMatch = msgContent === incomingContent && msgContent.length > 0;
                   
-                  // Si le contenu correspond exactement et que c'est dans les 10 secondes, c'est un doublon
-                  if (contentMatch && timeDiff < 10000 && msg.id !== incoming.id) {
-                    return false; // Supprimer le doublon
+                  if (contentMatch) {
+                    const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
+                    const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
+                    const timeDiff = Math.abs(msgTime - incomingTime);
+                    
+                    // Si le contenu correspond exactement et que c'est dans les 10 secondes, c'est un doublon
+                    if (timeDiff < 10000 && msg.id !== incoming.id) {
+                      return false; // Supprimer le doublon
+                    }
                   }
                 }
                 return true; // Garder les autres messages
@@ -952,10 +998,10 @@ export default function ChatWindow({
               <strong>{conversation.unread_count || 0}</strong>
             </div>
             
-            {/* Bibliothèque d'images */}
+            {/* Bibliothèque de médias */}
             <div className="info-section">
-              <h4>Bibliothèque d'images</h4>
-              <MediaGallery conversationId={conversationId} mediaType="image" />
+              <h4>Bibliothèque de médias</h4>
+              <MediaGallery conversationId={conversationId} mediaType="all" />
             </div>
           </aside>
         )}

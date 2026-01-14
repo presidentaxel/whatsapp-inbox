@@ -105,6 +105,10 @@
   transform: scale(1.1);
 }
 
+.media-gallery__download-btn svg {
+  color: var(--bg-secondary);
+}
+
 .media-gallery__modal {
   position: fixed;
   top: 0;

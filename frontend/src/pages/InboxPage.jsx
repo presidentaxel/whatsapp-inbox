@@ -447,35 +447,37 @@ export default function InboxPage() {
                   Galerie
                 </button>
               </div>
-              <div className="conversation-search">
-                <input 
-                  placeholder="Taper un numéro et appuyer sur Entrée (ex: +33612345678)" 
-                  value={conversationSearch}
-                  onChange={(e) => setConversationSearch(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === "Enter" && conversationSearch.trim() && activeAccount) {
-                      const phoneNumber = conversationSearch.trim();
-                      // Vérifier si c'est un numéro de téléphone (contient des chiffres)
-                      if (/\d/.test(phoneNumber)) {
-                        try {
-                          const res = await findOrCreateConversation(activeAccount, phoneNumber);
-                          if (res.data) {
-                            setSelectedConversation(res.data);
-                            setConversationSearch("");
-                            refreshConversations(activeAccount);
+              {!showGallery && (
+                <div className="conversation-search">
+                  <input 
+                    placeholder="Taper un numéro et appuyer sur Entrée (ex: +33612345678)" 
+                    value={conversationSearch}
+                    onChange={(e) => setConversationSearch(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === "Enter" && conversationSearch.trim() && activeAccount) {
+                        const phoneNumber = conversationSearch.trim();
+                        // Vérifier si c'est un numéro de téléphone (contient des chiffres)
+                        if (/\d/.test(phoneNumber)) {
+                          try {
+                            const res = await findOrCreateConversation(activeAccount, phoneNumber);
+                            if (res.data) {
+                              setSelectedConversation(res.data);
+                              setConversationSearch("");
+                              refreshConversations(activeAccount);
+                            }
+                          } catch (error) {
+                            const errorMsg = error.response?.data?.detail || error.message || "Erreur inconnue";
+                            alert(`Impossible de créer la conversation: ${errorMsg}`);
                           }
-                        } catch (error) {
-                          const errorMsg = error.response?.data?.detail || error.message || "Erreur inconnue";
-                          alert(`Impossible de créer la conversation: ${errorMsg}`);
                         }
                       }
-                    }
-                  }}
-                />
-              </div>
+                    }}
+                  />
+                </div>
+              )}
 
               {showGallery ? (
-                <AccountMediaGallery accountId={activeAccount} mediaType="image" />
+                <AccountMediaGallery accountId={activeAccount} mediaType="all" />
               ) : (
                 <>
                   <ConversationList

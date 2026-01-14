@@ -20,6 +20,7 @@ from app.api.routes_app import router as app_router
 from app.api.routes_invitations import router as invitations_router
 from app.api.routes_users import router as users_router
 from app.api.routes_diagnostics import router as diagnostics_router
+from app.api.routes_google_drive import router as google_drive_router
 
 # Nouvelles routes WhatsApp API complète
 from app.api.routes_whatsapp_messages import router as whatsapp_messages_router
@@ -56,6 +57,7 @@ app.include_router(auth_router, prefix="/auth")
 app.include_router(conversations_router, prefix="/conversations")
 app.include_router(messages_router, prefix="/messages")
 app.include_router(accounts_router, prefix="/accounts")
+app.include_router(google_drive_router)
 app.include_router(contacts_router, prefix="/contacts")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(bot_router, prefix="/bot")

@@ -16,12 +16,16 @@ _default_account_record: Optional[Dict[str, Any]] = None
 
 
 def _sanitize_account(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Nettoie les données du compte pour l'API (masque les tokens sensibles)"""
     return {
         "id": record.get("id"),
         "name": record.get("name"),
         "slug": record.get("slug"),
         "phone_number": record.get("phone_number"),
         "phone_number_id": record.get("phone_number_id"),
+        "google_drive_enabled": record.get("google_drive_enabled", False),
+        "google_drive_folder_id": record.get("google_drive_folder_id"),
+        "google_drive_connected": bool(record.get("google_drive_access_token")),
     }
 
 
@@ -44,11 +48,21 @@ def _cache_pop(cache: Dict[str, tuple[float, Dict[str, Any]]], key: str):
     cache.pop(key, None)
 
 
+def invalidate_account_cache(account_id: str):
+    """
+    Invalide le cache d'un compte pour forcer le rechargement depuis la DB.
+    Utile après des modifications comme la connexion Google Drive.
+    """
+    _cache_pop(_account_cache, account_id)
+    # Invalider aussi les caches par phone_number_id et verify_token si on a le compte
+    # (on ne peut pas les invalider directement sans connaître les valeurs)
+
+
 async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Sequence[Dict[str, Any]]:
     await ensure_default_account()
     query = (
         supabase.table("whatsapp_accounts")
-        .select("id,name,slug,phone_number,phone_number_id,is_active")
+        .select("id,name,slug,phone_number,phone_number_id,is_active,google_drive_enabled,google_drive_folder_id,google_drive_access_token,google_drive_refresh_token,google_drive_token_expiry")
         .eq("is_active", True)
         .order("name")
     )
@@ -224,6 +238,24 @@ async def create_account(payload: Dict[str, Any]) -> Dict[str, Any]:
     if record.get("verify_token"):
         _cache_set(_verify_cache, record["verify_token"], record)
     return _sanitize_account(record)
+
+
+async def update_account(account_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Met à jour un compte WhatsApp"""
+    await supabase_execute(
+        supabase.table("whatsapp_accounts")
+        .update(updates)
+        .eq("id", account_id)
+    )
+    # Invalider le cache
+    _cache_pop(_account_cache, account_id)
+    # Clear from derived caches
+    for cache in (_phone_cache, _verify_cache):
+        keys_to_purge = [key for key, (_, record) in cache.items() if record.get("id") == account_id]
+        for key in keys_to_purge:
+            cache.pop(key, None)
+    # Récupérer le compte mis à jour
+    return await get_account_by_id(account_id)
 
 
 async def delete_account(account_id: str) -> bool:
