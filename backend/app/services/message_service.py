@@ -375,30 +375,53 @@ async def _process_incoming_message(
             "media_filename": media_meta.get("media_filename"),
         }
         
-        # Faire l'upsert
-        await supabase_execute(
-            supabase.table("messages").upsert(
-                message_payload,
-                on_conflict="wa_message_id",
+        # Faire l'upsert avec logging détaillé
+        logger.info(f"💾 [MESSAGE INSERT] Attempting to upsert message: wa_message_id={message.get('id')}, conversation_id={conversation['id']}, direction=inbound")
+        logger.info(f"💾 [MESSAGE INSERT] Payload: {json.dumps({k: v for k, v in message_payload.items() if k != 'content_text'}, indent=2)}")
+        
+        try:
+            upsert_result = await supabase_execute(
+                supabase.table("messages").upsert(
+                    message_payload,
+                    on_conflict="wa_message_id",
+                )
             )
-        )
+            
+            if upsert_result.data:
+                logger.info(f"✅ [MESSAGE INSERT] Message upserted successfully: {len(upsert_result.data)} row(s) affected")
+                if len(upsert_result.data) > 0:
+                    message_db_id = upsert_result.data[0].get("id")
+                    logger.info(f"✅ [MESSAGE INSERT] Message ID from upsert result: {message_db_id}")
+            else:
+                logger.warning(f"⚠️ [MESSAGE INSERT] Upsert returned no data (might be an update, not insert)")
+        except Exception as upsert_error:
+            logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Failed to upsert message: {upsert_error}", exc_info=True)
+            raise  # Re-raise pour que l'erreur soit visible dans les logs
         
         # Récupérer l'ID du message en cherchant par wa_message_id
         message_db_id = None
         if message.get("id"):
             existing_msg = await supabase_execute(
                 supabase.table("messages")
-                .select("id")
+                .select("id, conversation_id, direction")
                 .eq("wa_message_id", message.get("id"))
                 .limit(1)
             )
             if existing_msg.data:
                 message_db_id = existing_msg.data[0].get("id")
-                logger.debug(f"✅ Message ID retrieved: {message_db_id}")
+                stored_conv_id = existing_msg.data[0].get("conversation_id")
+                stored_direction = existing_msg.data[0].get("direction")
+                logger.info(f"✅ [MESSAGE INSERT] Message ID retrieved: {message_db_id}, conversation_id={stored_conv_id}, direction={stored_direction}")
+                
+                # Vérifier que le message est bien dans la bonne conversation
+                if stored_conv_id != conversation["id"]:
+                    logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation! Expected: {conversation['id']}, Got: {stored_conv_id}")
+                if stored_direction != "inbound":
+                    logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction! Expected: inbound, Got: {stored_direction}")
             else:
-                logger.warning(f"⚠️ Message inserted but ID not found by wa_message_id: {message.get('id')}")
+                logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message upserted but not found by wa_message_id: {message.get('id')}")
         else:
-            logger.warning("⚠️ Message has no wa_message_id, cannot retrieve database ID")
+            logger.warning("⚠️ [MESSAGE INSERT] Message has no wa_message_id, cannot retrieve database ID")
 
         # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
         # IMPORTANT: Le téléchargement se fait automatiquement dès la réception, sans attendre que l'utilisateur ouvre le chat

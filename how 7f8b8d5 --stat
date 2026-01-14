@@ -1,0 +1,50 @@
+[33m86c9971[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m Changement code prb env4
+[33m80b5c27[m Changement code prb env3
+[33m449258b[m Changement code prb env2
+[33ma106113[m Changement code prb env
+[33m7f8b8d5[m Patch 1.52
+[33m2c439c8[m Galery ajout
+[33me2ad510[m Nouvelle version template
+[33m6f9bf24[m Ajout bouton template
+[33mefe7251[m Changement design templates
+[33mc4a96fa[m Mise à jour affichage horaire
+[33m81aa47c[m Systeme de notification MAJ
+[33m6e78eda[m Gestion des codes erreurs
+[33ma44dbcd[m bouton bug fix
+[33ma577b2c[m template bouton
+[33m9dd375c[m Corection gestion templates
+[33mb79b44d[m Gestion couleur -correct
+[33me0fcbc6[m Gestion template bien meilleure
+[33md260380[m Envoi de template --pas fini --bug d'affichage
+[33m07e7417[m Notification user droit==aucun
+[33m0e5b9cb[m Ajout de la gestion de template
+[33m921907c[m Modifications notifs
+[33m48a0bc8[m Ajout notifs
+[33m3af2be3[m Envoi de documents + photos et fix
+[33mb7b202a[m  changement app mobile
+[33md7f0e46[m Correction BUGS affichage
+[33me5debe4[m MAJ
+[33m586d90a[m MAJ règles + léger design
+[33mc2f231f[m MAJ Gemini
+[33md3ef5aa[m Ajout de nouveau design, test notifs, test Gemini
+[33mf9792b3[m Ajout design settings --en cours
+[33m9494bb4[m Ajout des notifactions --en cours
+[33mf9c4507[m Changement de design
+[33meff487b[m Amélioration IA
+[33m953d3bb[m Fix: Utilisation de OVH_USER au lieu de OVH_USERNAME
+[33m53d66f6[m Fix: Tests avec variables d'environnement mock
+[33m506f737[m push test
+[33mca88078[m issues fix, j'espère
+[33m802e326[m test en cor5555
+[33mcea0cb2[m test en core
+[33m823999b[m ON corrige encore
+[33m9b0d463[m Tentative de correction
+[33mcacc20c[m bug encore
+[33m585e27d[m bug fix4
+[33m5537512[m bug fix3
+[33mec39155[m bug fix2
+[33m62725a8[m bug fix
+[33m8dc6a7e[m bug/debug
+[33ma99dec2[m[33m ([m[1;32msauvegarde-modifications-avant-notif[m[33m)[m Sauvegarde des modifications avant retour au commit notif
+[33mc294e16[m correction de bug --en cours
+[33m4f17fa2[m changement de design whatsapp
