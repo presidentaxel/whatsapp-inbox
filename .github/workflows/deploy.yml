@@ -110,6 +110,40 @@ jobs:
               fi
             fi
             
+            # Configurer les variables Google Drive depuis les secrets GitHub
+            BACKEND_ENV="../backend/.env"
+            if [ ! -f "$BACKEND_ENV" ]; then
+              echo "⚠️  Fichier backend/.env non trouvé, création..."
+              mkdir -p ../backend
+              touch "$BACKEND_ENV"
+            fi
+            # Utilisation d'une fonction pour gérer l'ajout/mise à jour de manière sûre
+            update_env_var() {
+              local var_name=$1
+              local var_value=$2
+              local env_file=$3
+              
+              if [ -z "$var_value" ]; then
+                echo "⚠️  $var_name non défini dans les secrets GitHub (optionnel)"
+                return
+              fi
+              
+              # Supprimer la ligne existante si elle existe, puis ajouter la nouvelle
+              grep -v "^${var_name}=" "$env_file" > "${env_file}.tmp" || true
+              mv "${env_file}.tmp" "$env_file"
+              echo "${var_name}=${var_value}" >> "$env_file"
+              echo "✅ $var_name configuré dans backend/.env"
+            }
+            
+            # Configurer GOOGLE_DRIVE_CLIENT_ID
+            update_env_var "GOOGLE_DRIVE_CLIENT_ID" "${{ secrets.GOOGLE_DRIVE_CLIENT_ID }}" "$BACKEND_ENV"
+            
+            # Configurer GOOGLE_DRIVE_CLIENT_SECRET
+            update_env_var "GOOGLE_DRIVE_CLIENT_SECRET" "${{ secrets.GOOGLE_DRIVE_CLIENT_SECRET }}" "$BACKEND_ENV"
+            
+            # Configurer GOOGLE_DRIVE_REDIRECT_URI
+            update_env_var "GOOGLE_DRIVE_REDIRECT_URI" "${{ secrets.GOOGLE_DRIVE_REDIRECT_URI }}" "$BACKEND_ENV"
+            
             # Rebuild et redémarrer les services
             echo "🔨 Rebuild des images..."
             docker compose -f docker-compose.prod.yml build --no-cache backend frontend || true

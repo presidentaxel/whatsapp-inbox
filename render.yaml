@@ -21,6 +21,14 @@ services:
         sync: false
       - key: PORT
         value: "8000"
+      # Google Drive OAuth2 (optionnel - requis pour l'intégration Google Drive)
+      - key: GOOGLE_DRIVE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_DRIVE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_DRIVE_REDIRECT_URI
+        sync: false
+        # Exemple: https://whatsapp.lamaisonduchauffeurvtc.fr/api/auth/google-drive/callback
 
   - type: web
     name: whatsapp-inbox-frontend

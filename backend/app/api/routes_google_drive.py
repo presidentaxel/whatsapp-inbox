@@ -3,7 +3,8 @@ Routes pour l'authentification Google Drive OAuth2
 """
 import logging
 from urllib.parse import urlencode
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Request
 from fastapi.responses import RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -77,6 +78,7 @@ def _get_google_drive_service_from_account(account: dict):
 
 @router.get("/auth/google-drive/init")
 async def init_google_drive_auth(
+    request: Request,
     account_id: str = Query(..., description="ID du compte WhatsApp"),
     current_user: CurrentUser = Depends(get_current_user)
 ):
@@ -84,55 +86,94 @@ async def init_google_drive_auth(
     Initie le flow OAuth2 pour Google Drive
     Retourne l'URL d'autorisation Google
     """
-    if not GOOGLE_OAUTH_AVAILABLE:
-        raise HTTPException(status_code=500, detail="Google OAuth libraries not installed")
-    
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
-    
-    account = await get_account_by_id(account_id)
-    if not account:
-        raise HTTPException(status_code=404, detail="account_not_found")
-    
-    if not settings.GOOGLE_DRIVE_CLIENT_ID or not settings.GOOGLE_DRIVE_CLIENT_SECRET:
-        raise HTTPException(status_code=500, detail="Google Drive OAuth2 not configured")
-    
-    # Créer le flow OAuth2
-    client_config = {
-        "web": {
-            "client_id": settings.GOOGLE_DRIVE_CLIENT_ID,
-            "client_secret": settings.GOOGLE_DRIVE_CLIENT_SECRET,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [settings.GOOGLE_DRIVE_REDIRECT_URI]
+    try:
+        if not GOOGLE_OAUTH_AVAILABLE:
+            logger.error("❌ Google OAuth libraries not installed")
+            raise HTTPException(status_code=500, detail="Google OAuth libraries not installed")
+        
+        current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
+        
+        account = await get_account_by_id(account_id)
+        if not account:
+            logger.error(f"❌ Account not found: {account_id}")
+            raise HTTPException(status_code=404, detail="account_not_found")
+        
+        # Vérifier la configuration avec des logs détaillés
+        has_client_id = bool(settings.GOOGLE_DRIVE_CLIENT_ID)
+        has_client_secret = bool(settings.GOOGLE_DRIVE_CLIENT_SECRET)
+        redirect_uri = settings.GOOGLE_DRIVE_REDIRECT_URI
+        
+        # Auto-détecter l'URL de redirection depuis la requête si elle n'est pas configurée ou est localhost
+        if not redirect_uri or redirect_uri.startswith("http://localhost"):
+            try:
+                base_url = str(request.base_url).rstrip('/')
+                redirect_uri = f"{base_url}/api/auth/google-drive/callback"
+                logger.info(f"🔍 Auto-detected redirect URI from request: {redirect_uri}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not auto-detect redirect URI: {e}")
+        
+        logger.info(f"🔍 [GOOGLE DRIVE INIT] Account: {account_id}, has_client_id: {has_client_id}, has_client_secret: {has_client_secret}, redirect_uri: {redirect_uri}")
+        
+        if not has_client_id or not has_client_secret:
+            missing_vars = []
+            if not has_client_id:
+                missing_vars.append("GOOGLE_DRIVE_CLIENT_ID")
+            if not has_client_secret:
+                missing_vars.append("GOOGLE_DRIVE_CLIENT_SECRET")
+            
+            error_msg = f"Google Drive OAuth2 not configured. Missing environment variables: {', '.join(missing_vars)}. "
+            error_msg += "Please set these variables in your Render dashboard (Environment tab) for the whatsapp-inbox-backend service."
+            logger.error(f"❌ {error_msg}")
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+        if not redirect_uri:
+            logger.error("❌ Redirect URI not configured and could not be auto-detected")
+            raise HTTPException(status_code=500, detail="GOOGLE_DRIVE_REDIRECT_URI not configured. Please set it in environment variables.")
+        
+        # Créer le flow OAuth2
+        client_config = {
+            "web": {
+                "client_id": settings.GOOGLE_DRIVE_CLIENT_ID,
+                "client_secret": settings.GOOGLE_DRIVE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [redirect_uri]
+            }
         }
-    }
-    
-    flow = Flow.from_client_config(
-        client_config,
-        scopes=['https://www.googleapis.com/auth/drive'],
-        redirect_uri=settings.GOOGLE_DRIVE_REDIRECT_URI
-    )
-    
-    # Créer l'URL d'autorisation avec state pour identifier le compte
-    authorization_url, state = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent'  # Demander le consentement pour obtenir le refresh_token
-    )
-    
-    # Encoder l'account_id dans le state
-    import base64
-    state_with_account = base64.urlsafe_b64encode(f"{state}:{account_id}".encode()).decode()
-    
-    # Ajouter le state modifié à l'URL
-    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-    parsed = urlparse(authorization_url)
-    params = parse_qs(parsed.query)
-    params['state'] = [state_with_account]
-    new_query = urlencode(params, doseq=True)
-    final_url = urlunparse(parsed._replace(query=new_query))
-    
-    return {"authorization_url": final_url}
+        
+        flow = Flow.from_client_config(
+            client_config,
+            scopes=['https://www.googleapis.com/auth/drive'],
+            redirect_uri=redirect_uri
+        )
+        
+        # Créer l'URL d'autorisation avec state pour identifier le compte
+        authorization_url, state = flow.authorization_url(
+            access_type='offline',
+            include_granted_scopes='true',
+            prompt='consent'  # Demander le consentement pour obtenir le refresh_token
+        )
+        
+        # Encoder l'account_id dans le state
+        import base64
+        state_with_account = base64.urlsafe_b64encode(f"{state}:{account_id}".encode()).decode()
+        
+        # Ajouter le state modifié à l'URL
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        parsed = urlparse(authorization_url)
+        params = parse_qs(parsed.query)
+        params['state'] = [state_with_account]
+        new_query = urlencode(params, doseq=True)
+        final_url = urlunparse(parsed._replace(query=new_query))
+        
+        logger.info(f"✅ Google Drive OAuth URL generated for account {account_id}")
+        return {"authorization_url": final_url}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error initializing Google Drive auth: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error initializing Google Drive auth: {str(e)}")
 
 
 @router.get("/auth/google-drive/callback")

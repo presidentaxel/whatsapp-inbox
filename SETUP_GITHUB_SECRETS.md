@@ -73,6 +73,44 @@ Si ça fonctionne, vous pouvez continuer.
 - **Name** : `OVH_SSH_PORT`
 - **Value** : `22` (ou votre port SSH si différent)
 
+## 🔐 Secrets Google Drive (Optionnel - requis pour l'intégration Google Drive)
+
+Si vous utilisez l'intégration Google Drive, vous devez également configurer ces secrets :
+
+### 1. Obtenir les identifiants Google OAuth2
+
+1. Allez sur [Google Cloud Console](https://console.cloud.google.com)
+2. Créez un projet ou sélectionnez un projet existant
+3. Activez l'API Google Drive
+4. Créez des identifiants OAuth 2.0 :
+   - Type : **Application Web**
+   - URI de redirection autorisés : `https://votre-domaine.com/api/auth/google-drive/callback`
+5. Récupérez le **Client ID** et le **Client Secret**
+
+### 2. Configurer les Secrets dans GitHub
+
+1. Allez dans votre repo GitHub
+2. **Settings** → **Secrets and variables** → **Actions**
+3. Cliquez sur **New repository secret**
+4. Ajoutez chaque secret :
+
+#### Secret 1 : GOOGLE_DRIVE_CLIENT_ID
+- **Name** : `GOOGLE_DRIVE_CLIENT_ID`
+- **Value** : Votre Client ID Google (ex: `580123451962-xxxxx.apps.googleusercontent.com`)
+
+#### Secret 2 : GOOGLE_DRIVE_CLIENT_SECRET
+- **Name** : `GOOGLE_DRIVE_CLIENT_SECRET`
+- **Value** : Votre Client Secret Google (visible uniquement à la création)
+
+#### Secret 3 : GOOGLE_DRIVE_REDIRECT_URI
+- **Name** : `GOOGLE_DRIVE_REDIRECT_URI`
+- **Value** : `https://votre-domaine.com/api/auth/google-drive/callback`
+  - Remplacez `votre-domaine.com` par votre vrai domaine (ex: `whatsapp.lamaisonduchauffeurvtc.fr`)
+
+### 3. Comment ça fonctionne
+
+Le workflow GitHub Actions configure automatiquement ces variables dans le fichier `backend/.env` sur votre serveur lors de chaque déploiement. Vous n'avez pas besoin de les configurer manuellement sur le serveur.
+
 ### 5. Vérifier la Configuration
 
 Après avoir ajouté les secrets, le workflow de déploiement devrait fonctionner.
