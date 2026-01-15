@@ -369,22 +369,6 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   const isDeletedForAll = !!message.deleted_for_all_at;
   const isEdited = !!message.edited_at;
 
-  // Log de diagnostic pour les messages avec média
-  useEffect(() => {
-    if (hasMedia || FETCHABLE_MEDIA.has(messageType)) {
-      console.log(`🔍 [FRONTEND MESSAGE] Message ${message.id} media info:`, {
-        message_id: message.id,
-        message_type: messageType,
-        has_media_id: !!message.media_id,
-        media_id: message.media_id,
-        has_storage_url: !!message.storage_url,
-        storage_url: message.storage_url,
-        is_media: isMedia,
-        is_fetchable: FETCHABLE_MEDIA.has(messageType)
-      });
-    }
-  }, [message.id, messageType, hasMedia, isMedia]);
-
   const bodyResult = renderBody(message);
   const bodyContent = bodyResult?.content || bodyResult;
   const buttons = bodyResult?.buttons || null;

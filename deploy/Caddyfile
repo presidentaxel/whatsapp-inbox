@@ -69,6 +69,14 @@
     Pragma "no-cache"
   }
 
+  # Configure MIME types for JavaScript modules before proxying
+  # Critical: .mjs files must be served with application/javascript MIME type
+  @mjs path_regexp \.mjs$
+  handle @mjs {
+    header Content-Type application/javascript
+    reverse_proxy frontend:80
+  }
+
   handle {
     reverse_proxy frontend:80
   }
