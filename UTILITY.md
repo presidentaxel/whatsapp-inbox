@@ -28,7 +28,22 @@ sudo docker compose -f docker-compose.prod.yml up -d --force-recreate backend
 
 ## Accès aux logs
 ```bash
+#backend
 ssh ubuntu@217.182.65.32
 cd /opt/whatsapp-inbox/deploy
 docker compose -f docker-compose.prod.yml logs -f backend
+#frontend
+ssh ubuntu@217.182.65.32
+cd /opt/whatsapp-inbox/deploy
+docker compose -f docker-compose.prod.yml logs -f frontend
+```
+
+## Rebuild
+```bash
+#frontend
+ssh ubuntu@217.182.65.32
+cd /opt/whatsapp-inbox/deploy
+docker compose -f docker-compose.prod.yml stop frontend
+docker compose -f docker-compose.prod.yml build --no-cache frontend
+docker compose -f docker-compose.prod.yml up -d frontend
 ```

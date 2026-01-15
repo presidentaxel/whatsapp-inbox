@@ -51,7 +51,9 @@ async def update_account_google_drive(
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """Met à jour la configuration Google Drive d'un compte WhatsApp"""
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
+    # Vérifier que l'utilisateur a au moins accès en lecture au compte
+    current_user.require(PermissionCodes.ACCOUNTS_VIEW, account_id)
+    
     account = await get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
@@ -59,6 +61,11 @@ async def update_account_google_drive(
     updates = payload.dict(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    
+    # Si l'utilisateur essaie de modifier google_drive_enabled, il faut ACCOUNTS_MANAGE
+    # Mais pour changer seulement le dossier (google_drive_folder_id), ACCOUNTS_VIEW suffit
+    if "google_drive_enabled" in updates:
+        current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
     
     updated = await update_account(account_id, updates)
     if not updated:
