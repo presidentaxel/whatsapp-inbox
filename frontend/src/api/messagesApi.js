@@ -25,3 +25,5 @@ export const getConversationMediaGallery = (conversationId, mediaType = "image",
   api.get(`/messages/media-gallery/${conversationId}`, { params: { media_type: mediaType, limit } });
 export const getAccountMediaGallery = (accountId, mediaType = "image", limit = 500) => 
   api.get(`/messages/media-gallery-account/${accountId}`, { params: { media_type: mediaType, limit } });
+export const pinMessage = (messageId) => api.post(`/messages/${messageId}/pin`);
+export const unpinMessage = (messageId) => api.post(`/messages/${messageId}/unpin`);

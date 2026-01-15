@@ -69,16 +69,14 @@
     Pragma "no-cache"
   }
 
-  # Configure MIME types for JavaScript modules before proxying
-  # Critical: .mjs files must be served with application/javascript MIME type
-  @mjs path_regexp \.mjs$
-  handle @mjs {
-    header Content-Type application/javascript
-    reverse_proxy frontend:80
-  }
-
+  # Frontend static files - let nginx handle MIME types
+  # Nginx is configured to serve .mjs files with correct Content-Type
   handle {
-    reverse_proxy frontend:80
+    reverse_proxy frontend:80 {
+      # Preserve original headers from nginx
+      header_down -X-Forwarded-For
+      header_down -X-Real-IP
+    }
   }
 
   header {

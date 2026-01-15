@@ -1954,3 +1954,69 @@ async def check_phone_has_whatsapp(
     )
     
     return result
+
+
+@router.post("/{message_id}/pin")
+async def pin_message(
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Épingle un message dans une conversation.
+    """
+    from app.core.db import supabase_execute, supabase
+    
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+
+    # Épingler le message
+    result = await supabase_execute(
+        supabase.table("messages")
+        .update({"is_pinned": True})
+        .eq("id", message_id)
+    )
+    
+    if not result.data:
+        raise HTTPException(status_code=500, detail="failed_to_pin_message")
+    
+    return {"status": "pinned", "message_id": message_id}
+
+
+@router.post("/{message_id}/unpin")
+async def unpin_message(
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Désépingle un message dans une conversation.
+    """
+    from app.core.db import supabase_execute, supabase
+    
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+
+    # Désépingler le message
+    result = await supabase_execute(
+        supabase.table("messages")
+        .update({"is_pinned": False})
+        .eq("id", message_id)
+    )
+    
+    if not result.data:
+        raise HTTPException(status_code=500, detail="failed_to_unpin_message")
+    
+    return {"status": "unpinned", "message_id": message_id}

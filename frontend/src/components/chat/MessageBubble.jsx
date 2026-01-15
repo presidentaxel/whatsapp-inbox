@@ -12,6 +12,7 @@ import {
   FiLink,
   FiSend,
 } from "react-icons/fi";
+import { MdPushPin } from "react-icons/md";
 import { api } from "../../api/axiosClient";
 import MessageReactions from "./MessageReactions";
 import MessageStatus from "./MessageStatus";
@@ -368,6 +369,7 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   const isMedia = (FETCHABLE_MEDIA.has(messageType) || isTemplateWithImage) && hasMedia;
   const isDeletedForAll = !!message.deleted_for_all_at;
   const isEdited = !!message.edited_at;
+  const isPinned = !!message.is_pinned;
 
   const bodyResult = renderBody(message);
   const bodyContent = bodyResult?.content || bodyResult;
@@ -403,10 +405,15 @@ export default function MessageBubble({ message, conversation, onReactionChange,
     <div className="message-with-buttons-wrapper">
       <div
         ref={bubbleRef}
-        className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""}`}
+        className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""} ${isPinned ? "bubble--pinned" : ""}`}
         onContextMenu={onContextMenu}
         style={{ position: "relative" }}
       >
+        {isPinned && (
+          <div className="bubble__pinned-indicator" title="Message épinglé">
+            <MdPushPin />
+          </div>
+        )}
         {isDeletedForAll ? (
           <span className="bubble__text bubble__text--deleted">
             {mine ? "Vous avez supprimé ce message" : "Ce message a été supprimé"}

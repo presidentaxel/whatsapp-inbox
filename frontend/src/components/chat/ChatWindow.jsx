@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FiSearch, FiInfo } from "react-icons/fi";
+import { FiSearch, FiInfo, FiX } from "react-icons/fi";
 import { AiFillStar, AiOutlineStar } from "react-icons/ai";
-import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage, checkAndDownloadConversationMedia } from "../../api/messagesApi";
+import { MdPushPin } from "react-icons/md";
+import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage, checkAndDownloadConversationMedia, pinMessage, unpinMessage } from "../../api/messagesApi";
 import { markConversationRead } from "../../api/conversationsApi";
 import MessageBubble from "./MessageBubble";
 import AdvancedMessageInput from "./AdvancedMessageInput";
@@ -9,6 +10,7 @@ import TypingIndicator from "./TypingIndicator";
 import MediaGallery from "./MediaGallery";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
+import { formatRelativeDateTime } from "../../utils/date";
 import { notifyNewMessage, isNotificationEnabledForAccount } from "../../utils/notifications";
 import { useAuth } from "../../context/AuthContext";
 
@@ -698,15 +700,54 @@ export default function ChatWindow({
   const botEnabled = !!conversation?.bot_enabled;
 
   const filteredMessages = useMemo(() => {
-    if (!showSearch || !searchTerm.trim()) {
-      return messages;
+    let filtered = messages;
+    
+    // Appliquer la recherche si active
+    if (showSearch && searchTerm.trim()) {
+      const term = searchTerm.toLowerCase().trim();
+      filtered = filtered.filter((m) => {
+        const content = (m.content_text || "").toLowerCase();
+        return content.includes(term);
+      });
     }
-    const term = searchTerm.toLowerCase().trim();
-    return messages.filter((m) => {
-      const content = (m.content_text || "").toLowerCase();
-      return content.includes(term);
-    });
+    
+    // Retourner les messages dans l'ordre chronologique (sans séparer les épinglés)
+    return filtered;
   }, [messages, searchTerm, showSearch]);
+
+  // Messages épinglés pour le header
+  const pinnedMessages = useMemo(() => {
+    return messages.filter((m) => m.is_pinned === true);
+  }, [messages]);
+
+  // Références pour scroller vers les messages épinglés
+  const messageRefs = useRef({});
+
+  // Fonction pour scroller vers un message spécifique
+  const scrollToMessage = useCallback((messageId) => {
+    const messageElement = messageRefs.current[messageId];
+    if (messageElement && messagesContainerRef.current) {
+      const container = messagesContainerRef.current;
+      const elementTop = messageElement.offsetTop;
+      const containerHeight = container.clientHeight;
+      const scrollPosition = elementTop - containerHeight / 2 + messageElement.offsetHeight / 2;
+      
+      container.scrollTo({
+        top: scrollPosition,
+        behavior: 'smooth'
+      });
+      
+      // Mettre en surbrillance le message brièvement
+      messageElement.style.transition = 'background-color 0.3s ease';
+      messageElement.style.backgroundColor = 'rgba(37, 211, 102, 0.2)';
+      setTimeout(() => {
+        messageElement.style.backgroundColor = '';
+        setTimeout(() => {
+          messageElement.style.transition = '';
+        }, 300);
+      }, 2000);
+    }
+  }, []);
 
   // Fonction pour vérifier si l'utilisateur est proche du bas
   const isNearBottom = useCallback(() => {
@@ -856,9 +897,13 @@ export default function ChatWindow({
     });
   };
 
-  const handleMenuAction = async (action) => {
-    const msg = contextMenu.message;
-    setContextMenu((prev) => ({ ...prev, open: false }));
+  const handleMenuAction = async (action, messageOverride = null) => {
+    const msg = messageOverride || contextMenu.message;
+    if (messageOverride) {
+      // Si c'est appelé depuis le header, pas besoin de fermer le menu contextuel
+    } else {
+      setContextMenu((prev) => ({ ...prev, open: false }));
+    }
     if (!msg) return;
 
     if (action === "delete_me") {
@@ -872,6 +917,26 @@ export default function ChatWindow({
 
     if (action === "react") {
       setReactionTargetId(msg.id);
+      return;
+    }
+
+    if (action === "pin") {
+      try {
+        await pinMessage(msg.id);
+        refreshMessages();
+      } catch (error) {
+        console.error("Erreur lors de l'épinglage:", error);
+      }
+      return;
+    }
+
+    if (action === "unpin") {
+      try {
+        await unpinMessage(msg.id);
+        refreshMessages();
+      } catch (error) {
+        console.error("Erreur lors du désépinglage:", error);
+      }
       return;
     }
   };
@@ -945,17 +1010,60 @@ export default function ChatWindow({
       )}
 
       <div className="chat-body">
+        {/* Header des messages épinglés */}
+        {pinnedMessages.length > 0 && (
+          <div className="pinned-messages-header">
+            {pinnedMessages.map((pinnedMsg) => {
+              const preview = (pinnedMsg.content_text || "").trim();
+              const previewText = preview.length > 60 ? preview.substring(0, 60) + "..." : preview;
+              return (
+                <div
+                  key={pinnedMsg.id}
+                  className="pinned-message-preview"
+                  onClick={() => scrollToMessage(pinnedMsg.id)}
+                >
+                  <div className="pinned-message-preview__icon">
+                    <MdPushPin />
+                  </div>
+                  <div className="pinned-message-preview__content">
+                    <div className="pinned-message-preview__text">{previewText || "Message épinglé"}</div>
+                    <div className="pinned-message-preview__timestamp">
+                      {pinnedMsg.timestamp ? formatRelativeDateTime(pinnedMsg.timestamp) : ""}
+                    </div>
+                  </div>
+                  <button
+                    className="pinned-message-preview__unpin"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleMenuAction("unpin", pinnedMsg);
+                    }}
+                    title="Désépingler"
+                  >
+                    <FiX />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         <div className="messages" ref={messagesContainerRef}>
           {filteredMessages.map((m) => (
-            <MessageBubble 
-              key={m.id} 
-              message={m} 
-              conversation={conversation}
-              onReactionChange={refreshMessages}
-              forceReactionOpen={reactionTargetId === m.id}
-              onContextMenu={(e) => handleContextMenu(e, m)}
-              onResend={resendMessage}
-            />
+            <div
+              key={m.id}
+              ref={(el) => {
+                if (el) messageRefs.current[m.id] = el;
+              }}
+            >
+              <MessageBubble 
+                message={m} 
+                conversation={conversation}
+                onReactionChange={refreshMessages}
+                forceReactionOpen={reactionTargetId === m.id}
+                onContextMenu={(e) => handleContextMenu(e, m)}
+                onResend={resendMessage}
+              />
+            </div>
           ))}
           {otherTyping && <TypingIndicator />}
           <div ref={messagesEndRef} />
@@ -1005,6 +1113,11 @@ export default function ChatWindow({
           onClick={(e) => e.stopPropagation()}
         >
           <button onClick={() => handleMenuAction("react")}>Ajouter une réaction</button>
+          {contextMenu.message?.is_pinned ? (
+            <button onClick={() => handleMenuAction("unpin")}>Désépingler</button>
+          ) : (
+            <button onClick={() => handleMenuAction("pin")}>Épingler</button>
+          )}
           <button onClick={() => handleMenuAction("delete_me")}>Supprimer pour moi</button>
         </div>
       )}

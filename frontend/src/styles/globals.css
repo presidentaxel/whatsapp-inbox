@@ -1797,9 +1797,90 @@ body {
 
 .chat-body {
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Header des messages épinglés */
+.pinned-messages-header {
+  position: relative;
+  z-index: 10;
+  background: rgba(17, 27, 33, 0.95);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 8px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.pinned-message-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(37, 211, 102, 0.1);
+  border: 1px solid rgba(37, 211, 102, 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pinned-message-preview:hover {
+  background: rgba(37, 211, 102, 0.15);
+  border-color: rgba(37, 211, 102, 0.3);
+}
+
+.pinned-message-preview__icon {
+  color: #25d366;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.pinned-message-preview__content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pinned-message-preview__text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.pinned-message-preview__timestamp {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.pinned-message-preview__unpin {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  font-size: 16px;
+}
+
+.pinned-message-preview__unpin:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .messages {
@@ -3827,6 +3908,33 @@ body {
 .bubble--deleted {
   background: rgba(255, 255, 255, 0.08);
   color: #cfd4d8;
+}
+
+.bubble--pinned {
+  border-left: 3px solid #25d366;
+  background: rgba(37, 211, 102, 0.05);
+}
+
+.bubble__pinned-indicator {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: #25d366;
+  font-size: 14px;
+  opacity: 0.8;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(37, 211, 102, 0.15);
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+}
+
+.bubble.me .bubble__pinned-indicator {
+  right: auto;
+  left: 8px;
 }
 
 .bubble__text--deleted {
