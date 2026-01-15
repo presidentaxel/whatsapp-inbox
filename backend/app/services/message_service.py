@@ -529,6 +529,17 @@ async def _process_incoming_message(
 
         await _update_conversation_timestamp(conversation["id"], timestamp_iso)
         await _increment_unread_count(conversation)
+        
+        # 🆕 Marquer qu'un destinataire a répondu à une campagne si applicable
+        if message_db_id:
+            try:
+                from app.services.broadcast_service import track_reply
+                await track_reply(
+                    conversation_id=conversation["id"],
+                    message_id=message_db_id,
+                )
+            except Exception as e:
+                logger.debug(f"Broadcast reply tracking (not a broadcast reply or error): {e}")
 
         # Recharger la conversation pour s'assurer qu'on a la valeur à jour de bot_enabled
         # (l'upsert pourrait avoir préservé une ancienne valeur)
@@ -568,6 +579,7 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
             # Traduire les codes d'erreur courants en français
             error_translations = {
                 131026: "Message non livrable",
+                131030: "Numéro non autorisé (liste blanche requise)",
                 131042: "Problème d'éligibilité du compte (paiement/facturation)",
                 131047: "Message hors fenêtre gratuite (nécessite un template)",
                 131048: "Numéro de téléphone invalide",
@@ -598,6 +610,8 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
             # Ajouter des conseils pour les erreurs courantes
             if is_no_whatsapp_error:
                 error_message += " ⚠️ Ce numéro ne semble pas avoir de compte WhatsApp actif. Vérifiez que le destinataire a WhatsApp installé et que le numéro est correct."
+            elif error_code == 131030:
+                error_message += " ⚠️ Votre compte WhatsApp Business est en mode test. Pour envoyer des messages à ce numéro, vous devez l'ajouter à votre liste de numéros autorisés dans Meta Business Suite (Phone Numbers > Manage > Add phone number). Une fois votre compte approuvé par Meta, cette restriction sera levée."
             elif error_code == 131026:
                 error_message += " (Vérifiez que le numéro est valide et que le destinataire a WhatsApp installé)"
             elif error_code == 131042:
@@ -632,6 +646,18 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
             .eq("id", message_db_id)
         )
         await _update_conversation_timestamp(record["conversation_id"], timestamp_iso)
+        
+        # 🆕 Mettre à jour les stats de campagne si applicable
+        try:
+            from app.services.broadcast_service import update_recipient_stat_from_webhook
+            await update_recipient_stat_from_webhook(
+                wa_message_id=message_id,
+                status=status_value,
+                timestamp=timestamp_iso,
+                error_message=error_message,
+            )
+        except Exception as e:
+            logger.debug(f"Broadcast stat update (not a broadcast message or error): {e}")
         
         # Si le message est lu (status = "read") et qu'il a un template auto-créé, le supprimer
         if status_value == "read":

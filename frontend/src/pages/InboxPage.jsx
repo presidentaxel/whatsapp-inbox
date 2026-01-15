@@ -21,6 +21,15 @@ import WhatsAppBusinessPanel from "../components/whatsapp/WhatsAppBusinessPanel"
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
 import { clearConversationNotification } from "../registerSW";
+import { 
+  getBroadcastGroups, 
+  createBroadcastGroup, 
+  updateBroadcastGroup, 
+  deleteBroadcastGroup 
+} from "../api/broadcastApi";
+import BroadcastGroupsList from "../components/broadcast/BroadcastGroupsList";
+import BroadcastGroupEditor from "../components/broadcast/BroadcastGroupEditor";
+import BroadcastGroupChat from "../components/broadcast/BroadcastGroupChat";
 
 
 export default function InboxPage() {
@@ -37,6 +46,10 @@ export default function InboxPage() {
   const [isWindowActive, setIsWindowActive] = useState(true);
   const [conversationSearch, setConversationSearch] = useState("");
   const [showGallery, setShowGallery] = useState(false);
+  const [broadcastGroups, setBroadcastGroups] = useState([]);
+  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [showGroupEditor, setShowGroupEditor] = useState(false);
+  const [editingGroup, setEditingGroup] = useState(null);
   const canViewContacts = hasPermission?.("contacts.view");
   
   const loadAccounts = useCallback(async () => {
@@ -189,6 +202,59 @@ export default function InboxPage() {
     }
   }, [activeAccount]);
 
+  // Charger les groupes de diffusion
+  const loadBroadcastGroups = useCallback(async () => {
+    if (!activeAccount) {
+      setBroadcastGroups([]);
+      return;
+    }
+    try {
+      const res = await getBroadcastGroups(activeAccount);
+      setBroadcastGroups(res.data || []);
+    } catch (error) {
+      console.error("Error loading broadcast groups:", error);
+      setBroadcastGroups([]);
+    }
+  }, [activeAccount]);
+
+  useEffect(() => {
+    if (filter === "groups") {
+      loadBroadcastGroups();
+    }
+  }, [filter, activeAccount, loadBroadcastGroups]);
+
+  const handleCreateGroup = () => {
+    setEditingGroup(null);
+    setShowGroupEditor(true);
+  };
+
+  const handleEditGroup = (group) => {
+    setEditingGroup(group);
+    setShowGroupEditor(true);
+  };
+
+  const handleDeleteGroup = async (groupId) => {
+    try {
+      await deleteBroadcastGroup(groupId);
+      await loadBroadcastGroups();
+      if (selectedGroup?.id === groupId) {
+        setSelectedGroup(null);
+      }
+    } catch (error) {
+      console.error("Error deleting group:", error);
+      alert(error.response?.data?.detail || "Erreur lors de la suppression");
+    }
+  };
+
+  const handleGroupSaved = async (newGroup) => {
+    await loadBroadcastGroups();
+    setShowGroupEditor(false);
+    setEditingGroup(null);
+    if (newGroup) {
+      setSelectedGroup(newGroup);
+    }
+  };
+
   useEffect(() => {
     if (!activeAccount) {
       setConversations([]);
@@ -271,6 +337,9 @@ export default function InboxPage() {
     switch (filter) {
       case "unread":
         return conversations.filter((c) => c.unread_count > 0);
+      case "groups":
+        // Les groupes seront gérés séparément
+        return [];
       case "favorites":
         return conversations.filter((c) => c.is_favorite);
       case "gallery":
@@ -428,13 +497,13 @@ export default function InboxPage() {
                   Non lues
                 </button>
                 <button
-                  className={filter === "favorites" ? "active" : ""}
+                  className={filter === "groups" ? "active" : ""}
                   onClick={() => {
-                    setFilter("favorites");
+                    setFilter("groups");
                     setShowGallery(false);
                   }}
                 >
-                  Favoris
+                  Groupes
                 </button>
                 <button
                   className={filter === "gallery" ? "active" : ""}
@@ -450,7 +519,7 @@ export default function InboxPage() {
               {!showGallery && (
                 <div className="conversation-search">
                   <input 
-                    placeholder="Taper un numéro et appuyer sur Entrée (ex: +33612345678)" 
+                    placeholder="Taper un numéro et appuyer sur Entrée..." 
                     value={conversationSearch}
                     onChange={(e) => setConversationSearch(e.target.value)}
                     onKeyDown={async (e) => {
@@ -478,6 +547,15 @@ export default function InboxPage() {
 
               {showGallery ? (
                 <AccountMediaGallery accountId={activeAccount} mediaType="all" />
+              ) : filter === "groups" ? (
+                <BroadcastGroupsList
+                  groups={broadcastGroups}
+                  selectedGroupId={selectedGroup?.id}
+                  onSelectGroup={setSelectedGroup}
+                  onCreateGroup={handleCreateGroup}
+                  onEditGroup={handleEditGroup}
+                  onDeleteGroup={handleDeleteGroup}
+                />
               ) : (
                 <>
                   <ConversationList
@@ -490,7 +568,7 @@ export default function InboxPage() {
               )}
             </div>
 
-            {!showGallery && (
+            {!showGallery && filter !== "groups" && (
               <ChatWindow
                 conversation={selectedConversation}
                 onFavoriteToggle={handleFavoriteToggle}
@@ -499,9 +577,33 @@ export default function InboxPage() {
                 canSend={canSendMessage}
               />
             )}
+            {filter === "groups" && (
+              <BroadcastGroupChat
+                group={selectedGroup}
+                accountId={activeAccount}
+                onClose={() => setSelectedGroup(null)}
+              />
+            )}
           </div>
         )}
       </div>
+
+      {/* Modal d'édition de groupe */}
+      {showGroupEditor && (
+        <div className="modal-overlay" onClick={() => setShowGroupEditor(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <BroadcastGroupEditor
+              group={editingGroup}
+              accountId={activeAccount}
+              onClose={() => {
+                setShowGroupEditor(false);
+                setEditingGroup(null);
+              }}
+              onSave={handleGroupSaved}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

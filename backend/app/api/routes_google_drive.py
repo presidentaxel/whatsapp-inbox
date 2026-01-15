@@ -91,7 +91,8 @@ async def init_google_drive_auth(
             logger.error("❌ Google OAuth libraries not installed")
             raise HTTPException(status_code=500, detail="Google OAuth libraries not installed")
         
-        current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
+        # Permettre à tous les utilisateurs avec ACCOUNTS_VIEW de connecter Google Drive
+        current_user.require(PermissionCodes.ACCOUNTS_VIEW, account_id)
         
         account = await get_account_by_id(account_id)
         if not account:
@@ -264,7 +265,8 @@ async def list_google_drive_folders(
     if not GOOGLE_OAUTH_AVAILABLE:
         raise HTTPException(status_code=500, detail="Google OAuth libraries not installed")
     
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
+    # Permettre à tous les utilisateurs avec ACCOUNTS_VIEW de lister les dossiers (pour pouvoir changer le dossier)
+    current_user.require(PermissionCodes.ACCOUNTS_VIEW, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -313,7 +315,8 @@ async def disconnect_google_drive(
     """
     Déconnecte Google Drive d'un compte WhatsApp (supprime les tokens)
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE)
+    # Permettre à tous les utilisateurs avec ACCOUNTS_VIEW de déconnecter Google Drive
+    current_user.require(PermissionCodes.ACCOUNTS_VIEW, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:

@@ -554,53 +554,54 @@ export default function SettingsPanel({
                       <span>Phone ID : {acc.phone_number_id}</span>
                     </div>
                     
-                    {canManageAccounts && (
-                      <>
-                        <div className="account-card__section">
-                          <button
-                            className="account-card__section-toggle"
-                            onClick={() => toggleGoogleDriveExpanded(acc.id)}
-                            type="button"
-                          >
-                            <FiCloud className="account-card__section-icon" />
-                            <span>Google Drive</span>
-                            <span className={googleDriveConnected ? "account-card__badge account-card__badge--enabled" : "account-card__badge"}>
-                              {googleDriveConnected ? "Connecté" : "Non connecté"}
-                            </span>
-                          </button>
-                          
-                          {isGoogleDriveExpanded && (
-                            <div className="account-card__section-content">
-                              {!googleDriveConnected ? (
-                                <>
-                                  <p className="muted" style={{ marginBottom: "1rem" }}>
-                                    Connectez votre compte Google Drive pour activer l'upload automatique des documents.
-                                    Les fichiers seront organisés par numéro de téléphone.
-                                  </p>
+                    {/* Section Google Drive - visible pour tous ceux qui ont canViewAccounts */}
+                    {canViewAccounts && (
+                      <div className="account-card__section">
+                        <button
+                          className="account-card__section-toggle"
+                          onClick={() => toggleGoogleDriveExpanded(acc.id)}
+                          type="button"
+                        >
+                          <FiCloud className="account-card__section-icon" />
+                          <span>Google Drive</span>
+                          <span className={googleDriveConnected ? "account-card__badge account-card__badge--enabled" : "account-card__badge"}>
+                            {googleDriveConnected ? "Connecté" : "Non connecté"}
+                          </span>
+                        </button>
+                        
+                        {isGoogleDriveExpanded && (
+                          <div className="account-card__section-content">
+                            {!googleDriveConnected ? (
+                              <>
+                                <p className="muted" style={{ marginBottom: "1rem" }}>
+                                  Connectez votre compte Google Drive pour activer l'upload automatique des documents.
+                                  Les fichiers seront organisés par numéro de téléphone.
+                                </p>
+                                <button
+                                  className="settings-btn"
+                                  onClick={() => handleConnectGoogleDrive(acc.id)}
+                                  type="button"
+                                >
+                                  <FiCloud style={{ marginRight: "0.5rem" }} />
+                                  Se connecter avec Google Drive
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
+                                  <span style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
+                                    Compte Google connecté
+                                  </span>
                                   <button
-                                    className="settings-btn"
-                                    onClick={() => handleConnectGoogleDrive(acc.id)}
+                                    className="danger subtle"
+                                    onClick={() => handleDisconnectGoogleDrive(acc.id)}
                                     type="button"
                                   >
-                                    <FiCloud style={{ marginRight: "0.5rem" }} />
-                                    Se connecter avec Google Drive
+                                    Déconnecter
                                   </button>
-                                </>
-                              ) : (
-                                <>
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1rem" }}>
-                                    <span style={{ fontSize: "0.9rem", color: "var(--text-muted)" }}>
-                                      Compte Google connecté
-                                    </span>
-                                    <button
-                                      className="danger subtle"
-                                      onClick={() => handleDisconnectGoogleDrive(acc.id)}
-                                      type="button"
-                                    >
-                                      Déconnecter
-                                    </button>
-                                  </div>
-                                  
+                                </div>
+                                
+                                {canManageAccounts && (
                                   <label className="account-card__toggle-label">
                                     <input
                                       type="checkbox"
@@ -613,37 +614,40 @@ export default function SettingsPanel({
                                     />
                                     <span>Activer l'upload automatique vers Google Drive</span>
                                   </label>
-                                  
-                                  {googleDriveEnabled && (
-                                    <div className="account-card__input-group">
-                                      <label>
-                                        Dossier racine Google Drive
-                                        <div className="google-drive-folder-selector">
-                                          <div className="google-drive-folder-selector__current">
-                                            {googleDriveFolderId ? (
-                                              <span className="folder-path">
-                                                <FiFolder /> Dossier sélectionné
-                                              </span>
-                                            ) : (
-                                              <span className="folder-path muted">
-                                                <FiFolder /> Racine du Drive
-                                              </span>
-                                            )}
-                                          </div>
-                                          <button
-                                            type="button"
-                                            className="btn-secondary"
-                                            onClick={() => handleOpenFolderPicker(acc.id)}
-                                          >
-                                            <FiFolder /> Parcourir les dossiers
-                                          </button>
+                                )}
+                                
+                                {/* Afficher le sélecteur de dossier si Google Drive est connecté (tous les utilisateurs avec canViewAccounts peuvent changer le dossier) */}
+                                {googleDriveConnected && (
+                                  <div className="account-card__input-group">
+                                    <label>
+                                      Dossier racine Google Drive
+                                      <div className="google-drive-folder-selector">
+                                        <div className="google-drive-folder-selector__current">
+                                          {googleDriveFolderId ? (
+                                            <span className="folder-path">
+                                              <FiFolder /> Dossier sélectionné
+                                            </span>
+                                          ) : (
+                                            <span className="folder-path muted">
+                                              <FiFolder /> Racine du Drive
+                                            </span>
+                                          )}
                                         </div>
-                                      </label>
-                                      <small className="muted">
-                                        Le dossier racine où seront créés les dossiers par numéro de téléphone.
-                                        Les documents seront organisés dans des dossiers nommés d'après le numéro de téléphone de chaque contact.
-                                        Si aucun dossier n'est sélectionné, la racine de votre Google Drive sera utilisée.
-                                      </small>
+                                        <button
+                                          type="button"
+                                          className="btn-secondary"
+                                          onClick={() => handleOpenFolderPicker(acc.id)}
+                                        >
+                                          <FiFolder /> Parcourir les dossiers
+                                        </button>
+                                      </div>
+                                    </label>
+                                    <small className="muted">
+                                      Le dossier racine où seront créés les dossiers par numéro de téléphone.
+                                      Les documents seront organisés dans des dossiers nommés d'après le numéro de téléphone de chaque contact.
+                                      Si aucun dossier n'est sélectionné, la racine de votre Google Drive sera utilisée.
+                                    </small>
+                                    {canManageAccounts && (
                                       <button
                                         type="button"
                                         className="btn-secondary"
@@ -663,22 +667,25 @@ export default function SettingsPanel({
                                           </>
                                         )}
                                       </button>
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                        
-                        <button
-                          className="danger subtle"
-                          onClick={() => handleDeleteAccount(acc.id)}
-                          type="button"
-                        >
-                          Supprimer
-                        </button>
-                      </>
+                                    )}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* Bouton Supprimer - uniquement pour canManageAccounts */}
+                    {canManageAccounts && (
+                      <button
+                        className="danger subtle"
+                        onClick={() => handleDeleteAccount(acc.id)}
+                        type="button"
+                      >
+                        Supprimer
+                      </button>
                     )}
                   </article>
                 );

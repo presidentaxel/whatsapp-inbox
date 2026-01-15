@@ -865,7 +865,7 @@ export default function ChatWindow({
       <div className="chat-window empty-state">
         <div>
           <img 
-            src="/favicon.svg" 
+            src="/T512xT512.svg" 
             alt="Logo LMDCVTC" 
             className="empty-state-logo"
             style={{ width: "120px", height: "120px", marginBottom: "1.5rem" }}
