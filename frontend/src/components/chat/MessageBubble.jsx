@@ -38,20 +38,8 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    console.log(`🔍 [FRONTEND MEDIA DEBUG] MediaRenderer for message ${message.id}:`, {
-      message_id: message.id,
-      message_type: messageType,
-      has_localPreview: !!message._localPreview,
-      has_storage_url: !!message.storage_url,
-      storage_url: message.storage_url,
-      has_media_id: !!message.media_id,
-      media_id: message.media_id,
-      is_fetchable: FETCHABLE_MEDIA.has(messageType)
-    });
-
     // Si on a un aperçu local, l'utiliser directement
     if (message._localPreview) {
-      console.log(`✅ [FRONTEND MEDIA] Using local preview for message ${message.id}`);
       setSource(message._localPreview);
       setLoading(false);
       setError(false);
@@ -61,7 +49,6 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
 
     // Si on a une URL de stockage Supabase, l'utiliser directement
     if (message.storage_url) {
-      console.log(`✅ [FRONTEND MEDIA] Using storage_url for message ${message.id}:`, message.storage_url);
       setSource(message.storage_url);
       setLoading(false);
       setError(false);

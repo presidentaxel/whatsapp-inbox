@@ -356,13 +356,6 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     if (disabled || !text.trim() || !conversation?.id) return;
     
     const messageText = text;
-    console.log("🚀 [FRONTEND] handleSend appelé", {
-      conversationId: conversation.id,
-      messageLength: messageText.length,
-      isOutsideFreeWindow,
-      useAutoTemplate,
-      textPreview: messageText.substring(0, 50)
-    });
     
     // Créer le message optimiste IMMÉDIATEMENT avant l'appel API pour un affichage instantané
     const tempId = `temp-${Date.now()}`;
@@ -378,7 +371,6 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     
     // Ajouter le message optimiste IMMÉDIATEMENT
     if (onSend) {
-      console.log("📨 [FRONTEND] Ajout du message optimiste IMMÉDIATEMENT");
       onSend(messageText, false, optimisticMessage);
     }
     
@@ -390,13 +382,10 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     try {
       // Appeler l'API en arrière-plan
       // Le message réel remplacera l'optimiste quand il arrivera via le webhook
-      console.log("📤 [FRONTEND] Appel à sendMessageWithAutoTemplate...");
-      const response = await sendMessageWithAutoTemplate({
+      await sendMessageWithAutoTemplate({
         conversation_id: conversation.id,
         content: messageText
       });
-      
-      console.log("✅ [FRONTEND] Réponse de sendMessageWithAutoTemplate:", response.data);
       
       // Le message optimiste sera remplacé automatiquement par le message réel
       // via le webhook Supabase ou le refreshMessages

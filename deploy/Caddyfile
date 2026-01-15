@@ -2,7 +2,7 @@
   encode zstd gzip
 
   # API routes - must be before frontend catch-all
-  # In production, backend is on Render, use BACKEND_URL env var
+  # Uses backend:8000 (Docker service) by default, or BACKEND_URL if set
   @api path /api*
   handle @api {
     uri strip_prefix /api
@@ -14,8 +14,7 @@
 
   # Webhook routes - must be before frontend catch-all
   # CRITICAL: Webhooks must work!
-  # On OVH: backend:8000 (Docker service name)
-  # On Render: Use BACKEND_URL env var if set
+  # Uses backend:8000 (Docker service name) by default, or BACKEND_URL if set
   @webhook path /webhook*
   handle @webhook {
     reverse_proxy {$BACKEND_URL:backend:8000} {

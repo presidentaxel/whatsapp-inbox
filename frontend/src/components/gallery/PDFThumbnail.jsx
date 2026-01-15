@@ -1,9 +1,21 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 
-// Configuration du worker PDF.js - utiliser le worker local depuis public
+// Configuration du worker PDF.js
+// Le fichier pdf.worker.min.mjs est dans public/ et sera copié à la racine de dist/ lors du build
 if (typeof window !== "undefined" && "Worker" in window) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+  // Utiliser le chemin public avec BASE_URL pour la compatibilité dev/prod
+  // En dev: BASE_URL est généralement "/"
+  // En prod: BASE_URL peut être "/" ou un sous-chemin selon la config
+  const baseUrl = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+  // Construire le chemin en évitant les doubles slashes
+  const workerPath = `${baseUrl}/pdf.worker.min.mjs`.replace(/\/+/g, "/");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = workerPath;
+  
+  // Debug en dev pour vérifier le chemin
+  if (import.meta.env.DEV) {
+    console.log("[PDF Worker] Worker path:", workerPath);
+  }
 }
 
 export default function PDFThumbnail({ url, width = 200, height = 200, onError }) {

@@ -41,16 +41,35 @@ async def supabase_execute(query_builder, timeout: float = 30.0, retries: int = 
             last_error = e
             # Vérifier si c'est une erreur réseau récupérable
             error_str = str(e).lower()
+            error_type = type(e).__name__
+            
+            # Détecter les erreurs de connexion récupérables
             is_network_error = any(keyword in error_str for keyword in [
                 "readerror", "connecterror", "timeout", "10035", "socket", "connection"
             ])
             
+            # ConnectionTerminated est une erreur gRPC normale lors des reconnexions Supabase
+            # On la traite comme récupérable et on la log en DEBUG pour éviter le bruit
+            is_connection_terminated = (
+                "connectionterminated" in error_str or 
+                "ConnectionTerminated" in str(e) or
+                error_type == "ConnectionTerminated"
+            )
+            
             if is_network_error and attempt < retries:
-                logger.warning(f"Supabase network error (attempt {attempt + 1}/{retries + 1}): {e}")
+                # ConnectionTerminated est une reconnexion normale, on log en DEBUG
+                if is_connection_terminated:
+                    logger.debug(f"Supabase connection terminated (attempt {attempt + 1}/{retries + 1}), reconnecting...")
+                else:
+                    logger.warning(f"Supabase network error (attempt {attempt + 1}/{retries + 1}): {e}")
                 await asyncio.sleep(0.5 * (attempt + 1))  # Backoff exponentiel
                 continue
             else:
-                logger.error(f"Supabase query error: {e}", exc_info=True)
+                # Si toutes les tentatives ont échoué, on log en ERROR
+                if is_connection_terminated and attempt >= retries:
+                    logger.warning(f"Supabase connection terminated after {retries + 1} attempts, may indicate network issues")
+                else:
+                    logger.error(f"Supabase query error: {e}", exc_info=True)
                 if attempt < retries:
                     await asyncio.sleep(0.5 * (attempt + 1))
                     continue

@@ -84,23 +84,6 @@ export default function ChatWindow({
         return true;
       });
 
-      // Log de diagnostic pour les messages avec média
-      const mediaMessages = filtered.filter(msg => {
-        const type = (msg.message_type || "").toLowerCase();
-        return ["image", "video", "audio", "document", "sticker"].includes(type);
-      });
-      if (mediaMessages.length > 0) {
-        console.log(`📥 [FRONTEND CHAT] Received ${mediaMessages.length} media messages:`, 
-          mediaMessages.map(msg => ({
-            id: msg.id,
-            type: msg.message_type,
-            has_media_id: !!msg.media_id,
-            has_storage_url: !!msg.storage_url,
-            storage_url: msg.storage_url
-          }))
-        );
-      }
-      
       // Mettre à jour les messages : fusionner avec les messages existants
       // en gardant les plus récents et en évitant les doublons
       setMessages((prev) => {
