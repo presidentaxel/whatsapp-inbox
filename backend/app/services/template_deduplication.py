@@ -227,9 +227,20 @@ async def find_or_create_template(
     """
     from app.services.pending_template_service import create_and_queue_template
     
+    logger.info(f"🔍 [FIND-OR-CREATE] ========== DÉBUT FIND_OR_CREATE ==========")
+    logger.info(f"🔍 [FIND-OR-CREATE] conversation_id={conversation_id}")
+    logger.info(f"🔍 [FIND-OR-CREATE] account_id={account_id}")
+    logger.info(f"🔍 [FIND-OR-CREATE] message_id={message_id}")
+    logger.info(f"🔍 [FIND-OR-CREATE] Paramètres reçus:")
+    logger.info(f"   - header_text: {repr(header_text)} (type: {type(header_text).__name__})")
+    logger.info(f"   - body_text: {repr(body_text)} (type: {type(body_text).__name__})")
+    logger.info(f"   - footer_text: {repr(footer_text)} (type: {type(footer_text).__name__})")
+    logger.info(f"   - buttons: {repr(buttons)} (type: {type(buttons).__name__})")
+    logger.info(f"   - text_content: {repr(text_content[:100] if text_content else None)}")
+    
     # Utiliser body_text si fourni, sinon text_content
     actual_body_text = body_text if body_text is not None else text_content
-    
+    logger.info(f"🔍 [FIND-OR-CREATE] actual_body_text: {repr(actual_body_text[:100] if actual_body_text else None)}")
     logger.info(f"🔍 [FIND-OR-CREATE] Recherche de template existant pour message {message_id}")
     
     # Vérifier le risque de spam
@@ -372,7 +383,14 @@ async def find_or_create_template(
             )
         
         # Créer le template normalement
-        return await create_and_queue_template(
+        logger.info(f"🆕 [FIND-OR-CREATE] Appel à create_and_queue_template avec:")
+        logger.info(f"   - header_text: {repr(header_text)}")
+        logger.info(f"   - body_text: {repr(body_text)}")
+        logger.info(f"   - footer_text: {repr(footer_text)}")
+        logger.info(f"   - buttons: {repr(buttons)}")
+        logger.info(f"   - text_content: {repr(text_content[:100] if text_content else None)}")
+        
+        result = await create_and_queue_template(
             conversation_id=conversation_id,
             account_id=account_id,
             message_id=message_id,
@@ -383,4 +401,9 @@ async def find_or_create_template(
             footer_text=footer_text,
             buttons=buttons
         )
+        
+        logger.info(f"🆕 [FIND-OR-CREATE] Résultat de create_and_queue_template: {result.get('success')}")
+        logger.info(f"🆕 [FIND-OR-CREATE] ========== FIN FIND_OR_CREATE ==========")
+        
+        return result
 

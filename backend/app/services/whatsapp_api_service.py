@@ -138,17 +138,37 @@ async def send_template_message(
     # Log pour déboguer
     import logging
     logger = logging.getLogger(__name__)
-    logger.info(f"📤 [WHATSAPP API] Envoi template:")
-    logger.info(f"  - template_name: {template_name}")
-    logger.info(f"  - to: {to}")
-    logger.info(f"  - language_code: {language_code}")
-    logger.info(f"  - components: {components}")
-    logger.info(f"  - components type: {type(components)}")
+    logger.info("=" * 80)
+    logger.info(f"📤 [WHATSAPP API] ========== ENVOI TEMPLATE MESSAGE ==========")
+    logger.info(f"📤 [WHATSAPP API] template_name: {template_name}")
+    logger.info(f"📤 [WHATSAPP API] language_code: {language_code}")
+    logger.info(f"📤 [WHATSAPP API] to: {to}")
+    logger.info(f"📤 [WHATSAPP API] components: {components}")
+    logger.info(f"📤 [WHATSAPP API] components type: {type(components)}")
     if components:
-        logger.info(f"  - components length: {len(components)}")
+        logger.info(f"📤 [WHATSAPP API] Nombre de components: {len(components)}")
+        logger.info(f"📤 [WHATSAPP API] Détail des components:")
         for idx, comp in enumerate(components):
-            logger.info(f"    Component {idx}: {json.dumps(comp, indent=2, ensure_ascii=False)}")
-    logger.info(f"📤 [WHATSAPP API] Payload complet: {json.dumps(payload, indent=2, ensure_ascii=False)}")
+            comp_type = comp.get("type", "UNKNOWN")
+            logger.info(f"📤 [WHATSAPP API]   Component {idx + 1}: type={comp_type}")
+            if comp_type == "HEADER":
+                logger.info(f"📤 [WHATSAPP API]     - format: {comp.get('format')}")
+                logger.info(f"📤 [WHATSAPP API]     - text: {repr(comp.get('text'))}")
+            elif comp_type == "BODY":
+                logger.info(f"📤 [WHATSAPP API]     - text: {repr(comp.get('text')[:100] if comp.get('text') else None)}")
+            elif comp_type == "FOOTER":
+                logger.info(f"📤 [WHATSAPP API]     - text: {repr(comp.get('text'))}")
+            elif comp_type == "BUTTONS":
+                buttons_list = comp.get("buttons", [])
+                logger.info(f"📤 [WHATSAPP API]     - nombre de boutons: {len(buttons_list)}")
+                for btn_idx, btn in enumerate(buttons_list):
+                    logger.info(f"📤 [WHATSAPP API]       Bouton {btn_idx + 1}: type={btn.get('type')}, text={repr(btn.get('text'))}")
+            logger.info(f"📤 [WHATSAPP API]     Component {idx + 1} complet: {json.dumps(comp, indent=2, ensure_ascii=False)}")
+    else:
+        logger.warning(f"⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
+    logger.info(f"📤 [WHATSAPP API] Payload complet envoyé à Meta:")
+    logger.info(f"📤 [WHATSAPP API] {json.dumps(payload, indent=2, ensure_ascii=False)}")
+    logger.info(f"📤 [WHATSAPP API] =============================================")
     
     response = await client.post(
         f"{GRAPH_API_BASE}/{phone_number_id}/messages",
@@ -674,8 +694,37 @@ async def create_message_template(
         "components": components
     }
     
-    logger.info(f"📤 [WHATSAPP API] Création template: name={name}, category={category}, language={language}")
-    logger.debug(f"📤 [WHATSAPP API] Payload complet: {payload}")
+    logger.info("=" * 80)
+    logger.info(f"📤 [WHATSAPP API] ========== CRÉATION TEMPLATE META ==========")
+    logger.info(f"📤 [WHATSAPP API] template_name: {name}")
+    logger.info(f"📤 [WHATSAPP API] category: {category}")
+    logger.info(f"📤 [WHATSAPP API] language: {language}")
+    logger.info(f"📤 [WHATSAPP API] components: {components}")
+    logger.info(f"📤 [WHATSAPP API] components type: {type(components)}")
+    if components:
+        logger.info(f"📤 [WHATSAPP API] Nombre de components: {len(components)}")
+        logger.info(f"📤 [WHATSAPP API] Détail des components:")
+        for idx, comp in enumerate(components):
+            comp_type = comp.get("type", "UNKNOWN")
+            logger.info(f"📤 [WHATSAPP API]   Component {idx + 1}: type={comp_type}")
+            if comp_type == "HEADER":
+                logger.info(f"📤 [WHATSAPP API]     - format: {comp.get('format')}")
+                logger.info(f"📤 [WHATSAPP API]     - text: {repr(comp.get('text'))}")
+            elif comp_type == "BODY":
+                logger.info(f"📤 [WHATSAPP API]     - text: {repr(comp.get('text')[:100] if comp.get('text') else None)}")
+            elif comp_type == "FOOTER":
+                logger.info(f"📤 [WHATSAPP API]     - text: {repr(comp.get('text'))}")
+            elif comp_type == "BUTTONS":
+                buttons_list = comp.get("buttons", [])
+                logger.info(f"📤 [WHATSAPP API]     - nombre de boutons: {len(buttons_list)}")
+                for btn_idx, btn in enumerate(buttons_list):
+                    logger.info(f"📤 [WHATSAPP API]       Bouton {btn_idx + 1}: type={btn.get('type')}, text={repr(btn.get('text'))}")
+            logger.info(f"📤 [WHATSAPP API]     Component {idx + 1} complet: {json.dumps(comp, indent=2, ensure_ascii=False)}")
+    else:
+        logger.warning(f"⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
+    logger.info(f"📤 [WHATSAPP API] Payload complet envoyé à Meta:")
+    logger.info(f"📤 [WHATSAPP API] {json.dumps(payload, indent=2, ensure_ascii=False)}")
+    logger.info(f"📤 [WHATSAPP API] =============================================")
     
     response = await client.post(
         f"{GRAPH_API_BASE}/{waba_id}/message_templates",

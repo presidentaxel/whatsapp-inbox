@@ -42,30 +42,54 @@ async def create_and_queue_template(
     """
     
     logger.info("=" * 80)
-    logger.info(f"🔧 [CREATE-TEMPLATE] Début - conversation_id={conversation_id}, account_id={account_id}, message_id={message_id}")
+    logger.info(f"🔧 [CREATE-TEMPLATE] ========== DÉBUT CRÉATION TEMPLATE ==========")
+    logger.info(f"🔧 [CREATE-TEMPLATE] conversation_id={conversation_id}")
+    logger.info(f"🔧 [CREATE-TEMPLATE] account_id={account_id}")
+    logger.info(f"🔧 [CREATE-TEMPLATE] message_id={message_id}")
+    logger.info(f"🔧 [CREATE-TEMPLATE] =============================================")
+    
+    # Normaliser les valeurs None et chaînes vides
+    # S'assurer que header_text et footer_text sont None (pas "") si vides
+    logger.info(f"🔍 [CREATE-TEMPLATE] Analyse des paramètres reçus:")
+    logger.info(f"   - header_text (avant normalisation): {repr(header_text)} (type: {type(header_text).__name__})")
+    logger.info(f"   - body_text (avant normalisation): {repr(body_text)} (type: {type(body_text).__name__})")
+    logger.info(f"   - footer_text (avant normalisation): {repr(footer_text)} (type: {type(footer_text).__name__})")
+    logger.info(f"   - buttons (avant normalisation): {repr(buttons)} (type: {type(buttons).__name__})")
+    logger.info(f"   - text_content: {repr(text_content[:100] if text_content else None)}")
+    
+    normalized_header_text = header_text.strip() if header_text and header_text.strip() else None
+    normalized_footer_text = footer_text.strip() if footer_text and footer_text.strip() else None
+    
+    logger.info(f"🔍 [CREATE-TEMPLATE] Après normalisation:")
+    logger.info(f"   - normalized_header_text: {repr(normalized_header_text)}")
+    logger.info(f"   - normalized_footer_text: {repr(normalized_footer_text)}")
     
     # Utiliser body_text si fourni, sinon text_content
     actual_body_text = body_text if body_text is not None else text_content
-    logger.info(f"🔧 [CREATE-TEMPLATE] Texte à valider (premiers 100 caractères): {actual_body_text[:100]}")
-    logger.info(f"🔧 [CREATE-TEMPLATE] Header: {header_text}, Footer: {footer_text}, Buttons: {len(buttons) if buttons else 0}")
+    logger.info(f"🔍 [CREATE-TEMPLATE] actual_body_text: {repr(actual_body_text[:100] if actual_body_text else None)}")
+    logger.info(f"🔍 [CREATE-TEMPLATE] Header: {normalized_header_text}, Footer: {normalized_footer_text}, Buttons: {len(buttons) if buttons else 0}")
+    if buttons:
+        logger.info(f"🔍 [CREATE-TEMPLATE] Détails des boutons:")
+        for idx, btn in enumerate(buttons):
+            logger.info(f"   Bouton {idx + 1}: {repr(btn)}")
     
     # Valider le texte du body
     is_valid, errors = TemplateValidator.validate_text(actual_body_text)
     
     # Valider header et footer avec leurs limites spécifiques
-    if header_text:
+    if normalized_header_text:
         # Vérifier la longueur du header (max 60 caractères)
-        if len(header_text) > TemplateValidator.MAX_HEADER_LENGTH:
-            errors.append(f"Le header ne peut pas dépasser {TemplateValidator.MAX_HEADER_LENGTH} caractères (actuellement: {len(header_text)})")
-        header_valid, header_errors = TemplateValidator.validate_text(header_text)
+        if len(normalized_header_text) > TemplateValidator.MAX_HEADER_LENGTH:
+            errors.append(f"Le header ne peut pas dépasser {TemplateValidator.MAX_HEADER_LENGTH} caractères (actuellement: {len(normalized_header_text)})")
+        header_valid, header_errors = TemplateValidator.validate_text(normalized_header_text)
         if not header_valid:
             errors.extend(header_errors)
     
-    if footer_text:
+    if normalized_footer_text:
         # Vérifier la longueur du footer (max 60 caractères)
-        if len(footer_text) > TemplateValidator.MAX_FOOTER_LENGTH:
-            errors.append(f"Le footer ne peut pas dépasser {TemplateValidator.MAX_FOOTER_LENGTH} caractères (actuellement: {len(footer_text)})")
-        footer_valid, footer_errors = TemplateValidator.validate_text(footer_text)
+        if len(normalized_footer_text) > TemplateValidator.MAX_FOOTER_LENGTH:
+            errors.append(f"Le footer ne peut pas dépasser {TemplateValidator.MAX_FOOTER_LENGTH} caractères (actuellement: {len(normalized_footer_text)})")
+        footer_valid, footer_errors = TemplateValidator.validate_text(normalized_footer_text)
         if not footer_valid:
             errors.extend(footer_errors)
     
@@ -96,14 +120,14 @@ async def create_and_queue_template(
     
     # Pour header et footer, respecter les limites Meta (60 caractères max)
     sanitized_header = None
-    if header_text:
-        sanitized_header = TemplateValidator.sanitize_for_template(header_text)
+    if normalized_header_text:
+        sanitized_header = TemplateValidator.sanitize_for_template(normalized_header_text)
         if len(sanitized_header) > TemplateValidator.MAX_HEADER_LENGTH:
             sanitized_header = sanitized_header[:TemplateValidator.MAX_HEADER_LENGTH-3] + "..."
     
     sanitized_footer = None
-    if footer_text:
-        sanitized_footer = TemplateValidator.sanitize_for_template(footer_text)
+    if normalized_footer_text:
+        sanitized_footer = TemplateValidator.sanitize_for_template(normalized_footer_text)
         if len(sanitized_footer) > TemplateValidator.MAX_FOOTER_LENGTH:
             sanitized_footer = sanitized_footer[:TemplateValidator.MAX_FOOTER_LENGTH-3] + "..."
     
@@ -167,18 +191,27 @@ async def create_and_queue_template(
                     "buttons": meta_buttons
                 })
         
-        logger.info(f"📤 [CREATE-TEMPLATE] Appel à l'API Meta pour créer le template...")
-        logger.info(f"   - WABA ID: {waba_id}")
-        logger.info(f"   - Template name: {template_name}")
-        logger.info(f"   - Category: UTILITY")
-        logger.info(f"   - Language: fr")
-        logger.info(f"   - Components: {len(components)} composants")
-        logger.info(f"   - Header: {sanitized_header[:50] if sanitized_header else 'None'}...")
-        logger.info(f"   - Body: {sanitized_body[:50]}...")
-        logger.info(f"   - Footer: {sanitized_footer[:50] if sanitized_footer else 'None'}...")
-        logger.info(f"   - Buttons: {len(meta_buttons)} boutons")
-        logger.info(f"   - Components détaillés: {json.dumps(components, indent=2, ensure_ascii=False)}")
+        logger.info(f"📤 [CREATE-TEMPLATE] ========== AVANT APPEL API META ==========")
+        logger.info(f"📤 [CREATE-TEMPLATE] WABA ID: {waba_id}")
+        logger.info(f"📤 [CREATE-TEMPLATE] Template name: {template_name}")
+        logger.info(f"📤 [CREATE-TEMPLATE] Category: UTILITY")
+        logger.info(f"📤 [CREATE-TEMPLATE] Language: fr")
+        logger.info(f"📤 [CREATE-TEMPLATE] Nombre de components: {len(components)}")
+        logger.info(f"📤 [CREATE-TEMPLATE] Header: {sanitized_header if sanitized_header else 'None (aucun header)'}")
+        logger.info(f"📤 [CREATE-TEMPLATE] Body: {sanitized_body[:100] if len(sanitized_body) > 100 else sanitized_body}")
+        logger.info(f"📤 [CREATE-TEMPLATE] Footer: {sanitized_footer if sanitized_footer else 'None (aucun footer)'}")
+        logger.info(f"📤 [CREATE-TEMPLATE] Nombre de boutons: {len(meta_buttons)}")
+        if meta_buttons:
+            logger.info(f"📤 [CREATE-TEMPLATE] Boutons détaillés:")
+            for idx, btn in enumerate(meta_buttons):
+                logger.info(f"   Bouton {idx + 1}: type={btn.get('type')}, text={btn.get('text')}")
+        else:
+            logger.warning(f"⚠️ [CREATE-TEMPLATE] AUCUN BOUTON DÉTECTÉ!")
+        logger.info(f"📤 [CREATE-TEMPLATE] Components complets (JSON):")
+        logger.info(f"   {json.dumps(components, indent=2, ensure_ascii=False)}")
+        logger.info(f"📤 [CREATE-TEMPLATE] =============================================")
         
+        logger.info(f"📤 [CREATE-TEMPLATE] Appel à whatsapp_api_service.create_message_template...")
         result = await whatsapp_api_service.create_message_template(
             waba_id=waba_id,
             access_token=access_token,
@@ -188,7 +221,9 @@ async def create_and_queue_template(
             components=components
         )
         
-        logger.info(f"📥 [CREATE-TEMPLATE] Réponse de Meta: {result}")
+        logger.info(f"📥 [CREATE-TEMPLATE] ========== RÉPONSE META ==========")
+        logger.info(f"📥 [CREATE-TEMPLATE] Réponse complète: {json.dumps(result, indent=2, ensure_ascii=False)}")
+        logger.info(f"📥 [CREATE-TEMPLATE] =================================")
         
         meta_template_id = result.get("id")
         
@@ -207,6 +242,7 @@ async def create_and_queue_template(
         from app.services.template_deduplication import TemplateDeduplication
         
         # Calculer le hash du template pour la déduplication
+        # Utiliser les versions sanitized (ou None si non fournis)
         template_hash = TemplateDeduplication.compute_template_hash(
             sanitized_body, sanitized_header, sanitized_footer
         )

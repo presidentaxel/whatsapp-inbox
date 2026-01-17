@@ -2652,11 +2652,12 @@ body {
   font-weight: 500;
   /* Prendre 50% du conteneur, ou s'adapter au texte si plus grand */
   flex: 1 1 auto;
-  min-width: 0;
+  min-width: 80px; /* Largeur minimale pour éviter que les boutons soient trop étroits */
   max-width: calc(50% - 4px);
-  word-break: break-word;
+  word-break: normal; /* Ne pas couper les mots au milieu */
   white-space: normal;
   line-height: 1.4;
+  overflow-wrap: break-word; /* Permettre la coupure seulement entre les mots si nécessaire */
 }
 
 /* Si un seul bouton, il prend toute la largeur */

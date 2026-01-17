@@ -1860,6 +1860,16 @@ async def send_interactive_message_with_storage(
     if not phone_id or not token:
         return {"error": "whatsapp_not_configured"}
 
+    logger.info("=" * 80)
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] ========== ENVOI MESSAGE INTERACTIF ==========")
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] conversation_id={conversation_id}")
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] interactive_type={interactive_type}")
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Paramètres reçus:")
+    logger.info(f"   - body_text: {repr(body_text)}")
+    logger.info(f"   - header_text: {repr(header_text)}")
+    logger.info(f"   - footer_text: {repr(footer_text)}")
+    logger.info(f"   - interactive_payload: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
+    
     # Construire le payload pour WhatsApp
     interactive_obj = {
         "type": interactive_type,
@@ -1868,11 +1878,19 @@ async def send_interactive_message_with_storage(
     
     if header_text:
         interactive_obj["header"] = {"type": "text", "text": header_text}
+        logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Header ajouté: {repr(header_text)}")
+    else:
+        logger.warning(f"⚠️ [SEND-INTERACTIVE-STORAGE] AUCUN HEADER (header_text={repr(header_text)})")
+    
     if footer_text:
         interactive_obj["footer"] = {"text": footer_text}
+        logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Footer ajouté: {repr(footer_text)}")
+    else:
+        logger.warning(f"⚠️ [SEND-INTERACTIVE-STORAGE] AUCUN FOOTER (footer_text={repr(footer_text)})")
     
     # Ajouter action (buttons ou sections)
     interactive_obj["action"] = interactive_payload
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Action ajoutée: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
 
     body = {
         "messaging_product": "whatsapp",
@@ -1880,6 +1898,10 @@ async def send_interactive_message_with_storage(
         "type": "interactive",
         "interactive": interactive_obj
     }
+    
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Payload complet envoyé à WhatsApp:")
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] {json.dumps(body, indent=2, ensure_ascii=False)}")
+    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] ==============================================")
 
     timestamp_iso = datetime.now(timezone.utc).isoformat()
     

@@ -1587,6 +1587,17 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         # Hors fenêtre gratuite : créer un template automatiquement avec le texte (sans les boutons)
         # Note: Les boutons ne peuvent pas être ajoutés automatiquement aux templates,
         # ils doivent être définis dans le template dans Meta Business Manager
+        logger.info("=" * 80)
+        logger.info("⏳ [SEND-INTERACTIVE] ========== HORS FENÊTRE GRATUITE ==========")
+        logger.info(f"⏳ [SEND-INTERACTIVE] conversation_id={conversation_id}")
+        logger.info(f"⏳ [SEND-INTERACTIVE] interactive_type={interactive_type}")
+        logger.info(f"⏳ [SEND-INTERACTIVE] Payload reçu complet:")
+        logger.info(f"   {json.dumps(payload, indent=2, ensure_ascii=False)}")
+        logger.info(f"⏳ [SEND-INTERACTIVE] Paramètres extraits:")
+        logger.info(f"   - body_text: {repr(body_text)}")
+        logger.info(f"   - header_text (raw): {repr(header_text)}")
+        logger.info(f"   - footer_text (raw): {repr(footer_text)}")
+        logger.info(f"   - buttons (raw): {repr(payload.get('buttons'))}")
         logger.info("⏳ [SEND-INTERACTIVE] Hors fenêtre gratuite - création d'un template automatique")
         
         # Construire le texte complet pour l'affichage (header + body + footer)
@@ -1601,22 +1612,34 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         buttons_data = None
         if interactive_type == "button":
             buttons_data = payload.get("buttons", [])
-        elif interactive_type == "list":
-            # Pour les listes, on ne peut pas créer de template avec liste automatiquement
-            # On va créer un template simple sans liste
-            buttons_data = None
+            # Filtrer les boutons vides et s'assurer qu'on a au moins un bouton valide
+            if buttons_data:
+                buttons_data = [btn for btn in buttons_data if btn.get("title") and btn.get("id")]
+                if len(buttons_data) == 0:
+                    buttons_data = None
+        
+        # Normaliser header_text et footer_text (None si chaîne vide)
+        normalized_header_text = header_text.strip() if header_text and header_text.strip() else None
+        normalized_footer_text = footer_text.strip() if footer_text and footer_text.strip() else None
+        
+        logger.info(f"🔍 [SEND-INTERACTIVE] Paramètres pour le template:")
+        logger.info(f"   - header_text: {normalized_header_text}")
+        logger.info(f"   - body_text: {body_text}")
+        logger.info(f"   - footer_text: {normalized_footer_text}")
+        logger.info(f"   - buttons: {buttons_data}")
+        logger.info(f"   - buttons_count: {len(buttons_data) if buttons_data else 0}")
         
         # Créer le message en base avec status "pending" et interactive_data
         from datetime import datetime, timezone
-        import json
+        # json est déjà importé au niveau du module
         logger.info("📝 [SEND-INTERACTIVE] Création du message en base...")
         
         # Construire interactive_data pour l'affichage
         interactive_data_dict = {
             "type": interactive_type,
-            "header": header_text or None,
+            "header": normalized_header_text,
             "body": body_text,
-            "footer": footer_text or None
+            "footer": normalized_footer_text
         }
         
         if interactive_type == "button" and buttons_data:
@@ -1656,15 +1679,21 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         
         # Créer le template avec les composants séparés (ou réutiliser un existant)
         logger.info(f"🔧 [SEND-INTERACTIVE] Recherche/création du template pour account_id={conversation['account_id']}")
+        logger.info(f"🔧 [SEND-INTERACTIVE] Appel à find_or_create_template avec:")
+        logger.info(f"   - header_text={normalized_header_text}")
+        logger.info(f"   - body_text={body_text}")
+        logger.info(f"   - footer_text={normalized_footer_text}")
+        logger.info(f"   - buttons={buttons_data}")
+        
         template_result = await find_or_create_template(
             conversation_id=conversation_id,
             account_id=conversation["account_id"],
             message_id=message_id,
             text_content=full_text,  # Pour compatibilité avec l'ancien code
-            header_text=header_text,
+            header_text=normalized_header_text,  # Utiliser la version normalisée
             body_text=body_text,
-            footer_text=footer_text,
-            buttons=buttons_data if interactive_type == "button" else None
+            footer_text=normalized_footer_text,  # Utiliser la version normalisée
+            buttons=buttons_data  # Passer None si pas de boutons valides
         )
         
         logger.info(f"📋 [SEND-INTERACTIVE] Résultat de la création du template: success={template_result.get('success')}")
@@ -1695,23 +1724,50 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         }
     
     # Dans la fenêtre gratuite : envoi normal du message interactif
-    logger.info("✅ [SEND-INTERACTIVE] Dans la fenêtre gratuite - envoi normal du message interactif")
+    logger.info("=" * 80)
+    logger.info("✅ [SEND-INTERACTIVE] ========== FENÊTRE GRATUITE ==========")
+    logger.info(f"✅ [SEND-INTERACTIVE] conversation_id={conversation_id}")
+    logger.info(f"✅ [SEND-INTERACTIVE] interactive_type={interactive_type}")
+    logger.info(f"✅ [SEND-INTERACTIVE] Paramètres extraits:")
+    logger.info(f"   - body_text: {repr(body_text)}")
+    logger.info(f"   - header_text: {repr(header_text)}")
+    logger.info(f"   - footer_text: {repr(footer_text)}")
+    logger.info(f"   - buttons (raw): {repr(payload.get('buttons'))}")
+    logger.info(f"   - sections (raw): {repr(payload.get('sections'))}")
+    
+    # Normaliser header_text et footer_text (None si chaîne vide)
+    normalized_header_text = header_text.strip() if header_text and header_text.strip() else None
+    normalized_footer_text = footer_text.strip() if footer_text and footer_text.strip() else None
+    
+    logger.info(f"✅ [SEND-INTERACTIVE] Après normalisation:")
+    logger.info(f"   - normalized_header_text: {repr(normalized_header_text)}")
+    logger.info(f"   - normalized_footer_text: {repr(normalized_footer_text)}")
     
     # Construire le payload d'action selon le type
     if interactive_type == "button":
         buttons = payload.get("buttons", [])
+        logger.info(f"✅ [SEND-INTERACTIVE] Boutons extraits: {repr(buttons)}")
         if not buttons:
             raise HTTPException(status_code=400, detail="buttons are required for button type")
+        
+        # Filtrer les boutons valides
+        valid_buttons = [btn for btn in buttons if btn.get("id") and btn.get("title")]
+        logger.info(f"✅ [SEND-INTERACTIVE] Boutons valides: {len(valid_buttons)}/{len(buttons)}")
+        if not valid_buttons:
+            raise HTTPException(status_code=400, detail="Aucun bouton valide (id et title requis)")
         
         interactive_payload = {
             "buttons": [
                 {"type": "reply", "reply": {"id": btn["id"], "title": btn["title"]}}
-                for btn in buttons
+                for btn in valid_buttons
             ]
         }
+        logger.info(f"✅ [SEND-INTERACTIVE] interactive_payload construit: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
     elif interactive_type == "list":
         sections = payload.get("sections", [])
         button_text = payload.get("button_text", "Voir les options")
+        logger.info(f"✅ [SEND-INTERACTIVE] Sections extraites: {repr(sections)}")
+        logger.info(f"✅ [SEND-INTERACTIVE] button_text: {repr(button_text)}")
         if not sections:
             raise HTTPException(status_code=400, detail="sections are required for list type")
         
@@ -1719,16 +1775,24 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
             "button": button_text,
             "sections": sections
         }
+        logger.info(f"✅ [SEND-INTERACTIVE] interactive_payload construit: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
     else:
         raise HTTPException(status_code=400, detail="invalid interactive_type")
+    
+    logger.info(f"✅ [SEND-INTERACTIVE] Appel à send_interactive_message_with_storage avec:")
+    logger.info(f"   - header_text: {repr(normalized_header_text)}")
+    logger.info(f"   - body_text: {repr(body_text)}")
+    logger.info(f"   - footer_text: {repr(normalized_footer_text)}")
+    logger.info(f"   - interactive_payload: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
+    logger.info(f"✅ [SEND-INTERACTIVE] ======================================")
     
     return await send_interactive_message_with_storage(
         conversation_id=conversation_id,
         interactive_type=interactive_type,
         body_text=body_text,
         interactive_payload=interactive_payload,
-        header_text=header_text,
-        footer_text=footer_text
+        header_text=normalized_header_text,  # Utiliser la version normalisée
+        footer_text=normalized_footer_text   # Utiliser la version normalisée
     )
 
 

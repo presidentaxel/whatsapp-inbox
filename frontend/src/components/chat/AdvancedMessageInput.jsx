@@ -780,9 +780,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const handleButtonsSend = async () => {
-    if (!conversation?.id || !text.trim()) return;
+    console.log("🔘 [FRONTEND] handleButtonsSend appelé", { mode, text, buttons, headerText, footerText });
+    if (!conversation?.id || !text.trim()) {
+      console.warn("🔘 [FRONTEND] handleButtonsSend annulé: conversation ou text manquant");
+      return;
+    }
     
     const validButtons = buttons.filter(b => b.id && b.title).slice(0, 3);
+    console.log("🔘 [FRONTEND] Boutons valides:", validButtons);
     if (validButtons.length === 0) {
       alert("Ajoutez au moins un bouton");
       return;
@@ -834,14 +839,17 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setMode("text");
 
     try {
-      const response = await sendInteractiveMessage({
+      const payload = {
         conversation_id: conversation.id,
         interactive_type: "button",
         body_text: text,
         buttons: validButtons,
         header_text: headerText || undefined,
         footer_text: footerText || undefined
-      });
+      };
+      console.log("🔘 [FRONTEND] Envoi sendInteractiveMessage avec payload:", payload);
+      const response = await sendInteractiveMessage(payload);
+      console.log("🔘 [FRONTEND] Réponse reçue:", response);
 
       // Le message optimiste sera remplacé automatiquement par le message réel
       // via le webhook Supabase ou le refreshMessages
