@@ -1883,6 +1883,13 @@ body {
   color: rgba(255, 255, 255, 0.9);
 }
 
+.messages-wrapper {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .messages {
   flex: 1;
   padding: 24px;
@@ -1893,6 +1900,7 @@ body {
   background: transparent; /* Transparent pour voir le fond d'écran du chat-window */
   position: relative;
   z-index: 1;
+  min-width: 0;
 }
 
 .bubble {
@@ -2748,13 +2756,30 @@ body {
 .interactive-bubble {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
+}
+
+.interactive-bubble__header {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+  color: #e9edef;
+  line-height: 1.4;
 }
 
 .interactive-bubble__body {
   font-size: 0.95rem;
   line-height: 1.4;
   margin-bottom: 4px;
+}
+
+.interactive-bubble__footer {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  line-height: 1.4;
 }
 
 .interactive-bubble__buttons {
@@ -2950,6 +2975,7 @@ body {
 
 .contact-item {
   display: flex;
+  align-items: center;
   gap: 12px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border-light);
@@ -2964,6 +2990,19 @@ body {
 
 .contact-item.active {
   background: rgba(37, 211, 102, 0.12);
+}
+
+.contact-item.multi-selected {
+  background: rgba(37, 211, 102, 0.15);
+  border-left: 3px solid #25d366;
+}
+
+.contact-checkbox {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  margin-right: 8px;
+  flex-shrink: 0;
 }
 
 .contact-item .avatar {
@@ -3949,6 +3988,33 @@ body {
 .panel-title {
   padding: 16px;
   margin: 0;
+}
+
+.contacts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.contacts-header .panel-title {
+  padding: 16px 0;
+  margin: 0;
+  flex: 1;
+}
+
+.contacts-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.selection-count {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  padding: 0 8px;
 }
 
 .login-screen {

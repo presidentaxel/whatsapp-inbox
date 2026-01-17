@@ -788,8 +788,53 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       return;
     }
 
+    // Construire le texte complet pour l'affichage optimiste
+    let fullText = "";
+    if (headerText) {
+      fullText += `${headerText}\n\n`;
+    }
+    fullText += text;
+    if (footerText) {
+      fullText += `\n\n${footerText}`;
+    }
+    
+    // Créer un message optimiste
+    const tempId = `temp-buttons-${Date.now()}`;
+    const optimisticMessage = {
+      id: tempId,
+      conversation_id: conversation.id,
+      direction: "outbound",
+      content_text: fullText,
+      status: "pending",
+      timestamp: new Date().toISOString(),
+      message_type: "interactive",
+      interactive_data: JSON.stringify({
+        type: "button",
+        header: headerText || null,
+        body: text,
+        footer: footerText || null,
+        buttons: validButtons.map(btn => ({
+          type: "QUICK_REPLY",
+          text: btn.title
+        }))
+      })
+    };
+    
+    // Ajouter le message optimiste immédiatement
+    if (onSend) {
+      onSend(fullText, false, optimisticMessage);
+    }
+
+    // Reset immédiatement pour une meilleure UX
+    setText("");
+    setButtons([{ id: "", title: "" }]);
+    setHeaderText("");
+    setFooterText("");
+    setShowAdvanced(false);
+    setMode("text");
+
     try {
-      await sendInteractiveMessage({
+      const response = await sendInteractiveMessage({
         conversation_id: conversation.id,
         interactive_type: "button",
         body_text: text,
@@ -798,17 +843,34 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         footer_text: footerText || undefined
       });
 
-      // Reset
-      setText("");
-      setButtons([{ id: "", title: "" }]);
-      setHeaderText("");
-      setFooterText("");
-      setShowAdvanced(false);
-      setMode("text");
-      onSend?.(""); // Trigger refresh
+      // Le message optimiste sera remplacé automatiquement par le message réel
+      // via le webhook Supabase ou le refreshMessages
+      onSend?.("", true); // Trigger refresh
     } catch (error) {
       console.error("Erreur envoi boutons:", error);
-      alert("Erreur lors de l'envoi");
+      console.error("Détails de l'erreur:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      
+      // En cas d'erreur, supprimer le message optimiste et remettre le texte
+      if (onSend) {
+        onSend("", true); // Force refresh pour supprimer le message optimiste
+      }
+      setText(fullText);
+      
+      // Afficher les erreurs de validation si disponibles
+      const errorData = error.response?.data;
+      if (errorData?.detail?.errors) {
+        alert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
+      } else if (errorData?.detail?.message) {
+        alert(`Erreur: ${errorData.detail.message}`);
+      } else if (errorData?.detail) {
+        alert(`Erreur: ${errorData.detail}`);
+      } else {
+        alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
+      }
     }
   };
 
@@ -827,8 +889,52 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       return;
     }
 
+    // Construire le texte complet pour l'affichage optimiste
+    let fullText = "";
+    if (headerText) {
+      fullText += `${headerText}\n\n`;
+    }
+    fullText += text;
+    if (footerText) {
+      fullText += `\n\n${footerText}`;
+    }
+    
+    // Créer un message optimiste
+    const tempId = `temp-list-${Date.now()}`;
+    const optimisticMessage = {
+      id: tempId,
+      conversation_id: conversation.id,
+      direction: "outbound",
+      content_text: fullText,
+      status: "pending",
+      timestamp: new Date().toISOString(),
+      message_type: "interactive",
+      interactive_data: JSON.stringify({
+        type: "list",
+        header: headerText || null,
+        body: text,
+        footer: footerText || null,
+        button_text: buttonText,
+        sections: validSections
+      })
+    };
+    
+    // Ajouter le message optimiste immédiatement
+    if (onSend) {
+      onSend(fullText, false, optimisticMessage);
+    }
+
+    // Reset immédiatement pour une meilleure UX
+    setText("");
+    setListSections([{ title: "", rows: [{ id: "", title: "", description: "" }] }]);
+    setHeaderText("");
+    setFooterText("");
+    setButtonText("Voir les options");
+    setShowAdvanced(false);
+    setMode("text");
+
     try {
-      await sendInteractiveMessage({
+      const response = await sendInteractiveMessage({
         conversation_id: conversation.id,
         interactive_type: "list",
         body_text: text,
@@ -838,18 +944,34 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         footer_text: footerText || undefined
       });
 
-      // Reset
-      setText("");
-      setListSections([{ title: "", rows: [{ id: "", title: "", description: "" }] }]);
-      setHeaderText("");
-      setFooterText("");
-      setButtonText("Voir les options");
-      setShowAdvanced(false);
-      setMode("text");
-      onSend?.(""); // Trigger refresh
+      // Le message optimiste sera remplacé automatiquement par le message réel
+      // via le webhook Supabase ou le refreshMessages
+      onSend?.("", true); // Trigger refresh
     } catch (error) {
       console.error("Erreur envoi liste:", error);
-      alert("Erreur lors de l'envoi");
+      console.error("Détails de l'erreur:", {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      
+      // En cas d'erreur, supprimer le message optimiste et remettre le texte
+      if (onSend) {
+        onSend("", true); // Force refresh pour supprimer le message optimiste
+      }
+      setText(fullText);
+      
+      // Afficher les erreurs de validation si disponibles
+      const errorData = error.response?.data;
+      if (errorData?.detail?.errors) {
+        alert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
+      } else if (errorData?.detail?.message) {
+        alert(`Erreur: ${errorData.detail.message}`);
+      } else if (errorData?.detail) {
+        alert(`Erreur: ${errorData.detail}`);
+      } else {
+        alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
+      }
     }
   };
 

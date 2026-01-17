@@ -2,6 +2,7 @@
 Service pour gérer les templates en attente de validation Meta
 """
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Dict, Optional, Any
@@ -20,16 +21,57 @@ async def create_and_queue_template(
     account_id: str,
     message_id: str,
     text_content: str,
-    campaign_id: Optional[str] = None
+    campaign_id: Optional[str] = None,
+    header_text: Optional[str] = None,
+    body_text: Optional[str] = None,
+    footer_text: Optional[str] = None,
+    buttons: Optional[list] = None
 ) -> Dict[str, Any]:
-    """Crée un template Meta et le met en file d'attente"""
+    """Crée un template Meta et le met en file d'attente
+    
+    Args:
+        conversation_id: ID de la conversation
+        account_id: ID du compte WhatsApp
+        message_id: ID du message
+        text_content: Texte complet (utilisé si body_text n'est pas fourni)
+        campaign_id: ID de la campagne (optionnel)
+        header_text: Texte du header (optionnel)
+        body_text: Texte du body (optionnel, utilise text_content si non fourni)
+        footer_text: Texte du footer (optionnel)
+        buttons: Liste de boutons [{"id": "...", "title": "..."}] (optionnel)
+    """
     
     logger.info("=" * 80)
     logger.info(f"🔧 [CREATE-TEMPLATE] Début - conversation_id={conversation_id}, account_id={account_id}, message_id={message_id}")
-    logger.info(f"🔧 [CREATE-TEMPLATE] Texte à valider (premiers 100 caractères): {text_content[:100]}")
     
-    # Valider le texte
-    is_valid, errors = TemplateValidator.validate_text(text_content)
+    # Utiliser body_text si fourni, sinon text_content
+    actual_body_text = body_text if body_text is not None else text_content
+    logger.info(f"🔧 [CREATE-TEMPLATE] Texte à valider (premiers 100 caractères): {actual_body_text[:100]}")
+    logger.info(f"🔧 [CREATE-TEMPLATE] Header: {header_text}, Footer: {footer_text}, Buttons: {len(buttons) if buttons else 0}")
+    
+    # Valider le texte du body
+    is_valid, errors = TemplateValidator.validate_text(actual_body_text)
+    
+    # Valider header et footer avec leurs limites spécifiques
+    if header_text:
+        # Vérifier la longueur du header (max 60 caractères)
+        if len(header_text) > TemplateValidator.MAX_HEADER_LENGTH:
+            errors.append(f"Le header ne peut pas dépasser {TemplateValidator.MAX_HEADER_LENGTH} caractères (actuellement: {len(header_text)})")
+        header_valid, header_errors = TemplateValidator.validate_text(header_text)
+        if not header_valid:
+            errors.extend(header_errors)
+    
+    if footer_text:
+        # Vérifier la longueur du footer (max 60 caractères)
+        if len(footer_text) > TemplateValidator.MAX_FOOTER_LENGTH:
+            errors.append(f"Le footer ne peut pas dépasser {TemplateValidator.MAX_FOOTER_LENGTH} caractères (actuellement: {len(footer_text)})")
+        footer_valid, footer_errors = TemplateValidator.validate_text(footer_text)
+        if not footer_valid:
+            errors.extend(footer_errors)
+    
+    # is_valid est maintenant False si on a des erreurs
+    is_valid = len(errors) == 0
+    
     logger.info(f"✅ [CREATE-TEMPLATE] Validation du texte: is_valid={is_valid}, errors={errors}")
     if not is_valid:
         logger.error(f"❌ [CREATE-TEMPLATE] Texte invalide: {errors}")
@@ -38,8 +80,8 @@ async def create_and_queue_template(
             "errors": errors
         }
     
-    # Générer un nom de template unique
-    template_name = TemplateValidator.generate_template_name(text_content, conversation_id)
+    # Générer un nom de template unique (utiliser le body pour le nom)
+    template_name = TemplateValidator.generate_template_name(actual_body_text, conversation_id)
     
     # Valider le nom généré
     name_valid, name_errors = TemplateValidator.validate_template_name(template_name)
@@ -49,7 +91,21 @@ async def create_and_queue_template(
             "errors": name_errors
         }
     
-    sanitized_text = TemplateValidator.sanitize_for_template(text_content)
+    # Sanitizer les textes
+    sanitized_body = TemplateValidator.sanitize_for_template(actual_body_text)
+    
+    # Pour header et footer, respecter les limites Meta (60 caractères max)
+    sanitized_header = None
+    if header_text:
+        sanitized_header = TemplateValidator.sanitize_for_template(header_text)
+        if len(sanitized_header) > TemplateValidator.MAX_HEADER_LENGTH:
+            sanitized_header = sanitized_header[:TemplateValidator.MAX_HEADER_LENGTH-3] + "..."
+    
+    sanitized_footer = None
+    if footer_text:
+        sanitized_footer = TemplateValidator.sanitize_for_template(footer_text)
+        if len(sanitized_footer) > TemplateValidator.MAX_FOOTER_LENGTH:
+            sanitized_footer = sanitized_footer[:TemplateValidator.MAX_FOOTER_LENGTH-3] + "..."
     
     # Récupérer le compte
     account = await get_account_by_id(account_id)
@@ -70,17 +126,58 @@ async def create_and_queue_template(
     
     # Créer le template via Meta API
     try:
-        components = [{
+        # Construire les composants du template
+        components = []
+        
+        # HEADER (si fourni)
+        if sanitized_header:
+            components.append({
+                "type": "HEADER",
+                "format": "TEXT",
+                "text": sanitized_header
+            })
+        
+        # BODY (toujours présent)
+        components.append({
             "type": "BODY",
-            "text": sanitized_text
-        }]
+            "text": sanitized_body
+        })
+        
+        # FOOTER (si fourni)
+        if sanitized_footer:
+            components.append({
+                "type": "FOOTER",
+                "text": sanitized_footer
+            })
+        
+        # BUTTONS (si fournis)
+        meta_buttons = []
+        if buttons and len(buttons) > 0:
+            # Convertir les boutons au format Meta (QUICK_REPLY)
+            for btn in buttons[:3]:  # Max 3 boutons
+                if btn.get("title"):
+                    meta_buttons.append({
+                        "type": "QUICK_REPLY",
+                        "text": btn["title"][:20]  # Max 20 caractères pour QUICK_REPLY
+                    })
+            
+            if meta_buttons:
+                components.append({
+                    "type": "BUTTONS",
+                    "buttons": meta_buttons
+                })
         
         logger.info(f"📤 [CREATE-TEMPLATE] Appel à l'API Meta pour créer le template...")
         logger.info(f"   - WABA ID: {waba_id}")
         logger.info(f"   - Template name: {template_name}")
         logger.info(f"   - Category: UTILITY")
         logger.info(f"   - Language: fr")
-        logger.info(f"   - Components: {components}")
+        logger.info(f"   - Components: {len(components)} composants")
+        logger.info(f"   - Header: {sanitized_header[:50] if sanitized_header else 'None'}...")
+        logger.info(f"   - Body: {sanitized_body[:50]}...")
+        logger.info(f"   - Footer: {sanitized_footer[:50] if sanitized_footer else 'None'}...")
+        logger.info(f"   - Buttons: {len(meta_buttons)} boutons")
+        logger.info(f"   - Components détaillés: {json.dumps(components, indent=2, ensure_ascii=False)}")
         
         result = await whatsapp_api_service.create_message_template(
             waba_id=waba_id,
@@ -107,6 +204,13 @@ async def create_and_queue_template(
         
         # Stocker dans la base
         from app.core.db import supabase
+        from app.services.template_deduplication import TemplateDeduplication
+        
+        # Calculer le hash du template pour la déduplication
+        template_hash = TemplateDeduplication.compute_template_hash(
+            sanitized_body, sanitized_header, sanitized_footer
+        )
+        
         pending_template_payload = {
             "message_id": message_id,
             "conversation_id": conversation_id,
@@ -114,7 +218,8 @@ async def create_and_queue_template(
             "template_name": template_name,
             "text_content": text_content,
             "meta_template_id": meta_template_id,
-            "template_status": "PENDING"
+            "template_status": "PENDING",
+            "template_hash": template_hash  # Stocker le hash pour la déduplication
         }
         if campaign_id:
             pending_template_payload["campaign_id"] = campaign_id
@@ -575,14 +680,14 @@ async def _send_broadcast_template(
         supabase.table("broadcast_campaigns")
         .select("group_id, account_id")
         .eq("id", campaign_id)
-        .single()
+        .limit(1)
     )
     
-    if not campaign_result.data:
+    if not campaign_result.data or len(campaign_result.data) == 0:
         logger.error(f"❌ [BROADCAST-TEMPLATE] Campagne {campaign_id} non trouvée")
         return
     
-    campaign = campaign_result.data
+    campaign = campaign_result.data[0]
     group_id = campaign["group_id"]
     account_id = campaign["account_id"]
     

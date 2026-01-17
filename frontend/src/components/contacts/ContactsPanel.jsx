@@ -4,6 +4,9 @@ export default function ContactsPanel({
   contacts = [],
   selected,
   onSelect,
+  selectedContacts = new Set(),
+  onToggleSelect,
+  multiSelect = false,
 }) {
   if (!contacts.length) {
     return (
@@ -13,22 +16,51 @@ export default function ContactsPanel({
     );
   }
 
+  const handleContactClick = (contact, e) => {
+    if (multiSelect && e.target.type !== 'checkbox') {
+      onToggleSelect?.(contact.id);
+    } else if (!multiSelect) {
+      onSelect?.(contact);
+    }
+  };
+
+  const handleCheckboxChange = (contactId, e) => {
+    e.stopPropagation();
+    onToggleSelect?.(contactId);
+  };
+
   return (
     <div className="contacts-panel">
       <div className="contacts-list">
-        {contacts.map((c) => (
-          <div
-            key={c.id}
-            className={`contact-item ${selected?.id === c.id ? "active" : ""}`}
-            onClick={() => onSelect?.(c)}
-          >
-            <div className="avatar">{(c.display_name || c.whatsapp_number || "?")[0]}</div>
-            <div className="contact-info">
-              <strong>{c.display_name || formatPhoneNumber(c.whatsapp_number)}</strong>
-              <small>{formatPhoneNumber(c.whatsapp_number)}</small>
+        {contacts.map((c) => {
+          const isSelected = multiSelect 
+            ? selectedContacts.has(c.id)
+            : selected?.id === c.id;
+          const isMultiSelected = multiSelect && selectedContacts.has(c.id);
+          
+          return (
+            <div
+              key={c.id}
+              className={`contact-item ${isSelected ? "active" : ""} ${isMultiSelected ? "multi-selected" : ""}`}
+              onClick={(e) => handleContactClick(c, e)}
+            >
+              {multiSelect && (
+                <input
+                  type="checkbox"
+                  checked={isMultiSelected}
+                  onChange={(e) => handleCheckboxChange(c.id, e)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="contact-checkbox"
+                />
+              )}
+              <div className="avatar">{(c.display_name || c.whatsapp_number || "?")[0]}</div>
+              <div className="contact-info">
+                <strong>{c.display_name || formatPhoneNumber(c.whatsapp_number)}</strong>
+                <small>{formatPhoneNumber(c.whatsapp_number)}</small>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <div className="contacts-details">
         {selected ? (

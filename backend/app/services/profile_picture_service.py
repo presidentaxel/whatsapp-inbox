@@ -172,9 +172,11 @@ async def _update_single_profile_picture(task: dict):
         if profile_picture_url:
             # Télécharger et stocker l'image dans Supabase Storage
             logger.info(f"📥 Downloading profile picture from WhatsApp: {profile_picture_url}")
+            # Utiliser async_upload=False pour attendre le résultat (besoin de l'URL pour la DB)
             stored_url = await download_and_store_profile_picture(
                 contact_id=contact_id,
-                image_url=profile_picture_url
+                image_url=profile_picture_url,
+                async_upload=False  # Attendre le résultat pour mettre à jour la DB
             )
             
             if stored_url:
@@ -348,8 +350,15 @@ async def periodic_profile_picture_update():
             
             logger.info("✅ Periodic profile picture update cycle completed")
             
+        except asyncio.CancelledError:
+            logger.info("🛑 Periodic profile picture update task cancelled")
+            break
         except Exception as e:
             logger.error(f"Error in periodic profile picture update task: {e}", exc_info=True)
             # En cas d'erreur, attendre 5 minutes avant de réessayer
-            await asyncio.sleep(300)
+            try:
+                await asyncio.sleep(300)
+            except asyncio.CancelledError:
+                logger.info("🛑 Periodic profile picture update task cancelled during error recovery")
+                break
 

@@ -59,5 +59,10 @@ class Settings:
     GOOGLE_DRIVE_CLIENT_SECRET: str | None = os.getenv("GOOGLE_DRIVE_CLIENT_SECRET")
     GOOGLE_DRIVE_REDIRECT_URI: str = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:5174/api/auth/google-drive/callback")
     BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
+    
+    # Media upload limits (en bytes)
+    # Limite Supabase Storage: 200MB par défaut (suffisant pour la plupart des vidéos WhatsApp)
+    # Peut être configurée via la variable d'environnement MAX_MEDIA_UPLOAD_SIZE
+    MAX_MEDIA_UPLOAD_SIZE: int = int(os.getenv("MAX_MEDIA_UPLOAD_SIZE", "209715200"))  # 200MB par défaut
 
 settings = Settings()

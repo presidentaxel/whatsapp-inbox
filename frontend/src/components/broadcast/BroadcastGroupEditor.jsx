@@ -166,12 +166,48 @@ export default function BroadcastGroupEditor({
     }
   };
 
-  const filteredContacts = contacts.filter((c) => {
-    const term = searchTerm.toLowerCase();
-    const name = (c.display_name || "").toLowerCase();
-    const phone = (c.whatsapp_number || "").toLowerCase();
-    return name.includes(term) || phone.includes(term);
-  });
+  const filteredContacts = contacts
+    .filter((c) => {
+      const term = searchTerm.toLowerCase();
+      const name = (c.display_name || "").toLowerCase();
+      const phone = (c.whatsapp_number || "").toLowerCase();
+      return name.includes(term) || phone.includes(term);
+    })
+    .sort((a, b) => {
+      const term = searchTerm.toLowerCase();
+      const aName = (a.display_name || "").toLowerCase();
+      const bName = (b.display_name || "").toLowerCase();
+      const aPhone = (a.whatsapp_number || "").toLowerCase();
+      const bPhone = (b.whatsapp_number || "").toLowerCase();
+      
+      // Prioriser les correspondances exactes
+      const aNameExact = aName === term;
+      const bNameExact = bName === term;
+      const aPhoneExact = aPhone === term;
+      const bPhoneExact = bPhone === term;
+      
+      // Correspondance exacte du nom en premier
+      if (aNameExact && !bNameExact) return -1;
+      if (!aNameExact && bNameExact) return 1;
+      
+      // Correspondance exacte du téléphone en deuxième
+      if (aPhoneExact && !bPhoneExact) return -1;
+      if (!aPhoneExact && bPhoneExact) return 1;
+      
+      // Prioriser les correspondances qui commencent par le terme
+      const aNameStarts = aName.startsWith(term);
+      const bNameStarts = bName.startsWith(term);
+      const aPhoneStarts = aPhone.startsWith(term);
+      const bPhoneStarts = bPhone.startsWith(term);
+      
+      if (aNameStarts && !bNameStarts && !bPhoneStarts) return -1;
+      if (!aNameStarts && !aPhoneStarts && bNameStarts) return 1;
+      if (aPhoneStarts && !bPhoneStarts && !bNameStarts) return -1;
+      if (!aPhoneStarts && !aNameStarts && bPhoneStarts) return 1;
+      
+      // Sinon, ordre alphabétique
+      return aName.localeCompare(bName);
+    });
 
   const isRecipientAdded = (phoneNumber) => {
     const allRecipients = group ? recipients : pendingRecipients;
@@ -244,7 +280,6 @@ export default function BroadcastGroupEditor({
                     <div className="contacts-list-mini">
                       {filteredContacts
                         .filter((c) => !isRecipientAdded(c.whatsapp_number))
-                        .slice(0, 10)
                         .map((contact) => (
                           <div
                             key={contact.id}

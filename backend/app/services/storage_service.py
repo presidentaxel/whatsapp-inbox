@@ -1,8 +1,9 @@
 """
 Service pour gérer le stockage d'images dans Supabase Storage
 """
+import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from starlette.concurrency import run_in_threadpool
@@ -20,43 +21,54 @@ MESSAGE_MEDIA_BUCKET = "message-media"
 TEMPLATE_MEDIA_BUCKET = "template-media"
 
 
-async def upload_profile_picture(
+async def _upload_profile_picture_task(
     contact_id: str,
     image_data: bytes,
     content_type: str = "image/jpeg"
 ) -> Optional[str]:
     """
-    Upload une image de profil dans Supabase Storage
-    
-    Args:
-        contact_id: ID du contact (utilisé comme nom de fichier)
-        image_data: Données binaires de l'image
-        content_type: Type MIME de l'image (défaut: image/jpeg)
-    
-    Returns:
-        URL publique de l'image ou None en cas d'erreur
+    Tâche asynchrone pour uploader une image de profil sans bloquer le processus principal.
     """
     try:
         # Nom du fichier : contact_id.jpg
         file_name = f"{contact_id}.jpg"
         file_path = f"{file_name}"
         
+        # Vérifier la taille du fichier
+        file_size = len(image_data)
+        max_size = settings.MAX_MEDIA_UPLOAD_SIZE
+        
+        if file_size > max_size:
+            size_mb = file_size / (1024 * 1024)
+            max_size_mb = max_size / (1024 * 1024)
+            logger.warning(
+                f"⚠️ Profile picture too large: contact_id={contact_id}, "
+                f"size={size_mb:.2f}MB, max={max_size_mb:.2f}MB. Skipping upload."
+            )
+            return None
+        
         # Upload dans Supabase Storage
         def _upload():
-            return supabase.storage.from_(PROFILE_PICTURES_BUCKET).upload(
-                path=file_path,
-                file=image_data,
-                file_options={
-                    "content-type": content_type,
-                    "upsert": "true"  # Remplacer si existe déjà
-                }
-            )
+            try:
+                return supabase.storage.from_(PROFILE_PICTURES_BUCKET).upload(
+                    path=file_path,
+                    file=image_data,
+                    file_options={
+                        "content-type": content_type,
+                        "upsert": "true"  # Remplacer si existe déjà
+                    }
+                )
+            except Exception as upload_error:
+                error_str = str(upload_error)
+                if "413" in error_str or "payload too large" in error_str.lower():
+                    logger.warning(f"⚠️ Profile picture too large for Supabase: contact_id={contact_id}")
+                    return None
+                raise
         
         result = await run_in_threadpool(_upload)
         
         if result:
             # Récupérer l'URL publique
-            # L'URL publique est : {SUPABASE_URL}/storage/v1/object/public/{bucket}/{path}
             public_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/{PROFILE_PICTURES_BUCKET}/{file_path}"
             
             logger.info(f"✅ Profile picture uploaded to Supabase Storage: {public_url}")
@@ -69,19 +81,57 @@ async def upload_profile_picture(
         return None
 
 
-async def download_and_store_profile_picture(
+async def upload_profile_picture(
     contact_id: str,
-    image_url: str
+    image_data: bytes,
+    content_type: str = "image/jpeg",
+    async_upload: bool = True
 ) -> Optional[str]:
     """
-    Télécharge une image depuis une URL et la stocke dans Supabase Storage
+    Upload une image de profil dans Supabase Storage.
+    Par défaut, l'upload est fait de manière asynchrone et non-bloquante.
+    
+    Args:
+        contact_id: ID du contact (utilisé comme nom de fichier)
+        image_data: Données binaires de l'image
+        content_type: Type MIME de l'image (défaut: image/jpeg)
+        async_upload: Si True, l'upload se fait en arrière-plan (défaut: True)
+    
+    Returns:
+        URL publique de l'image ou None en cas d'erreur
+        Si async_upload=True, retourne None immédiatement et l'upload se fait en arrière-plan
+    """
+    if async_upload:
+        # Lancer l'upload dans une tâche asynchrone séparée
+        logger.info(f"🚀 [ASYNC UPLOAD] Creating async profile picture upload task: contact_id={contact_id}")
+        asyncio.create_task(_upload_profile_picture_task(
+            contact_id=contact_id,
+            image_data=image_data,
+            content_type=content_type
+        ))
+        return None  # Retourner None car l'upload est asynchrone
+    else:
+        # Upload synchrone (pour compatibilité)
+        return await _upload_profile_picture_task(contact_id, image_data, content_type)
+
+
+async def download_and_store_profile_picture(
+    contact_id: str,
+    image_url: str,
+    async_upload: bool = True
+) -> Optional[str]:
+    """
+    Télécharge une image depuis une URL et la stocke dans Supabase Storage.
+    Par défaut, l'upload est fait de manière asynchrone et non-bloquante.
     
     Args:
         contact_id: ID du contact
         image_url: URL de l'image à télécharger
+        async_upload: Si True, l'upload se fait en arrière-plan (défaut: True)
     
     Returns:
         URL publique Supabase de l'image ou None en cas d'erreur
+        Si async_upload=True, retourne None immédiatement et l'upload se fait en arrière-plan
     """
     try:
         import httpx
@@ -95,11 +145,12 @@ async def download_and_store_profile_picture(
             content_type = response.headers.get("content-type", "image/jpeg")
             image_data = response.content
             
-            # Upload dans Supabase Storage
+            # Upload dans Supabase Storage (asynchrone par défaut)
             return await upload_profile_picture(
                 contact_id=contact_id,
                 image_data=image_data,
-                content_type=content_type
+                content_type=content_type,
+                async_upload=async_upload
             )
             
     except Exception as e:
@@ -155,6 +206,20 @@ async def upload_message_media(
         URL publique du média ou None en cas d'erreur
     """
     try:
+        # Vérifier la taille du fichier avant l'upload
+        file_size = len(media_data)
+        max_size = settings.MAX_MEDIA_UPLOAD_SIZE
+        
+        if file_size > max_size:
+            size_mb = file_size / (1024 * 1024)
+            max_size_mb = max_size / (1024 * 1024)
+            logger.warning(
+                f"⚠️ File too large to upload: message_id={message_id}, "
+                f"size={size_mb:.2f}MB, max={max_size_mb:.2f}MB. "
+                f"Skipping upload to avoid 413 error."
+            )
+            return None
+        
         # Déterminer l'extension selon le content-type
         extension_map = {
             "image/jpeg": ".jpg",
@@ -182,7 +247,8 @@ async def upload_message_media(
         file_path = file_name
         
         # Upload dans Supabase Storage
-        logger.info(f"📤 Uploading to bucket '{MESSAGE_MEDIA_BUCKET}': path={file_path}, size={len(media_data)} bytes")
+        size_mb = file_size / (1024 * 1024)
+        logger.info(f"📤 Uploading to bucket '{MESSAGE_MEDIA_BUCKET}': path={file_path}, size={size_mb:.2f}MB")
         
         def _upload():
             try:
@@ -210,8 +276,16 @@ async def upload_message_media(
                 return result
             except Exception as upload_error:
                 error_str = str(upload_error)
+                # Gérer spécifiquement l'erreur 413 (Payload too large)
+                if "413" in error_str or "payload too large" in error_str.lower() or "exceeded the maximum" in error_str.lower():
+                    logger.error(
+                        f"❌ File too large for Supabase Storage: message_id={message_id}, "
+                        f"size={size_mb:.2f}MB. Supabase rejected the upload."
+                    )
+                    # Ne pas lever l'exception, retourner None pour gérer gracieusement
+                    return None
                 # Messages d'erreur plus explicites
-                if "bucket" in error_str.lower() or "not found" in error_str.lower():
+                elif "bucket" in error_str.lower() or "not found" in error_str.lower():
                     logger.error(f"❌ Bucket error: {upload_error}")
                     logger.error(f"   Vérifiez que le bucket '{MESSAGE_MEDIA_BUCKET}' existe dans Supabase Dashboard > Storage")
                 elif "permission" in error_str.lower() or "forbidden" in error_str.lower() or "401" in error_str or "403" in error_str:
@@ -236,7 +310,91 @@ async def upload_message_media(
         return None
         
     except Exception as e:
+        error_str = str(e)
+        # Gérer spécifiquement l'erreur 413 même si elle passe à travers
+        if "413" in error_str or "payload too large" in error_str.lower() or "exceeded the maximum" in error_str.lower():
+            logger.warning(
+                f"⚠️ File too large for Supabase Storage: message_id={message_id}. "
+                f"Upload skipped to avoid blocking the process."
+            )
+            return None
         logger.error(f"❌ Error uploading message media to Supabase Storage: message_id={message_id}, error={e}", exc_info=True)
+        return None
+
+
+async def _upload_media_task(
+    message_id: str,
+    media_data: bytes,
+    content_type: str,
+    filename: Optional[str] = None,
+    account: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """
+    Tâche asynchrone pour uploader un média sans bloquer le processus principal.
+    Cette fonction est appelée dans une tâche séparée.
+    
+    Args:
+        message_id: ID du message
+        media_data: Données binaires du média
+        content_type: Type MIME du média
+        filename: Nom de fichier original (optionnel)
+        account: Compte WhatsApp (optionnel, pour Google Drive)
+    """
+    try:
+        logger.info(f"🚀 [ASYNC UPLOAD] Starting async upload task: message_id={message_id}")
+        result = await upload_message_media(
+            message_id=message_id,
+            media_data=media_data,
+            content_type=content_type,
+            filename=filename
+        )
+        
+        if result:
+            logger.info(f"✅ [ASYNC UPLOAD] Media uploaded successfully: message_id={message_id}, storage_url={result}")
+            # Mettre à jour le message avec l'URL de stockage
+            from app.core.db import supabase_execute
+            await supabase_execute(
+                supabase.table("messages")
+                .update({"storage_url": result})
+                .eq("id", message_id)
+            )
+            logger.info(f"✅ [ASYNC UPLOAD] Message updated with storage_url: message_id={message_id}")
+            
+            # Gérer Google Drive si configuré et si account est fourni
+            if account:
+                try:
+                    import asyncio
+                    from app.services.message_service import _upload_to_google_drive_async
+                    
+                    google_drive_enabled = account.get("google_drive_enabled")
+                    google_drive_connected = account.get("google_drive_connected")
+                    has_access_token = bool(account.get("google_drive_access_token"))
+                    has_refresh_token = bool(account.get("google_drive_refresh_token"))
+                    
+                    if (google_drive_enabled and 
+                        google_drive_connected and 
+                        has_access_token and 
+                        has_refresh_token):
+                        
+                        logger.info(f"✅ [GOOGLE DRIVE] All conditions met, creating upload task for message_id={message_id}")
+                        # Créer une tâche asynchrone pour l'upload Google Drive (non-bloquant)
+                        asyncio.create_task(_upload_to_google_drive_async(
+                            message_db_id=message_id,
+                            account=account,
+                            storage_url=result,
+                            filename=filename or f"file_{message_id}",
+                            mime_type=content_type
+                        ))
+                        logger.info(f"🚀 [GOOGLE DRIVE] Upload task created successfully for message_id={message_id}")
+                except Exception as gd_error:
+                    logger.warning(f"⚠️ [GOOGLE DRIVE] Error creating Google Drive upload task: {gd_error}")
+        else:
+            logger.warning(f"⚠️ [ASYNC UPLOAD] Media upload failed: message_id={message_id}")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ [ASYNC UPLOAD] Error in upload task: message_id={message_id}, error={e}", exc_info=True)
         return None
 
 
@@ -245,10 +403,12 @@ async def download_and_store_message_media(
     media_url: str,
     content_type: str,
     filename: Optional[str] = None,
-    access_token: Optional[str] = None
+    access_token: Optional[str] = None,
+    account: Optional[Dict[str, Any]] = None
 ) -> Optional[str]:
     """
-    Télécharge un média depuis une URL (WhatsApp) et le stocke dans Supabase Storage
+    Télécharge un média depuis une URL (WhatsApp) et le stocke dans Supabase Storage.
+    L'upload vers Supabase est fait de manière asynchrone et non-bloquante.
     
     Args:
         message_id: ID du message
@@ -256,9 +416,11 @@ async def download_and_store_message_media(
         content_type: Type MIME du média
         filename: Nom de fichier original (optionnel)
         access_token: Token d'accès WhatsApp (requis pour télécharger depuis WhatsApp)
+        account: Compte WhatsApp (optionnel, pour Google Drive)
     
     Returns:
         URL publique Supabase du média ou None en cas d'erreur
+        Note: L'upload se fait en arrière-plan, cette fonction retourne immédiatement
     """
     try:
         import httpx
@@ -281,23 +443,23 @@ async def download_and_store_message_media(
         detected_content_type = response.headers.get("content-type", content_type)
         media_data = response.content
         
-        logger.info(f"✅ Media downloaded: message_id={message_id}, size={len(media_data)} bytes, content_type={detected_content_type}")
+        size_mb = len(media_data) / (1024 * 1024)
+        logger.info(f"✅ Media downloaded: message_id={message_id}, size={size_mb:.2f}MB, content_type={detected_content_type}")
         
-        # Upload dans Supabase Storage
-        logger.info(f"📤 Uploading to Supabase Storage: message_id={message_id}, bucket={MESSAGE_MEDIA_BUCKET}")
-        result = await upload_message_media(
+        # Lancer l'upload dans une tâche asynchrone séparée (non-bloquant)
+        logger.info(f"🚀 [ASYNC UPLOAD] Creating async upload task: message_id={message_id}")
+        asyncio.create_task(_upload_media_task(
             message_id=message_id,
             media_data=media_data,
             content_type=detected_content_type,
-            filename=filename
-        )
+            filename=filename,
+            account=account
+        ))
         
-        if result:
-            logger.info(f"✅ Media uploaded successfully: message_id={message_id}, storage_url={result}")
-        else:
-            logger.warning(f"❌ Media upload failed: message_id={message_id}")
-        
-        return result
+        # Retourner immédiatement sans attendre l'upload
+        # L'upload se fera en arrière-plan et mettra à jour le message automatiquement
+        logger.info(f"✅ [ASYNC UPLOAD] Upload task created, returning immediately: message_id={message_id}")
+        return None  # Retourner None car l'upload est asynchrone
         
     except Exception as e:
         logger.error(f"❌ Error downloading and storing message media: message_id={message_id}, error={e}", exc_info=True)

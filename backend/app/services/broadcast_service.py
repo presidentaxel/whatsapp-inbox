@@ -10,6 +10,7 @@ from app.services.message_service import (
     is_within_free_window,
 )
 from app.services.pending_template_service import create_and_queue_template
+from app.services.template_deduplication import find_or_create_template
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,9 @@ async def get_broadcast_group(group_id: str) -> Optional[Dict[str, Any]]:
         supabase.table("broadcast_groups")
         .select("*")
         .eq("id", group_id)
-        .single()
+        .limit(1)
     )
-    return result.data if result.data else None
+    return result.data[0] if result.data and len(result.data) > 0 else None
 
 
 async def get_broadcast_groups(account_id: str) -> List[Dict[str, Any]]:
@@ -84,10 +85,10 @@ async def update_broadcast_group(
         supabase.table("broadcast_groups")
         .select("*")
         .eq("id", group_id)
-        .single()
+        .limit(1)
     )
     
-    return updated.data if updated.data else None
+    return updated.data[0] if updated.data and len(updated.data) > 0 else None
 
 
 async def delete_broadcast_group(group_id: str) -> bool:
@@ -186,9 +187,9 @@ async def get_broadcast_campaign(campaign_id: str) -> Optional[Dict[str, Any]]:
         supabase.table("broadcast_campaigns")
         .select("*")
         .eq("id", campaign_id)
-        .single()
+        .limit(1)
     )
-    return result.data if result.data else None
+    return result.data[0] if result.data and len(result.data) > 0 else None
 
 
 async def get_broadcast_campaigns(group_id: Optional[str] = None, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -279,8 +280,8 @@ async def send_broadcast_campaign(
         
         fake_message_id = fake_message_result.data[0]["id"]
         
-        # Créer le template pour la campagne (un seul template pour tous)
-        template_result = await create_and_queue_template(
+        # Créer le template pour la campagne (un seul template pour tous, ou réutiliser un existant)
+        template_result = await find_or_create_template(
             conversation_id=first_conversation["id"],
             account_id=account_id,
             message_id=fake_message_id,
@@ -395,10 +396,10 @@ async def send_broadcast_campaign(
                         supabase.table("messages")
                         .select("id")
                         .eq("wa_message_id", wa_message_id)
-                        .single()
+                        .limit(1)
                     )
-                    if message_db_result.data:
-                        message_db = message_db_result.data["id"]
+                    if message_db_result.data and len(message_db_result.data) > 0:
+                        message_db = message_db_result.data[0]["id"]
                 
                 # Créer l'entrée de stats
                 await create_recipient_stat(
@@ -465,9 +466,9 @@ async def get_recipient_stat_by_message_id(message_id: str) -> Optional[Dict[str
         supabase.table("broadcast_recipient_stats")
         .select("*")
         .eq("message_id", message_id)
-        .single()
+        .limit(1)
     )
-    return result.data if result.data else None
+    return result.data[0] if result.data and len(result.data) > 0 else None
 
 
 async def update_recipient_stat(
@@ -482,11 +483,11 @@ async def update_recipient_stat(
             supabase.table("broadcast_recipient_stats")
             .select("sent_at")
             .eq("id", stat_id)
-            .single()
+            .limit(1)
         )
-        if stat.data and stat.data.get("sent_at"):
+        if stat.data and len(stat.data) > 0 and stat.data[0].get("sent_at"):
             from datetime import datetime as dt
-            sent_time = dt.fromisoformat(stat.data["sent_at"].replace('Z', '+00:00'))
+            sent_time = dt.fromisoformat(stat.data[0]["sent_at"].replace('Z', '+00:00'))
             read_time = dt.fromisoformat(update_data["read_at"].replace('Z', '+00:00'))
             update_data["time_to_read"] = str(read_time - sent_time)
     
@@ -496,11 +497,11 @@ async def update_recipient_stat(
             supabase.table("broadcast_recipient_stats")
             .select("sent_at")
             .eq("id", stat_id)
-            .single()
+            .limit(1)
         )
-        if stat.data and stat.data.get("sent_at"):
+        if stat.data and len(stat.data) > 0 and stat.data[0].get("sent_at"):
             from datetime import datetime as dt
-            sent_time = dt.fromisoformat(stat.data["sent_at"].replace('Z', '+00:00'))
+            sent_time = dt.fromisoformat(stat.data[0]["sent_at"].replace('Z', '+00:00'))
             reply_time = dt.fromisoformat(update_data["replied_at"].replace('Z', '+00:00'))
             update_data["time_to_reply"] = str(reply_time - sent_time)
     
@@ -528,24 +529,24 @@ async def update_recipient_stat_from_webhook(
         supabase.table("messages")
         .select("id")
         .eq("wa_message_id", wa_message_id)
-        .single()
+        .limit(1)
     )
     
-    if not message_result.data:
+    if not message_result.data or len(message_result.data) == 0:
         logger.debug(f"No message found with wa_message_id: {wa_message_id}")
         return False
     
-    message_id = message_result.data["id"]
+    message_id = message_result.data[0]["id"]
     
     # Trouver la stat associée
     stat_result = await supabase_execute(
         supabase.table("broadcast_recipient_stats")
         .select("id, campaign_id")
         .eq("message_id", message_id)
-        .single()
+        .limit(1)
     )
     
-    if not stat_result.data:
+    if not stat_result.data or len(stat_result.data) == 0:
         return False
     
     # Gérer le cas où plusieurs stats pourraient correspondre (ne devrait pas arriver)
@@ -584,13 +585,14 @@ async def track_reply(conversation_id: str, message_id: str) -> bool:
         supabase.table("conversations")
         .select("client_number, account_id")
         .eq("id", conversation_id)
-        .single()
+        .limit(1)
     )
     
-    if not conv_result.data:
+    if not conv_result.data or len(conv_result.data) == 0:
         return False
     
-    phone_number = conv_result.data["client_number"]
+    phone_number = conv_result.data[0]["client_number"]
+    account_id = conv_result.data[0]["account_id"]
     
     # Trouver la campagne active la plus récente pour ce numéro
     # (on prend la dernière campagne où le message a été envoyé mais pas encore répondu)

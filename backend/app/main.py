@@ -94,23 +94,42 @@ if settings.PROMETHEUS_ENABLED:
     )
 
 
+# Références aux tâches périodiques pour pouvoir les annuler proprement
+_periodic_tasks = []
+
 @app.on_event("startup")
 async def startup_event():
     """Démarrage de l'application - lance les tâches périodiques."""
     import asyncio
     # Démarrer la tâche périodique de mise à jour des images de profil
-    asyncio.create_task(periodic_profile_picture_update())
+    task1 = asyncio.create_task(periodic_profile_picture_update())
+    _periodic_tasks.append(task1)
     logger.info("✅ Profile picture periodic update task started")
     
     # Démarrer la tâche périodique de téléchargement des médias manquants
-    asyncio.create_task(periodic_media_backfill())
+    task2 = asyncio.create_task(periodic_media_backfill())
+    _periodic_tasks.append(task2)
     logger.info("✅ Media background backfill task started")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Nettoyage propre lors de l'arrêt de l'application."""
+    import asyncio
+    logger.info("🛑 Shutting down application, cancelling periodic tasks...")
+    
+    # Annuler toutes les tâches périodiques proprement
+    for task in _periodic_tasks:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass  # C'est normal lors du shutdown
+    
+    # Fermer le client HTTP
     await close_http_client()
+    logger.info("✅ Shutdown complete")
 
 
 @app.get("/")

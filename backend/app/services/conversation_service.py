@@ -93,25 +93,46 @@ async def get_all_conversations(
 
 
 async def mark_conversation_read(conversation_id: str) -> bool:
-    await supabase_execute(
-        supabase.table("conversations").update({"unread_count": 0}).eq("id", conversation_id)
-    )
-    # Invalider le cache pour forcer le rechargement
-    await invalidate_cache_pattern(f"conversation:{conversation_id}")
-    return True
+    """
+    Marque une conversation comme lue (unread_count = 0).
+    Gère les erreurs gracieusement pour éviter les ECONNRESET.
+    """
+    try:
+        await supabase_execute(
+            supabase.table("conversations").update({"unread_count": 0}).eq("id", conversation_id)
+        )
+        # Invalider le cache pour forcer le rechargement (ne pas faire échouer si ça échoue)
+        try:
+            await invalidate_cache_pattern(f"conversation:{conversation_id}")
+        except Exception as cache_error:
+            logger.warning(f"Failed to invalidate cache for conversation {conversation_id}: {cache_error}")
+        return True
+    except Exception as e:
+        logger.error(f"Error marking conversation {conversation_id} as read: {e}", exc_info=True)
+        # Ne pas lever l'exception pour éviter ECONNRESET, mais retourner False
+        return False
 
 
 async def mark_conversation_unread(conversation_id: str) -> bool:
     """
     Marque une conversation comme non lue en mettant unread_count à 1.
     Permet à l'utilisateur de marquer manuellement une conversation pour y revenir plus tard.
+    Gère les erreurs gracieusement pour éviter les ECONNRESET.
     """
-    await supabase_execute(
-        supabase.table("conversations").update({"unread_count": 1}).eq("id", conversation_id)
-    )
-    # Invalider le cache pour forcer le rechargement
-    await invalidate_cache_pattern(f"conversation:{conversation_id}")
-    return True
+    try:
+        await supabase_execute(
+            supabase.table("conversations").update({"unread_count": 1}).eq("id", conversation_id)
+        )
+        # Invalider le cache pour forcer le rechargement (ne pas faire échouer si ça échoue)
+        try:
+            await invalidate_cache_pattern(f"conversation:{conversation_id}")
+        except Exception as cache_error:
+            logger.warning(f"Failed to invalidate cache for conversation {conversation_id}: {cache_error}")
+        return True
+    except Exception as e:
+        logger.error(f"Error marking conversation {conversation_id} as unread: {e}", exc_info=True)
+        # Ne pas lever l'exception pour éviter ECONNRESET, mais retourner False
+        return False
 
 
 async def set_conversation_favorite(conversation_id: str, favorite: bool) -> bool:

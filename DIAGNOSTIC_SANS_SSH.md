@@ -198,3 +198,5 @@ Puis envoyez un message de test depuis WhatsApp et observez si:
 - Le `last_incoming_message` se met à jour
 
 
+
+

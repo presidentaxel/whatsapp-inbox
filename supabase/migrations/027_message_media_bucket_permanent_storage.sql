@@ -22,7 +22,7 @@ VALUES (
   'message-media',
   'message-media',
   true,  -- Public pour accès direct via URLs
-  52428800,  -- 50MB max par fichier (limite WhatsApp)
+  209715200,  -- 200MB max par fichier (suffisant pour la plupart des vidéos)
   ARRAY[
     -- Images
     'image/jpeg',
@@ -62,7 +62,7 @@ VALUES (
 ON CONFLICT (id) DO UPDATE
 SET
   public = true,  -- S'assurer que le bucket reste public
-  file_size_limit = 52428800,  -- Mettre à jour la limite si nécessaire
+  file_size_limit = 209715200,  -- 200MB (mise à jour de la limite)
   allowed_mime_types = EXCLUDED.allowed_mime_types;  -- Mettre à jour les types MIME
 
 -- 2. Supprimer les anciennes politiques RLS si elles existent (pour éviter les conflits)
@@ -136,7 +136,7 @@ USING (
 --    - Les noms de fichiers sont basés sur les IDs de messages (UUID), donc non devinables
 --
 -- 4. LIMITES:
---    - Taille max par fichier: 50MB (limite WhatsApp)
+--    - Taille max par fichier: 200MB (suffisant pour la plupart des vidéos)
 --    - Types MIME autorisés: images, vidéos, audio, documents
 --
 -- 5. MIGRATION DES DONNÉES EXISTANTES:

@@ -44,6 +44,7 @@ from app.services.media_background_service import process_unsaved_media_for_conv
 from app.services import whatsapp_api_service
 from app.services.whatsapp_api_service import check_phone_number_has_whatsapp
 from app.services.pending_template_service import create_and_queue_template
+from app.services.template_deduplication import find_or_create_template
 
 router = APIRouter()
 
@@ -236,9 +237,9 @@ async def send_with_auto_template(
     message_id = message_result.data[0]["id"]
     logger.info(f"✅ [SEND-AUTO-TEMPLATE] Message créé en base: message_id={message_id}")
     
-    # 2. Valider et créer le template
-    logger.info(f"🔧 [SEND-AUTO-TEMPLATE] Création du template pour account_id={conversation['account_id']}")
-    template_result = await create_and_queue_template(
+    # 2. Valider et créer le template (ou réutiliser un existant)
+    logger.info(f"🔧 [SEND-AUTO-TEMPLATE] Recherche/création du template pour account_id={conversation['account_id']}")
+    template_result = await find_or_create_template(
         conversation_id=conversation_id,
         account_id=conversation["account_id"],
         message_id=message_id,
@@ -1532,6 +1533,7 @@ async def get_account_media_gallery(
 async def send_interactive_api_message(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
     """
     Envoie un message interactif (boutons ou liste)
+    Si hors fenêtre gratuite, crée automatiquement un template avec le texte (sans les boutons).
     
     Payload pour boutons:
     {
@@ -1575,6 +1577,125 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         raise HTTPException(status_code=403, detail="write_access_denied")
     
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+    
+    # Vérifier si on est dans la fenêtre gratuite
+    logger.info(f"🔍 [SEND-INTERACTIVE] Vérification de la fenêtre gratuite pour conversation {conversation_id}")
+    is_free, last_interaction_time = await is_within_free_window(conversation_id)
+    logger.info(f"📊 [SEND-INTERACTIVE] Fenêtre gratuite: is_free={is_free}, last_interaction={last_interaction_time}")
+    
+    if not is_free:
+        # Hors fenêtre gratuite : créer un template automatiquement avec le texte (sans les boutons)
+        # Note: Les boutons ne peuvent pas être ajoutés automatiquement aux templates,
+        # ils doivent être définis dans le template dans Meta Business Manager
+        logger.info("⏳ [SEND-INTERACTIVE] Hors fenêtre gratuite - création d'un template automatique")
+        
+        # Construire le texte complet pour l'affichage (header + body + footer)
+        full_text = ""
+        if header_text:
+            full_text += f"{header_text}\n\n"
+        full_text += body_text
+        if footer_text:
+            full_text += f"\n\n{footer_text}"
+        
+        # Préparer les boutons pour le template et l'interactive_data
+        buttons_data = None
+        if interactive_type == "button":
+            buttons_data = payload.get("buttons", [])
+        elif interactive_type == "list":
+            # Pour les listes, on ne peut pas créer de template avec liste automatiquement
+            # On va créer un template simple sans liste
+            buttons_data = None
+        
+        # Créer le message en base avec status "pending" et interactive_data
+        from datetime import datetime, timezone
+        import json
+        logger.info("📝 [SEND-INTERACTIVE] Création du message en base...")
+        
+        # Construire interactive_data pour l'affichage
+        interactive_data_dict = {
+            "type": interactive_type,
+            "header": header_text or None,
+            "body": body_text,
+            "footer": footer_text or None
+        }
+        
+        if interactive_type == "button" and buttons_data:
+            interactive_data_dict["action"] = {
+                "buttons": [
+                    {"type": "reply", "reply": {"id": btn["id"], "title": btn["title"]}}
+                    for btn in buttons_data
+                ]
+            }
+            # Ajouter aussi les boutons au format template pour l'affichage
+            interactive_data_dict["buttons"] = [
+                {"type": "QUICK_REPLY", "text": btn["title"]}
+                for btn in buttons_data
+            ]
+        
+        message_payload = {
+            "conversation_id": conversation_id,
+            "direction": "outbound",
+            "content_text": full_text,
+            "status": "pending",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message_type": "interactive",  # Garder le type interactive pour l'affichage
+            "interactive_data": json.dumps(interactive_data_dict)
+        }
+        
+        # Insérer le message et récupérer l'ID
+        message_result = await supabase_execute(
+            supabase.table("messages").insert(message_payload)
+        )
+        
+        if not message_result.data or len(message_result.data) == 0:
+            logger.error("❌ [SEND-INTERACTIVE] Échec de la création du message en base")
+            raise HTTPException(status_code=500, detail="failed_to_create_message")
+        
+        message_id = message_result.data[0]["id"]
+        logger.info(f"✅ [SEND-INTERACTIVE] Message créé en base: message_id={message_id}")
+        
+        # Créer le template avec les composants séparés (ou réutiliser un existant)
+        logger.info(f"🔧 [SEND-INTERACTIVE] Recherche/création du template pour account_id={conversation['account_id']}")
+        template_result = await find_or_create_template(
+            conversation_id=conversation_id,
+            account_id=conversation["account_id"],
+            message_id=message_id,
+            text_content=full_text,  # Pour compatibilité avec l'ancien code
+            header_text=header_text,
+            body_text=body_text,
+            footer_text=footer_text,
+            buttons=buttons_data if interactive_type == "button" else None
+        )
+        
+        logger.info(f"📋 [SEND-INTERACTIVE] Résultat de la création du template: success={template_result.get('success')}")
+        
+        if not template_result.get("success"):
+            # Erreur de validation - mettre à jour le message
+            error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
+            logger.error(f"❌ [SEND-INTERACTIVE] Erreur de validation: {error_message}")
+            await supabase_execute(
+                supabase.table("messages")
+                .update({"status": "failed", "error_message": error_message})
+                .eq("id", message_id)
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Erreur de validation du message",
+                    "errors": template_result.get("errors", [])
+                }
+            )
+        
+        # Retourner le message comme s'il était envoyé (optimiste)
+        logger.info(f"✅ [SEND-INTERACTIVE] Template créé avec succès, retour du message optimiste")
+        return {
+            "status": "pending",
+            "message_id": message_id,
+            "message": "Message en cours de validation par Meta. Il sera envoyé automatiquement une fois approuvé."
+        }
+    
+    # Dans la fenêtre gratuite : envoi normal du message interactif
+    logger.info("✅ [SEND-INTERACTIVE] Dans la fenêtre gratuite - envoi normal du message interactif")
     
     # Construire le payload d'action selon le type
     if interactive_type == "button":

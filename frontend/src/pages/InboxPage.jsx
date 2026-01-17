@@ -25,7 +25,8 @@ import {
   getBroadcastGroups, 
   createBroadcastGroup, 
   updateBroadcastGroup, 
-  deleteBroadcastGroup 
+  deleteBroadcastGroup,
+  addRecipientToGroup
 } from "../api/broadcastApi";
 import BroadcastGroupsList from "../components/broadcast/BroadcastGroupsList";
 import BroadcastGroupEditor from "../components/broadcast/BroadcastGroupEditor";
@@ -43,6 +44,8 @@ export default function InboxPage() {
   const [contacts, setContacts] = useState([]);
   const [contactSearch, setContactSearch] = useState("");
   const [selectedContact, setSelectedContact] = useState(null);
+  const [selectedContacts, setSelectedContacts] = useState(new Set());
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [isWindowActive, setIsWindowActive] = useState(true);
   const [conversationSearch, setConversationSearch] = useState("");
   const [showGallery, setShowGallery] = useState(false);
@@ -286,7 +289,9 @@ export default function InboxPage() {
     });
   }, [contacts, contactSearch]);
 
+  // Ne pas réinitialiser la sélection lors de la recherche si on est en mode multi-sélection
   useEffect(() => {
+    if (multiSelectMode) return; // Ne pas réinitialiser en mode multi-sélection
     if (!filteredContacts.length) {
       setSelectedContact(null);
       return;
@@ -294,7 +299,75 @@ export default function InboxPage() {
     if (!selectedContact || !filteredContacts.some((c) => c.id === selectedContact.id)) {
       setSelectedContact(filteredContacts[0]);
     }
-  }, [filteredContacts, selectedContact]);
+  }, [filteredContacts, selectedContact, multiSelectMode]);
+
+  const handleToggleContactSelect = useCallback((contactId) => {
+    setSelectedContacts((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(contactId)) {
+        newSet.delete(contactId);
+      } else {
+        newSet.add(contactId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  const handleCreateCampaignFromContacts = useCallback(async () => {
+    if (!activeAccount) {
+      alert("Aucun compte WhatsApp actif. Veuillez sélectionner un compte.");
+      return;
+    }
+
+    if (selectedContacts.size === 0) {
+      alert("Veuillez sélectionner au moins un contact.");
+      return;
+    }
+
+    try {
+      // Créer un groupe de broadcast
+      const groupName = `Campagne - ${new Date().toLocaleDateString('fr-FR')}`;
+      const res = await createBroadcastGroup({
+        account_id: activeAccount,
+        name: groupName,
+        description: `Campagne créée depuis ${selectedContacts.size} contact(s) sélectionné(s)`
+      });
+
+      const newGroup = res.data;
+
+      // Ajouter tous les contacts sélectionnés au groupe
+      const selectedContactsArray = Array.from(selectedContacts);
+      const contactObjects = selectedContactsArray
+        .map(id => contacts.find(c => c.id === id))
+        .filter(Boolean);
+
+      for (const contact of contactObjects) {
+        try {
+          await addRecipientToGroup(newGroup.id, {
+            phone_number: contact.whatsapp_number,
+            contact_id: contact.id,
+            display_name: contact.display_name,
+          });
+        } catch (error) {
+          console.error(`Error adding contact ${contact.id} to group:`, error);
+        }
+      }
+
+      // Réinitialiser la sélection
+      setSelectedContacts(new Set());
+      setMultiSelectMode(false);
+
+      // Afficher le groupe créé
+      await loadBroadcastGroups();
+      setSelectedGroup(newGroup);
+      setFilter("groups");
+
+      alert(`Campagne créée avec ${contactObjects.length} contact(s) !`);
+    } catch (error) {
+      console.error("Error creating campaign:", error);
+      alert(error.response?.data?.detail || "Erreur lors de la création de la campagne");
+    }
+  }, [activeAccount, selectedContacts, contacts, loadBroadcastGroups]);
 
   const handleSelectConversation = (conv) => {
     setSelectedConversation(conv);
@@ -412,7 +485,42 @@ export default function InboxPage() {
           canViewContacts ? (
             <div className="workspace-main contacts-mode">
               <div className="contacts-pane">
-                <h3 className="panel-title">Contacts</h3>
+                <div className="contacts-header">
+                  <h3 className="panel-title">Contacts</h3>
+                  <div className="contacts-actions">
+                    {!multiSelectMode ? (
+                      <button
+                        className="btn-secondary btn-sm"
+                        onClick={() => setMultiSelectMode(true)}
+                      >
+                        Sélection multiple
+                      </button>
+                    ) : (
+                      <>
+                        <span className="selection-count">
+                          {selectedContacts.size} sélectionné{selectedContacts.size > 1 ? 's' : ''}
+                        </span>
+                        {selectedContacts.size > 0 && activeAccount && (
+                          <button
+                            className="btn-primary btn-sm"
+                            onClick={handleCreateCampaignFromContacts}
+                          >
+                            Créer une campagne
+                          </button>
+                        )}
+                        <button
+                          className="btn-secondary btn-sm"
+                          onClick={() => {
+                            setMultiSelectMode(false);
+                            setSelectedContacts(new Set());
+                          }}
+                        >
+                          Annuler
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
                 <div className="conversation-search">
                   <input
                     placeholder="Trouver un contact"
@@ -424,6 +532,9 @@ export default function InboxPage() {
                   contacts={filteredContacts}
                   selected={selectedContact}
                   onSelect={setSelectedContact}
+                  selectedContacts={selectedContacts}
+                  onToggleSelect={handleToggleContactSelect}
+                  multiSelect={multiSelectMode}
                 />
               </div>
             </div>

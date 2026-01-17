@@ -261,43 +261,93 @@ function RichMediaBubble({ message, messageType }) {
 }
 
 function InteractiveBubble({ message }) {
-  const content = message.content_text || "";
+  // Parser interactive_data pour obtenir header, body, footer et boutons
+  let headerText = null;
+  let bodyText = message.content_text || "";
+  let footerText = null;
+  let buttons = [];
+  let interactiveType = null;
   
-  // Extraire les parties du message interactif
-  const lines = content.split("\n");
-  const bodyText = lines[0] || "";
-  const buttonInfo = lines.find(line => line.startsWith("[Boutons:") || line.startsWith("[Liste"));
-  
-  if (buttonInfo) {
-    // C'est un message avec boutons
-    const buttonsMatch = buttonInfo.match(/\[Boutons: (.*)\]/);
-    if (buttonsMatch) {
-      const buttonTitles = buttonsMatch[1].split(", ");
-      return (
-        <div className="interactive-bubble">
-          <div className="interactive-bubble__body">{bodyText}</div>
-          <div className="interactive-bubble__buttons">
-            {buttonTitles.map((title, i) => (
-              <div key={i} className="interactive-bubble__button">{title}</div>
-            ))}
-          </div>
-        </div>
-      );
+  if (message.interactive_data) {
+    try {
+      const interactiveData = typeof message.interactive_data === 'string' 
+        ? JSON.parse(message.interactive_data) 
+        : message.interactive_data;
+      
+      interactiveType = interactiveData.type;
+      
+      // Extraire header, body, footer depuis interactive_data
+      if (interactiveData.header) {
+        headerText = interactiveData.header;
+      }
+      if (interactiveData.body) {
+        bodyText = interactiveData.body;
+      }
+      if (interactiveData.footer) {
+        footerText = interactiveData.footer;
+      }
+      
+      // Extraire les boutons depuis action
+      if (interactiveData.action) {
+        if (interactiveData.action.buttons && Array.isArray(interactiveData.action.buttons)) {
+          // Format pour messages interactifs: {type: "reply", reply: {id: "...", title: "..."}}
+          buttons = interactiveData.action.buttons.map(btn => ({
+            text: btn.reply?.title || btn.text || '',
+            type: btn.type || 'reply'
+          }));
+        } else if (interactiveData.action.button && interactiveData.action.sections) {
+          // Format pour listes interactives
+          interactiveType = 'list';
+        }
+      }
+      
+      // Si les boutons sont directement dans interactiveData.buttons (format template)
+      if (interactiveData.buttons && Array.isArray(interactiveData.buttons) && buttons.length === 0) {
+        buttons = interactiveData.buttons.map(btn => ({
+          text: btn.text || btn.reply?.title || '',
+          type: btn.type || 'QUICK_REPLY',
+          url: btn.url || '',
+          phone_number: btn.phone_number || ''
+        }));
+      }
+    } catch (e) {
+      console.warn('Error parsing interactive_data:', e);
     }
+  }
+  
+  // Si on n'a pas pu parser interactive_data, essayer de parser le content_text
+  if (!headerText && !footerText && buttons.length === 0) {
+    const content = message.content_text || "";
+    const lines = content.split("\n");
+    bodyText = lines[0] || "";
+    const buttonInfo = lines.find(line => line.startsWith("[Boutons:") || line.startsWith("[Liste"));
     
-    // C'est une liste
-    return (
-      <div className="interactive-bubble">
-        <div className="interactive-bubble__body">{bodyText}</div>
+    if (buttonInfo) {
+      const buttonsMatch = buttonInfo.match(/\[Boutons: (.*)\]/);
+      if (buttonsMatch) {
+        const buttonTitles = buttonsMatch[1].split(", ");
+        buttons = buttonTitles.map(title => ({ text: title, type: 'reply' }));
+      }
+    }
+  }
+  
+  // Afficher le message avec header, body, footer et boutons (comme les templates)
+  return (
+    <div className="interactive-bubble">
+      {headerText && (
+        <div className="interactive-bubble__header">{headerText}</div>
+      )}
+      <div className="interactive-bubble__body">{bodyText}</div>
+      {footerText && (
+        <div className="interactive-bubble__footer">{footerText}</div>
+      )}
+      {interactiveType === 'list' && (
         <div className="interactive-bubble__list-indicator">
           <FiList /> Liste interactive
         </div>
-      </div>
-    );
-  }
-  
-  // Fallback au texte simple
-  return <span className="bubble__text">{content}</span>;
+      )}
+    </div>
+  );
 }
 
 function renderBody(message) {
@@ -321,7 +371,64 @@ function renderBody(message) {
 
   // Messages interactifs
   if (messageType === "interactive") {
-    return { content: <InteractiveBubble message={message} />, buttons: null };
+    // Parser interactive_data pour extraire les boutons
+    let buttons = [];
+    if (message.interactive_data) {
+      try {
+        const interactiveData = typeof message.interactive_data === 'string' 
+          ? JSON.parse(message.interactive_data) 
+          : message.interactive_data;
+        
+        // Extraire les boutons depuis action
+        if (interactiveData.action) {
+          if (interactiveData.action.buttons && Array.isArray(interactiveData.action.buttons)) {
+            // Format pour messages interactifs: {type: "reply", reply: {id: "...", title: "..."}}
+            buttons = interactiveData.action.buttons.map(btn => ({
+              text: btn.reply?.title || btn.text || '',
+              type: btn.type || 'reply'
+            }));
+          }
+        }
+        
+        // Si les boutons sont directement dans interactiveData.buttons (format template)
+        if (interactiveData.buttons && Array.isArray(interactiveData.buttons) && buttons.length === 0) {
+          buttons = interactiveData.buttons.map(btn => ({
+            text: btn.text || btn.reply?.title || '',
+            type: btn.type || 'QUICK_REPLY',
+            url: btn.url || '',
+            phone_number: btn.phone_number || ''
+          }));
+        }
+      } catch (e) {
+        console.warn('Error parsing interactive_data for buttons:', e);
+      }
+    }
+    
+    // Si on n'a pas de boutons dans interactive_data, essayer de parser le content_text
+    if (buttons.length === 0) {
+      const content = message.content_text || "";
+      const buttonInfo = content.split("\n").find(line => line.startsWith("[Boutons:"));
+      if (buttonInfo) {
+        const buttonsMatch = buttonInfo.match(/\[Boutons: (.*)\]/);
+        if (buttonsMatch) {
+          const buttonTitles = buttonsMatch[1].split(", ");
+          buttons = buttonTitles.map(title => ({ text: title, type: 'reply' }));
+        }
+      }
+    }
+    
+    return { 
+      content: <InteractiveBubble message={message} />, 
+      buttons: buttons.length > 0 ? (
+        <div className="bubble-media__buttons-container">
+          {buttons.map((button, index) => (
+            <div key={index} className="bubble-media__button">
+              {button.text || button.title || ''}
+            </div>
+          ))}
+        </div>
+      ) : null
+    };
   }
 
   if (!typeEntry || messageType === "text" || messageType === "template") {

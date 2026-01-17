@@ -1047,30 +1047,31 @@ export default function ChatWindow({
           </div>
         )}
 
-        <div className="messages" ref={messagesContainerRef}>
-          {filteredMessages.map((m) => (
-            <div
-              key={m.id}
-              ref={(el) => {
-                if (el) messageRefs.current[m.id] = el;
-              }}
-            >
-              <MessageBubble 
-                message={m} 
-                conversation={conversation}
-                onReactionChange={refreshMessages}
-                forceReactionOpen={reactionTargetId === m.id}
-                onContextMenu={(e) => handleContextMenu(e, m)}
-                onResend={resendMessage}
-              />
-            </div>
-          ))}
-          {otherTyping && <TypingIndicator />}
-          <div ref={messagesEndRef} />
-        </div>
+        <div className="messages-wrapper">
+          <div className="messages" ref={messagesContainerRef}>
+            {filteredMessages.map((m) => (
+              <div
+                key={m.id}
+                ref={(el) => {
+                  if (el) messageRefs.current[m.id] = el;
+                }}
+              >
+                <MessageBubble 
+                  message={m} 
+                  conversation={conversation}
+                  onReactionChange={refreshMessages}
+                  forceReactionOpen={reactionTargetId === m.id}
+                  onContextMenu={(e) => handleContextMenu(e, m)}
+                  onResend={resendMessage}
+                />
+              </div>
+            ))}
+            {otherTyping && <TypingIndicator />}
+            <div ref={messagesEndRef} />
+          </div>
 
-        {showInfo && (
-          <aside className="chat-info-panel">
+          {showInfo && (
+            <aside className="chat-info-panel">
             <h3>Informations</h3>
             <div className="info-row">
               <span>Nom</span>
@@ -1095,7 +1096,8 @@ export default function ChatWindow({
               <MediaGallery conversationId={conversationId} mediaType="all" />
             </div>
           </aside>
-        )}
+          )}
+        </div>
       </div>
 
       <AdvancedMessageInput 

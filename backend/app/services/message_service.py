@@ -2262,69 +2262,21 @@ async def _download_and_store_media_async(
         )
         
         logger.info(f"💾 Starting storage in Supabase: message_id={message_db_id}, mime_type={detected_mime_type}")
-        # Télécharger et stocker dans Supabase Storage
+        # Télécharger et stocker dans Supabase Storage (asynchrone et non-bloquant)
         # IMPORTANT: Passer le token pour authentifier la requête de téléchargement
-        storage_url = await download_and_store_message_media(
+        # L'upload se fait maintenant en arrière-plan, cette fonction retourne immédiatement
+        await download_and_store_message_media(
             message_id=message_db_id,
             media_url=download_url,
             content_type=detected_mime_type,
             filename=filename or meta_json.get("file_name"),
-            access_token=token  # Passer le token pour authentifier le téléchargement
+            access_token=token,  # Passer le token pour authentifier le téléchargement
+            account=account  # Passer le compte pour Google Drive si configuré
         )
         
-        if storage_url:
-            # Mettre à jour le message avec l'URL de stockage
-            await supabase_execute(
-                supabase.table("messages")
-                .update({"storage_url": storage_url})
-                .eq("id", message_db_id)
-            )
-            logger.info(f"✅ Media stored in Supabase Storage: message_id={message_db_id}, storage_url={storage_url}")
-            
-            # Upload vers Google Drive si configuré (de manière asynchrone et non-bloquante)
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] Checking Google Drive configuration for account_id={account.get('id')}, account_name={account.get('name')}")
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] Account keys available: {list(account.keys())}")
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_enabled={account.get('google_drive_enabled')} (type: {type(account.get('google_drive_enabled'))})")
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_connected={account.get('google_drive_connected')} (type: {type(account.get('google_drive_connected'))})")
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] has_access_token={bool(account.get('google_drive_access_token'))} (value present: {account.get('google_drive_access_token') is not None})")
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] has_refresh_token={bool(account.get('google_drive_refresh_token'))} (value present: {account.get('google_drive_refresh_token') is not None})")
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_folder_id={account.get('google_drive_folder_id')}")
-            logger.info(f"🔍 [GOOGLE DRIVE CHECK] google_drive_token_expiry={account.get('google_drive_token_expiry')}")
-            
-            google_drive_enabled = account.get("google_drive_enabled")
-            google_drive_connected = account.get("google_drive_connected")
-            has_access_token = bool(account.get("google_drive_access_token"))
-            has_refresh_token = bool(account.get("google_drive_refresh_token"))
-            
-            if (google_drive_enabled and 
-                google_drive_connected and 
-                has_access_token and 
-                has_refresh_token):
-                
-                logger.info(f"✅ [GOOGLE DRIVE] All conditions met, creating upload task for message_id={message_db_id}")
-                # Créer une tâche asynchrone pour l'upload Google Drive (non-bloquant)
-                asyncio.create_task(_upload_to_google_drive_async(
-                    message_db_id=message_db_id,
-                    account=account,
-                    storage_url=storage_url,
-                    filename=filename or meta_json.get("file_name") or f"file_{message_db_id}",
-                    mime_type=detected_mime_type
-                ))
-                logger.info(f"🚀 [GOOGLE DRIVE] Upload task created successfully for message_id={message_db_id}")
-            else:
-                missing_conditions = []
-                if not google_drive_enabled:
-                    missing_conditions.append("google_drive_enabled=False")
-                if not google_drive_connected:
-                    missing_conditions.append("google_drive_connected=False")
-                if not has_access_token:
-                    missing_conditions.append("access_token missing")
-                if not has_refresh_token:
-                    missing_conditions.append("refresh_token missing")
-                
-                logger.warning(f"⚠️ [GOOGLE DRIVE] Upload skipped for message_id={message_db_id}, account_id={account.get('id')}. Missing conditions: {', '.join(missing_conditions)}")
-        else:
-            logger.warning(f"❌ Failed to store media in Supabase Storage: message_id={message_db_id}")
+        # L'upload et la mise à jour du message se font maintenant en arrière-plan
+        # via la tâche asynchrone dans storage_service._upload_media_task
+        logger.info(f"✅ [ASYNC UPLOAD] Media download and upload task created: message_id={message_db_id}")
             
     except Exception as e:
         logger.error(f"❌ Error downloading and storing media: message_id={message_db_id}, error={e}", exc_info=True)

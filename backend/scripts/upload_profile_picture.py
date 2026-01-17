@@ -71,10 +71,12 @@ async def upload_manual_profile_picture(contact_id: str, image_path: str):
     # 3. Upload dans Supabase Storage
     print("3️⃣ Uploading to Supabase Storage...")
     try:
+        # Utiliser async_upload=False pour attendre le résultat (script synchrone)
         stored_url = await upload_profile_picture(
             contact_id=contact_id,
             image_data=image_data,
-            content_type=content_type
+            content_type=content_type,
+            async_upload=False  # Attendre le résultat pour ce script
         )
         
         if stored_url:
