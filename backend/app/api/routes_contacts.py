@@ -274,16 +274,26 @@ async def get_contact_whatsapp_info(
             phone_number=whatsapp_number
         )
         
-        # Enregistrer les informations dans la base de données
+        # OPTIMISATION: Si l'appel WhatsApp échoue mais qu'on a des données existantes, les utiliser
+        # Ne pas lever d'erreur 5xx si les données sont déjà en cache/local
+        has_existing_data = contact.get("whatsapp_name") or contact.get("profile_picture_url")
+        
+        # Enregistrer les informations dans la base de données (seulement si on a de nouvelles données)
         update_data = {
             "whatsapp_info_fetched_at": datetime.now(timezone.utc).isoformat()
         }
         
         if contact_info.get("name"):
             update_data["whatsapp_name"] = contact_info["name"]
+        elif has_existing_data and contact.get("whatsapp_name"):
+            # Utiliser les données existantes si l'API n'a pas retourné de nom
+            contact_info["name"] = contact.get("whatsapp_name")
         
         if contact_info.get("profile_picture_url"):
             update_data["profile_picture_url"] = contact_info["profile_picture_url"]
+        elif has_existing_data and contact.get("profile_picture_url"):
+            # Utiliser les données existantes si l'API n'a pas retourné d'image
+            contact_info["profile_picture_url"] = contact.get("profile_picture_url")
         
         if update_data:
             await supabase_execute(
@@ -297,5 +307,32 @@ async def get_contact_whatsapp_info(
             "data": contact_info
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching WhatsApp info: {str(e)}")
+        # OPTIMISATION: Améliorer la gestion d'erreur pour éviter les 5xx systématiques
+        error_msg = str(e)
+        logger.error(f"❌ Error fetching WhatsApp info for contact {contact_id}: {error_msg}", exc_info=True)
+        
+        # Si on a des données existantes, les retourner avec un avertissement plutôt qu'une erreur
+        has_existing_data = contact.get("whatsapp_name") or contact.get("profile_picture_url")
+        if has_existing_data:
+            logger.warning(f"⚠️ WhatsApp API failed for contact {contact_id}, using cached data")
+            return {
+                "success": True,
+                "data": {
+                    "name": contact.get("whatsapp_name"),
+                    "profile_picture_url": contact.get("profile_picture_url"),
+                    "phone_number": whatsapp_number
+                },
+                "warning": "WhatsApp API unavailable, using cached data"
+            }
+        
+        # Si pas de données existantes et erreur WhatsApp API, retourner 503 Service Unavailable
+        # plutôt que 500 Internal Server Error pour indiquer un problème temporaire
+        if "whatsapp" in error_msg.lower() or "api" in error_msg.lower() or "graph" in error_msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail=f"WhatsApp API temporarily unavailable: {error_msg}"
+            )
+        
+        # Pour les autres erreurs, retourner 500
+        raise HTTPException(status_code=500, detail=f"Error fetching WhatsApp info: {error_msg}")
 

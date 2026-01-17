@@ -47,3 +47,11 @@ docker compose -f docker-compose.prod.yml stop frontend
 docker compose -f docker-compose.prod.yml build --no-cache frontend
 docker compose -f docker-compose.prod.yml up -d frontend
 ```
+
+## Grafana reset
+```bash
+ssh ubuntu@217.182.65.32
+cd /opt/whatsapp-inbox/deploy
+# IMPORTANT: Mettre le mot de passe entre guillemets pour éviter les problèmes avec ! et autres caractères spéciaux
+docker compose -f docker-compose.prod.yml exec grafana grafana-cli admin reset-admin-password "votre_nouveau_mot_de_passe"
+```

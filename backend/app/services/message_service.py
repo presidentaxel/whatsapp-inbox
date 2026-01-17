@@ -840,6 +840,11 @@ async def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Op
     # Invalider le cache pour garantir la cohérence
     from app.core.cache import invalidate_cache_pattern
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
+    # OPTIMISATION: Invalider aussi le cache de la fenêtre gratuite
+    # car un nouveau message entrant change potentiellement le statut
+    from app.core.cache import get_cache
+    cache = await get_cache()
+    await cache.delete(f"free_window:{conversation_id}")
 
 
 async def _save_failed_message(conversation_id: str, content_text: str, timestamp_iso: str, error_message: str):
@@ -1456,6 +1461,9 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
     """
     Vérifie si on est dans la fenêtre de 24h pour envoyer un message gratuit.
     
+    OPTIMISATION: Cache de 5 minutes pour éviter les requêtes DB répétées.
+    Le cache est invalidé lorsqu'un nouveau message entrant arrive.
+    
     WhatsApp Cloud API permet d'envoyer des messages gratuits pendant 24h
     après la dernière interaction CLIENT (message entrant uniquement).
     
@@ -1468,6 +1476,17 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
         - (False, last_interaction_time) si hors fenêtre (nécessite un template payant)
         - (False, None) si aucun message trouvé
     """
+    # OPTIMISATION: Vérifier le cache d'abord (TTL: 5 minutes)
+    from app.core.cache import get_cache
+    cache = await get_cache()
+    cache_key = f"free_window:{conversation_id}"
+    
+    cached_result = await cache.get(cache_key)
+    if cached_result is not None:
+        is_free, last_interaction_time = cached_result
+        logger.debug(f"🕐 Free window CACHE HIT for conversation {conversation_id}: is_free={is_free}")
+        return (is_free, last_interaction_time)
+    
     # Récupérer le dernier message ENTRANT (client) de la conversation
     # Seuls les messages entrants comptent pour la fenêtre gratuite
     # Exclure les messages échoués car ils ne comptent pas comme interaction valide
@@ -1518,6 +1537,10 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
             f"last_interaction={last_interaction_time} ({last_interaction_direction}), "
             f"hours_elapsed={hours_elapsed:.2f}, is_free={is_free}"
         )
+        
+        # OPTIMISATION: Mettre en cache le résultat (TTL: 5 minutes)
+        # Le cache sera invalidé lors de l'arrivée d'un nouveau message entrant
+        await cache.set(cache_key, (is_free, last_interaction_time), ttl_seconds=300)
         
         return (is_free, last_interaction_time)
         

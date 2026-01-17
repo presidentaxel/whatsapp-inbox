@@ -67,6 +67,9 @@ async def whatsapp_webhook(request: Request):
     """
     Endpoint de réception des événements WhatsApp
     
+    OPTIMISATION: Réponse HTTP immédiate (200 OK) puis traitement en arrière-plan.
+    Cela évite les timeouts WhatsApp et améliore significativement les performances.
+    
     Meta envoie des POST JSON avec les événements suivants:
     - messages: Nouveaux messages reçus
     - statuses: Mises à jour de statuts (sent, delivered, read, failed)
@@ -101,6 +104,8 @@ async def whatsapp_webhook(request: Request):
     Documentation Meta:
     https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/components
     """
+    import asyncio
+    
     try:
         # Log immédiat pour voir que la requête arrive
         client_ip = request.client.host if request.client else "unknown"
@@ -115,54 +120,46 @@ async def whatsapp_webhook(request: Request):
             f"entries={len(entries)}"
         )
         
-        # Log détaillé de la structure pour debug
-        for entry_idx, entry in enumerate(entries):
-            entry_id = entry.get("id")
-            changes = entry.get("changes", [])
-            logger.info(
-                f"   Entry {entry_idx + 1}: id={entry_id}, changes={len(changes)}"
-            )
-            for change_idx, change in enumerate(changes):
-                value = change.get("value", {})
-                metadata = value.get("metadata", {})
-                phone_number_id = metadata.get("phone_number_id")
-                logger.info(
-                    f"      Change {change_idx + 1}: field={change.get('field')}, "
-                    f"phone_number_id={phone_number_id}, "
-                    f"has_messages={bool(value.get('messages'))}, "
-                    f"has_statuses={bool(value.get('statuses'))}"
-                )
-        
-        # Compter les messages et statuts
+        # Compter les messages et statuts pour le log
         total_messages = 0
         total_statuses = 0
         for entry in entries:
             for change in entry.get("changes", []):
                 value = change.get("value", {})
-                messages = value.get("messages", [])
-                statuses = value.get("statuses", [])
-                total_messages += len(messages)
-                total_statuses += len(statuses)
-                
-                # Log détaillé pour chaque change
-                if messages:
-                    logger.info(f"📨 Change contains {len(messages)} message(s)")
-                    for msg in messages:
-                        logger.info(f"   - Message type: {msg.get('type')}, from: {msg.get('from')}")
-                if statuses:
-                    logger.info(f"📊 Change contains {len(statuses)} status(es)")
+                total_messages += len(value.get("messages", []))
+                total_statuses += len(value.get("statuses", []))
         
         if total_messages > 0 or total_statuses > 0:
             logger.info(f"📨 Webhook contains {total_messages} message(s) and {total_statuses} status(es)")
         else:
             logger.warning("⚠️ Webhook received but no messages or statuses found")
         
-        # Log complet du webhook pour debug (sans les données sensibles)
-        logger.debug(f"📋 Full webhook payload: {json.dumps(data, indent=2)}")
+        # OPTIMISATION: Traitement en arrière-plan pour répondre immédiatement à WhatsApp
+        # WhatsApp attend une réponse 200 OK rapide (< 20s), sinon il réessaie
+        async def process_webhook_background():
+            try:
+                await handle_incoming_message(data)
+            except Exception as bg_error:
+                logger.error(f"❌ Error processing webhook in background: {bg_error}", exc_info=True)
+                # Enregistrer l'erreur pour diagnostic
+                try:
+                    from app.api.routes_diagnostics import log_error_to_memory
+                    log_error_to_memory(
+                        "webhook_processing_background",
+                        str(bg_error),
+                        {
+                            "client_ip": client_ip,
+                            "data_keys": list(data.keys()) if data else []
+                        }
+                    )
+                except:
+                    pass  # Ne pas faire échouer si le diagnostic échoue
         
-        await handle_incoming_message(data)
+        # Lancer le traitement en arrière-plan (ne pas attendre)
+        asyncio.create_task(process_webhook_background())
         
-        # WhatsApp attend une réponse 200 rapide
+        # WhatsApp attend une réponse 200 rapide (< 20s)
+        # On retourne immédiatement pour éviter les timeouts
         return {"status": "received"}
     
     except Exception as e:
