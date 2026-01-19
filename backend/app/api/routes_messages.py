@@ -1734,6 +1734,7 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
     logger.info(f"   - footer_text: {repr(footer_text)}")
     logger.info(f"   - buttons (raw): {repr(payload.get('buttons'))}")
     logger.info(f"   - sections (raw): {repr(payload.get('sections'))}")
+    logger.info(f"   - button_text (raw): {repr(payload.get('button_text'))}")
     
     # Normaliser header_text et footer_text (None si chaîne vide)
     normalized_header_text = header_text.strip() if header_text and header_text.strip() else None

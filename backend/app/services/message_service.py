@@ -354,8 +354,14 @@ async def _process_incoming_message(
         logger.info(f"🔍 [MESSAGE PROCESSING] Processing message from {wa_id}:")
         logger.info(f"   - wa_message_id: {message.get('id')}")
         logger.info(f"   - msg_type: {msg_type}")
+        logger.info(f"   - content_text: {repr(content_text)}")
         logger.info(f"   - media_meta: {media_meta}")
         logger.info(f"   - account_id: {account_id}")
+        
+        # Pour les messages interactifs, logger toute la structure
+        if msg_type == "interactive":
+            logger.info(f"🔍 [MESSAGE PROCESSING] Full message structure for interactive:")
+            logger.info(f"   {json.dumps(message, indent=2, ensure_ascii=False)}")
 
         # Pour les réponses de boutons, traiter comme un message texte normal
         # car le contenu est maintenant extrait dans content_text
@@ -790,10 +796,30 @@ def _extract_content_text(message: Dict[str, Any]) -> str:
 
     if msg_type == "interactive":
         interactive = message.get("interactive", {})
+        logger.info(f"🔍 [EXTRACT TEXT] Interactive message detected: type={interactive.get('type')}")
+        logger.info(f"🔍 [EXTRACT TEXT] Full interactive data: {json.dumps(interactive, indent=2, ensure_ascii=False)}")
         if interactive.get("type") == "button_reply":
-            return interactive.get("button_reply", {}).get("title", "")
+            button_reply = interactive.get("button_reply", {})
+            title = button_reply.get("title", "")
+            logger.info(f"🔍 [EXTRACT TEXT] Button reply: title={title}, full_data={json.dumps(button_reply, indent=2, ensure_ascii=False)}")
+            return title
         if interactive.get("type") == "list_reply":
-            return interactive.get("list_reply", {}).get("title", "")
+            list_reply = interactive.get("list_reply", {})
+            title = list_reply.get("title", "")
+            row_id = list_reply.get("id", "")
+            description = list_reply.get("description", "")
+            logger.info(f"🔍 [EXTRACT TEXT] List reply detected:")
+            logger.info(f"   - title: {title}")
+            logger.info(f"   - id: {row_id}")
+            logger.info(f"   - description: {description}")
+            logger.info(f"   - full list_reply data: {json.dumps(list_reply, indent=2, ensure_ascii=False)}")
+            # Construire un texte plus complet avec toutes les infos
+            text_parts = [title]
+            if description:
+                text_parts.append(description)
+            if row_id:
+                text_parts.append(f"[ID: {row_id}]")
+            return " | ".join(text_parts) if len(text_parts) > 1 else title
 
     if msg_type == "button":
         # Gérer les réponses de boutons de template WhatsApp

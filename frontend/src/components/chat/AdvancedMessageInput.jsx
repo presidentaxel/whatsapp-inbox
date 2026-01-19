@@ -883,7 +883,11 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const handleListSend = async () => {
-    if (!conversation?.id || !text.trim()) return;
+    console.log("📋 [FRONTEND] handleListSend appelé", { mode, text, listSections, headerText, footerText, buttonText });
+    if (!conversation?.id || !text.trim()) {
+      console.warn("📋 [FRONTEND] handleListSend annulé: conversation ou text manquant");
+      return;
+    }
     
     const validSections = listSections
       .map(section => ({
@@ -892,6 +896,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       }))
       .filter(s => s.rows.length > 0);
     
+    console.log("📋 [FRONTEND] Sections valides:", validSections);
     if (validSections.length === 0) {
       alert("Ajoutez au moins une section avec des lignes");
       return;
@@ -942,7 +947,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setMode("text");
 
     try {
-      const response = await sendInteractiveMessage({
+      const payload = {
         conversation_id: conversation.id,
         interactive_type: "list",
         body_text: text,
@@ -950,7 +955,10 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         sections: validSections,
         header_text: headerText || undefined,
         footer_text: footerText || undefined
-      });
+      };
+      console.log("📋 [FRONTEND] Envoi sendInteractiveMessage avec payload:", payload);
+      const response = await sendInteractiveMessage(payload);
+      console.log("📋 [FRONTEND] Réponse reçue:", response);
 
       // Le message optimiste sera remplacé automatiquement par le message réel
       // via le webhook Supabase ou le refreshMessages
@@ -1565,12 +1573,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                     </div>
                     <span>Boutons interactifs</span>
                   </button>
-                  <button className="menu-item" onClick={() => openMode("list")}>
-                    <div className="menu-icon menu-icon--list">
-                      <FiList />
-                    </div>
-                    <span>Liste interactive</span>
-                  </button>
+                  {!isOutsideFreeWindow && (
+                    <button className="menu-item" onClick={() => openMode("list")}>
+                      <div className="menu-icon menu-icon--list">
+                        <FiList />
+                      </div>
+                      <span>Liste interactive</span>
+                    </button>
+                  )}
                   <button className="menu-item" onClick={() => openMode("template")}>
                     <div className="menu-icon menu-icon--template">
                       <FiFile />
