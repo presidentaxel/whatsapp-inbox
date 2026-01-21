@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
-from app.services.account_service import get_account_by_id
+from app.services.account_service import get_account_by_id, invalidate_account_cache
 from app.services import whatsapp_api_service
 
 router = APIRouter(prefix="/whatsapp/media", tags=["WhatsApp Media"])
@@ -51,6 +51,26 @@ async def upload_media(
         )
         return {"success": True, "data": result}
     except Exception as e:
+        error_str = str(e).lower()
+        # Si erreur de token expiré, invalider le cache et réessayer une fois
+        if "401" in error_str or "unauthorized" in error_str or "expired" in error_str or "session has expired" in error_str:
+            invalidate_account_cache(account_id)
+            # Réessayer avec le compte rechargé depuis la DB
+            account = await get_account_by_id(account_id)
+            if account:
+                access_token = account.get("access_token")
+                if access_token:
+                    try:
+                        result = await whatsapp_api_service.upload_media_from_bytes(
+                            phone_number_id=phone_number_id,
+                            access_token=access_token,
+                            file_content=content,
+                            filename=filename,
+                            mime_type=mime_type
+                        )
+                        return {"success": True, "data": result}
+                    except Exception as retry_error:
+                        raise HTTPException(status_code=400, detail=str(retry_error))
         raise HTTPException(status_code=400, detail=str(e))
 
 

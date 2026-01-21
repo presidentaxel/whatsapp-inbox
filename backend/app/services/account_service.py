@@ -56,6 +56,11 @@ def invalidate_account_cache(account_id: str):
     _cache_pop(_account_cache, account_id)
     # Invalider aussi les caches par phone_number_id et verify_token si on a le compte
     # (on ne peut pas les invalider directement sans connaître les valeurs)
+    # Nettoyer aussi les caches dérivés
+    for cache in (_phone_cache, _verify_cache):
+        keys_to_purge = [key for key, (_, record) in cache.items() if record.get("id") == account_id]
+        for key in keys_to_purge:
+            cache.pop(key, None)
 
 
 async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Sequence[Dict[str, Any]]:
