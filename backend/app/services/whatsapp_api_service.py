@@ -20,6 +20,62 @@ WHATSAPP_API_VERSION = "v21.0"
 GRAPH_API_BASE = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}"
 
 
+class WhatsAppAPIError(Exception):
+    """Exception personnalisée pour les erreurs de l'API WhatsApp"""
+    def __init__(self, message: str, error_code: Optional[str] = None, error_subcode: Optional[str] = None, is_token_expired: bool = False):
+        super().__init__(message)
+        self.error_code = error_code
+        self.error_subcode = error_subcode
+        self.is_token_expired = is_token_expired
+
+
+def parse_whatsapp_error(response: httpx.Response) -> WhatsAppAPIError:
+    """
+    Parse une réponse d'erreur de l'API WhatsApp et retourne une exception appropriée
+    """
+    error_text = response.text
+    error_json = None
+    
+    try:
+        error_json = response.json()
+    except:
+        pass
+    
+    # Détecter les erreurs de token expiré
+    error_message = error_text.lower()
+    is_token_expired = False
+    error_code = None
+    error_subcode = None
+    
+    if error_json:
+        error_obj = error_json.get("error", {})
+        error_code = error_obj.get("code")
+        error_subcode = error_obj.get("error_subcode")
+        error_message = error_obj.get("message", error_text)
+        
+        # Détecter les codes d'erreur liés aux tokens expirés
+        if error_code == 190 or error_subcode == 463 or "expired" in error_message.lower() or "session has expired" in error_message.lower():
+            is_token_expired = True
+    
+    if is_token_expired:
+        message = (
+            "Le token d'accès WhatsApp a expiré. "
+            "Veuillez le renouveler en exécutant le script de rafraîchissement:\n"
+            "  python backend/scripts/refresh_whatsapp_token.py\n\n"
+            f"Détails de l'erreur: {error_message}"
+        )
+        return WhatsAppAPIError(message, error_code, error_subcode, is_token_expired=True)
+    
+    # Autres erreurs
+    if error_json:
+        error_obj = error_json.get("error", {})
+        message = error_obj.get("message", error_text)
+        error_type = error_obj.get("type", "unknown")
+        return WhatsAppAPIError(f"{error_type}: {message}", error_code, error_subcode)
+    
+    return WhatsAppAPIError(f"Erreur WhatsApp API: {error_text}", error_code, error_subcode)
+
+
 # ============================================================================
 # 1. MESSAGES - Envoyer tous types de messages
 # ============================================================================
@@ -742,6 +798,9 @@ async def create_message_template(
             pass
         logger.error(f"❌ [WHATSAPP API] Erreur Meta: status={response.status_code}, detail={error_detail}")
         logger.error(f"   Payload envoyé: {payload}")
+        
+        # Parser l'erreur pour détecter les tokens expirés
+        raise parse_whatsapp_error(response)
     
     response.raise_for_status()
     return response.json()

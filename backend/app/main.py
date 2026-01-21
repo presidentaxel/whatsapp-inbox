@@ -72,13 +72,14 @@ app.include_router(users_router, prefix="/admin/users")
 app.include_router(broadcast_router, prefix="/broadcast")
 
 # Nouvelles routes WhatsApp API complète
-app.include_router(whatsapp_messages_router, prefix="/api")
-app.include_router(whatsapp_media_router, prefix="/api")
-app.include_router(whatsapp_phone_router, prefix="/api")
-app.include_router(whatsapp_templates_router, prefix="/api")
-app.include_router(whatsapp_profile_router, prefix="/api")
-app.include_router(whatsapp_waba_router, prefix="/api")
-app.include_router(whatsapp_utils_router, prefix="/api")
+# Note: Pas de préfixe /api ici car Caddy le retire déjà avec uri strip_prefix /api
+app.include_router(whatsapp_messages_router)
+app.include_router(whatsapp_media_router)
+app.include_router(whatsapp_phone_router)
+app.include_router(whatsapp_templates_router)
+app.include_router(whatsapp_profile_router)
+app.include_router(whatsapp_waba_router)
+app.include_router(whatsapp_utils_router)
 
 if settings.PROMETHEUS_ENABLED:
     instrumentator = Instrumentator(

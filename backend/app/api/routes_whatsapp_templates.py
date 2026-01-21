@@ -8,6 +8,7 @@ from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services.account_service import get_account_by_id
 from app.services import whatsapp_api_service
+from app.services.whatsapp_api_service import WhatsAppAPIError
 from app.schemas.whatsapp import (
     CreateMessageTemplateRequest,
     DeleteMessageTemplateRequest,
@@ -53,8 +54,11 @@ async def list_templates(
             after=after
         )
         return {"success": True, "data": result}
+    except WhatsAppAPIError as e:
+        status_code = 401 if e.is_token_expired else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Erreur lors de la récupération des templates: {str(e)}")
 
 
 @router.post("/create/{account_id}")
@@ -140,8 +144,11 @@ async def create_template(
             components=components
         )
         return {"success": True, "data": result}
+    except WhatsAppAPIError as e:
+        status_code = 401 if e.is_token_expired else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Erreur lors de la création du template: {str(e)}")
 
 
 @router.delete("/delete/{account_id}")
@@ -180,6 +187,9 @@ async def delete_template(
             hsm_id=request.hsm_id
         )
         return {"success": True, "data": result}
+    except WhatsAppAPIError as e:
+        status_code = 401 if e.is_token_expired else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Erreur lors de la suppression du template: {str(e)}")
 
