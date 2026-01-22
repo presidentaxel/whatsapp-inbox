@@ -1938,11 +1938,17 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                         if (discussionPrefs?.enterToSend) {
                           if (!e.shiftKey) {
                             e.preventDefault();
-                            handleSend();
+                            // Vérifier le mode avant d'appeler handleSend
+                            if (mode === "buttons") handleButtonsSend();
+                            else if (mode === "list") handleListSend();
+                            else handleSend();
                           }
                         } else if (e.metaKey || e.ctrlKey) {
                           e.preventDefault();
-                          handleSend();
+                          // Vérifier le mode avant d'appeler handleSend
+                          if (mode === "buttons") handleButtonsSend();
+                          else if (mode === "list") handleListSend();
+                          else handleSend();
                         }
                       }
                     }}
@@ -1959,7 +1965,12 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                 {/* Bouton d'envoi */}
                 <button
                   className="btn-send-whatsapp btn-send-flat"
-                  onClick={handleSend}
+                  onClick={() => {
+                    // Vérifier le mode avant d'appeler handleSend
+                    if (mode === "buttons") handleButtonsSend();
+                    else if (mode === "list") handleListSend();
+                    else handleSend();
+                  }}
                   disabled={disabled || !text.trim() || uploading}
                   aria-label="Envoyer"
                 >
@@ -1987,11 +1998,17 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                         if (discussionPrefs?.enterToSend) {
                           if (!e.shiftKey) {
                             e.preventDefault();
-                            handleSend();
+                            // Vérifier le mode avant d'appeler handleSend
+                            if (mode === "buttons") handleButtonsSend();
+                            else if (mode === "list") handleListSend();
+                            else handleSend();
                           }
                         } else if (e.metaKey || e.ctrlKey) {
                           e.preventDefault();
-                          handleSend();
+                          // Vérifier le mode avant d'appeler handleSend
+                          if (mode === "buttons") handleButtonsSend();
+                          else if (mode === "list") handleListSend();
+                          else handleSend();
                         }
                       }
                     }}
@@ -2002,7 +2019,12 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                 {/* Bouton d'envoi */}
                 <button
                   className="btn-send-whatsapp btn-send-flat"
-                  onClick={handleSend}
+                  onClick={() => {
+                    // Vérifier le mode avant d'appeler handleSend
+                    if (mode === "buttons") handleButtonsSend();
+                    else if (mode === "list") handleListSend();
+                    else handleSend();
+                  }}
                   disabled={disabled || !text.trim() || uploading}
                   aria-label="Envoyer"
                 >

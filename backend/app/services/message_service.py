@@ -367,6 +367,28 @@ async def _process_incoming_message(
         # car le contenu est maintenant extrait dans content_text
         stored_message_type = "text" if msg_type == "button" else msg_type
 
+        # Extraire le contexte (message référencé) si présent
+        # WhatsApp envoie le contexte dans le champ "context" avec l'ID du message original
+        reply_to_message_id = None
+        context = message.get("context")
+        if context:
+            referenced_wa_message_id = context.get("id")
+            if referenced_wa_message_id:
+                logger.info(f"🔍 [MESSAGE PROCESSING] Message has context, referenced wa_message_id: {referenced_wa_message_id}")
+                # Chercher le message original dans la base de données
+                referenced_message = await supabase_execute(
+                    supabase.table("messages")
+                    .select("id")
+                    .eq("wa_message_id", referenced_wa_message_id)
+                    .eq("conversation_id", conversation["id"])  # S'assurer que c'est dans la même conversation
+                    .limit(1)
+                )
+                if referenced_message.data and len(referenced_message.data) > 0:
+                    reply_to_message_id = referenced_message.data[0]["id"]
+                    logger.info(f"✅ [MESSAGE PROCESSING] Found referenced message: reply_to_message_id={reply_to_message_id}")
+                else:
+                    logger.warning(f"⚠️ [MESSAGE PROCESSING] Referenced message not found: wa_message_id={referenced_wa_message_id}")
+
         # Insérer le message d'abord
         message_payload = {
             "conversation_id": conversation["id"],
@@ -380,6 +402,10 @@ async def _process_incoming_message(
             "media_mime_type": media_meta.get("media_mime_type"),
             "media_filename": media_meta.get("media_filename"),
         }
+        
+        # Ajouter reply_to_message_id si présent
+        if reply_to_message_id:
+            message_payload["reply_to_message_id"] = reply_to_message_id
         
         # Faire l'upsert avec logging détaillé
         logger.info(f"💾 [MESSAGE INSERT] Attempting to upsert message: wa_message_id={message.get('id')}, conversation_id={conversation['id']}, direction=inbound")
@@ -1012,6 +1038,26 @@ async def get_messages(
     res = await supabase_execute(query)
     rows = res.data or []
     rows.reverse()
+    
+    # Récupérer les messages référencés (quoted messages) pour les messages qui ont un reply_to_message_id
+    reply_to_message_ids = [msg.get("reply_to_message_id") for msg in rows if msg.get("reply_to_message_id")]
+    quoted_messages = {}
+    if reply_to_message_ids:
+        quoted_res = await supabase_execute(
+            supabase.table("messages")
+            .select("*")
+            .in_("id", reply_to_message_ids)
+        )
+        if quoted_res.data:
+            for quoted_msg in quoted_res.data:
+                quoted_messages[quoted_msg["id"]] = quoted_msg
+    
+    # Ajouter les messages référencés à chaque message
+    for msg in rows:
+        if msg.get("reply_to_message_id") and msg["reply_to_message_id"] in quoted_messages:
+            msg["reply_to_message"] = quoted_messages[msg["reply_to_message_id"]]
+        else:
+            msg["reply_to_message"] = None
     
     # Récupérer les réactions pour chaque message
     if rows:

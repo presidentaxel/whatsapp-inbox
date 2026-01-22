@@ -11,6 +11,7 @@ import {
   FiList,
   FiLink,
   FiSend,
+  FiArrowLeft,
 } from "react-icons/fi";
 import { MdPushPin } from "react-icons/md";
 import { api } from "../../api/axiosClient";
@@ -252,7 +253,10 @@ function RichMediaBubble({ message, messageType }) {
       <div className="bubble-media__buttons-container">
         {buttons.map((button, index) => (
           <div key={index} className="bubble-media__button">
-            {button.text || button.title || button.reply?.title || button.url || button.phone_number || ''}
+            <FiArrowLeft className="bubble-media__button-icon" />
+            <span className="bubble-media__button-text">
+              {button.text || button.title || button.reply?.title || button.url || button.phone_number || ''}
+            </span>
           </div>
         ))}
       </div>
@@ -423,7 +427,10 @@ function renderBody(message) {
         <div className="bubble-media__buttons-container">
           {buttons.map((button, index) => (
             <div key={index} className="bubble-media__button">
-              {button.text || button.title || ''}
+              <FiArrowLeft className="bubble-media__button-icon" />
+              <span className="bubble-media__button-text">
+                {button.text || button.title || ''}
+              </span>
             </div>
           ))}
         </div>
@@ -482,37 +489,61 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   const bodyContent = bodyResult?.content || bodyResult;
   const buttons = bodyResult?.buttons || null;
 
-  const bubbleRef = useRef(null);
-  const buttonsWrapperRef = useRef(null);
+  // Récupérer le message cité (quoted message)
+  const quotedMessage = message.reply_to_message;
 
-  // Synchroniser la largeur du conteneur de boutons avec la bulle
-  useEffect(() => {
-    if (buttons && bubbleRef.current && buttonsWrapperRef.current) {
-      const syncWidth = () => {
-        const bubbleWidth = bubbleRef.current.offsetWidth;
-        if (bubbleWidth > 0) {
-          buttonsWrapperRef.current.style.width = `${bubbleWidth}px`;
+  // Fonction pour rendre le message cité de manière compacte
+  const renderQuotedMessage = (quotedMsg) => {
+    if (!quotedMsg) return null;
+
+    // Extraire le texte à afficher
+    let quotedText = quotedMsg.content_text || "";
+    
+    // Si c'est un message interactif, extraire header, body, footer
+    if (quotedMsg.interactive_data) {
+      try {
+        const interactiveData = typeof quotedMsg.interactive_data === 'string' 
+          ? JSON.parse(quotedMsg.interactive_data) 
+          : quotedMsg.interactive_data;
+        
+        const parts = [];
+        if (interactiveData.header) parts.push(interactiveData.header);
+        if (interactiveData.body) parts.push(interactiveData.body);
+        if (interactiveData.footer) parts.push(interactiveData.footer);
+        
+        if (parts.length > 0) {
+          quotedText = parts.join("\n");
         }
-      };
-
-      // Synchroniser immédiatement
-      syncWidth();
-
-      // Observer les changements de taille de la bulle
-      const resizeObserver = new ResizeObserver(syncWidth);
-      resizeObserver.observe(bubbleRef.current);
-
-      return () => {
-        resizeObserver.disconnect();
-      };
+      } catch (e) {
+        console.warn('Error parsing quoted message interactive_data:', e);
+      }
     }
-  }, [buttons, bodyContent]);
+
+    // Limiter la longueur pour l'affichage compact
+    const maxLength = 100;
+    const displayText = quotedText.length > maxLength 
+      ? quotedText.substring(0, maxLength) + "..." 
+      : quotedText;
+
+    // Déterminer si c'est un message sortant ou entrant
+    const quotedMine = quotedMsg.direction === "outbound";
+    const quotedName = quotedMine ? "Vous" : (conversation?.contacts?.display_name || "Contact");
+
+    return (
+      <div className="bubble__quoted-message">
+        <div className="bubble__quoted-message-indicator"></div>
+        <div className="bubble__quoted-message-content">
+          <div className="bubble__quoted-message-author">{quotedName}</div>
+          <div className="bubble__quoted-message-text">{displayText}</div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div className="message-with-buttons-wrapper">
       <div
-        ref={bubbleRef}
-        className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""} ${isPinned ? "bubble--pinned" : ""}`}
+        className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""} ${isPinned ? "bubble--pinned" : ""} ${buttons ? "bubble--with-buttons" : ""} ${quotedMessage ? "bubble--with-quote" : ""}`}
         onContextMenu={onContextMenu}
         style={{ position: "relative" }}
       >
@@ -526,7 +557,15 @@ export default function MessageBubble({ message, conversation, onReactionChange,
             {mine ? "Vous avez supprimé ce message" : "Ce message a été supprimé"}
           </span>
         ) : (
-          bodyContent
+          <>
+            {quotedMessage && renderQuotedMessage(quotedMessage)}
+            {bodyContent}
+            {buttons && (
+              <div className="bubble__buttons">
+                {buttons}
+              </div>
+            )}
+          </>
         )}
         <div className="bubble__footer">
           <div className="bubble__footer-left">
@@ -555,14 +594,6 @@ export default function MessageBubble({ message, conversation, onReactionChange,
           )}
         </div>
       </div>
-      {buttons && (
-        <div 
-          ref={buttonsWrapperRef}
-          className={`bubble-buttons-wrapper ${mine ? "bubble-buttons-wrapper--me" : "bubble-buttons-wrapper--them"}`}
-        >
-          {buttons}
-        </div>
-      )}
     </div>
   );
 }
