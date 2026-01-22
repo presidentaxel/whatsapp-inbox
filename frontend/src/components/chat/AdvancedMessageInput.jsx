@@ -7,7 +7,7 @@ import { useTheme } from "../../hooks/useTheme";
 import TemplateVariablesModal from "./TemplateVariablesModal";
 import { hasTemplateVariables } from "../../utils/templateVariables";
 
-export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null, messages = [] }) {
+export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null, messages = [], replyingToMessage = null, onCancelReply = null }) {
   const [text, setText] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -379,13 +379,26 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setShowAdvanced(false);
     setMode("text");
     
+    // Annuler la réponse après l'envoi
+    if (replyingToMessage && onCancelReply) {
+      onCancelReply();
+    }
+    
     try {
       // Appeler l'API en arrière-plan
       // Le message réel remplacera l'optimiste quand il arrivera via le webhook
-      await sendMessageWithAutoTemplate({
+      const payload = {
         conversation_id: conversation.id,
         content: messageText
-      });
+      };
+      
+      // Ajouter reply_to_message_id si on répond à un message
+      if (replyingToMessage?.id) {
+        payload.reply_to_message_id = replyingToMessage.id;
+        optimisticMessage.reply_to_message = replyingToMessage;
+      }
+      
+      await sendMessageWithAutoTemplate(payload);
       
       // Le message optimiste sera remplacé automatiquement par le message réel
       // via le webhook Supabase ou le refreshMessages
@@ -1882,11 +1895,17 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                         if (discussionPrefs?.enterToSend) {
                           if (!e.shiftKey) {
                             e.preventDefault();
-                            handleSend();
+                            // Vérifier le mode avant d'appeler handleSend
+                            if (mode === "buttons") handleButtonsSend();
+                            else if (mode === "list") handleListSend();
+                            else handleSend();
                           }
                         } else if (e.metaKey || e.ctrlKey) {
                           e.preventDefault();
-                          handleSend();
+                          // Vérifier le mode avant d'appeler handleSend
+                          if (mode === "buttons") handleButtonsSend();
+                          else if (mode === "list") handleListSend();
+                          else handleSend();
                         }
                       }
                     }}

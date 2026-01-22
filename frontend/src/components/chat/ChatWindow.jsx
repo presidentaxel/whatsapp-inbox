@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiSearch, FiInfo, FiX } from "react-icons/fi";
 import { AiFillStar, AiOutlineStar } from "react-icons/ai";
 import { MdPushPin } from "react-icons/md";
-import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage, checkAndDownloadConversationMedia, pinMessage, unpinMessage } from "../../api/messagesApi";
+import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage, checkAndDownloadConversationMedia, pinMessage, unpinMessage, addReaction } from "../../api/messagesApi";
 import { markConversationRead } from "../../api/conversationsApi";
 import MessageBubble from "./MessageBubble";
 import AdvancedMessageInput from "./AdvancedMessageInput";
@@ -28,7 +28,6 @@ export default function ChatWindow({
   const [showInfo, setShowInfo] = useState(false);
   const [botTogglePending, setBotTogglePending] = useState(false);
   const [reactionTargetId, setReactionTargetId] = useState(null);
-  const [contextMenu, setContextMenu] = useState({ open: false, x: 0, y: 0, message: null });
   const [autoScroll, setAutoScroll] = useState(true);
   const [otherTyping, setOtherTyping] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
@@ -36,6 +35,7 @@ export default function ChatWindow({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState(null);
+  const [replyingToMessage, setReplyingToMessage] = useState(null);
 
   const sortMessages = useCallback((items) => {
     return [...items].sort((a, b) => {
@@ -344,16 +344,6 @@ export default function ChatWindow({
     }
   }, [conversationId, isWindowActive, conversation]);
 
-  // Fermer le menu contextuel sur clic ailleurs ou scroll
-  useEffect(() => {
-    const closeMenu = () => setContextMenu((prev) => ({ ...prev, open: false }));
-    window.addEventListener("click", closeMenu);
-    window.addEventListener("scroll", closeMenu, true);
-    return () => {
-      window.removeEventListener("click", closeMenu);
-      window.removeEventListener("scroll", closeMenu, true);
-    };
-  }, []);
 
   useEffect(() => {
     if (!conversationId || !isWindowActive) {
@@ -617,6 +607,11 @@ export default function ChatWindow({
       timestamp: new Date().toISOString(),
     };
     
+    // Ajouter reply_to_message si on répond à un message
+    if (replyingToMessage) {
+      optimisticMessage.reply_to_message = replyingToMessage;
+    }
+    
     setMessages((prev) => sortMessages([...prev, optimisticMessage]));
     
     // Forcer le scroll en bas quand l'utilisateur envoie un message
@@ -630,7 +625,19 @@ export default function ChatWindow({
     }
     
     try {
-      await sendMessage({ conversation_id: conversationId, content: text });
+      const payload = { conversation_id: conversationId, content: text };
+      
+      // Ajouter reply_to_message_id si on répond à un message
+      if (replyingToMessage?.id) {
+        payload.reply_to_message_id = replyingToMessage.id;
+      }
+      
+      await sendMessage(payload);
+      
+      // Annuler la réponse après l'envoi
+      if (replyingToMessage) {
+        setReplyingToMessage(null);
+      }
       
       // Le webhook Supabase devrait ajouter le message automatiquement
       // On fait un refresh après un délai pour s'assurer que le statut est à jour
@@ -883,61 +890,72 @@ export default function ChatWindow({
     onFavoriteToggle?.(conversation, next);
   };
 
-  const handleContextMenu = (event, message) => {
-    event.preventDefault();
-    const menuWidth = 220;
-    const menuHeight = 200;
-    const clampedX = Math.min(event.clientX, window.innerWidth - menuWidth);
-    const clampedY = Math.min(event.clientY, window.innerHeight - menuHeight);
-    setContextMenu({
-      open: true,
-      x: clampedX,
-      y: clampedY,
-      message,
-    });
+
+  // Fonctions pour le menu du message
+  const handleReply = (message) => {
+    setReplyingToMessage(message);
+    // Scroller vers le champ de saisie
+    setTimeout(() => {
+      const input = document.querySelector('.message-input textarea, .message-input input');
+      if (input) {
+        input.focus();
+      }
+    }, 100);
   };
 
-  const handleMenuAction = async (action, messageOverride = null) => {
-    const msg = messageOverride || contextMenu.message;
-    if (messageOverride) {
-      // Si c'est appelé depuis le header, pas besoin de fermer le menu contextuel
-    } else {
-      setContextMenu((prev) => ({ ...prev, open: false }));
+  const handleCopy = async (message) => {
+    const textToCopy = message.content_text || "";
+    try {
+      await navigator.clipboard.writeText(textToCopy);
+      // Optionnel: afficher une notification
+    } catch (error) {
+      console.error("Erreur lors de la copie:", error);
+      // Fallback pour les navigateurs qui ne supportent pas clipboard API
+      const textArea = document.createElement("textarea");
+      textArea.value = textToCopy;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
     }
-    if (!msg) return;
+  };
 
-    if (action === "delete_me") {
-      try {
-        await deleteMessageApi(msg.id, { scope: "me" });
-      } finally {
-        refreshMessages();
-      }
-      return;
+  const handlePin = async (message) => {
+    try {
+      await pinMessage(message.id);
+      refreshMessages();
+    } catch (error) {
+      console.error("Erreur lors de l'épinglage:", error);
     }
+  };
 
-    if (action === "react") {
-      setReactionTargetId(msg.id);
-      return;
+  const handleUnpin = async (message) => {
+    try {
+      await unpinMessage(message.id);
+      refreshMessages();
+    } catch (error) {
+      console.error("Erreur lors du désépinglage:", error);
     }
+  };
 
-    if (action === "pin") {
-      try {
-        await pinMessage(msg.id);
-        refreshMessages();
-      } catch (error) {
-        console.error("Erreur lors de l'épinglage:", error);
-      }
-      return;
+  const handleDelete = async (message) => {
+    try {
+      await deleteMessageApi(message.id, { scope: "me" });
+      refreshMessages();
+    } catch (error) {
+      console.error("Erreur lors de la suppression:", error);
     }
+  };
 
-    if (action === "unpin") {
-      try {
-        await unpinMessage(msg.id);
-        refreshMessages();
-      } catch (error) {
-        console.error("Erreur lors du désépinglage:", error);
-      }
-      return;
+  const handleReactionChange = async (messageId, emoji) => {
+    try {
+      await addReaction({
+        message_id: messageId,
+        emoji: emoji,
+      });
+      refreshMessages();
+    } catch (error) {
+      console.error("Erreur lors de l'ajout de la réaction:", error);
     }
   };
 
@@ -1035,7 +1053,7 @@ export default function ChatWindow({
                     className="pinned-message-preview__unpin"
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleMenuAction("unpin", pinnedMsg);
+                      handleUnpin(pinnedMsg);
                     }}
                     title="Désépingler"
                   >
@@ -1059,10 +1077,14 @@ export default function ChatWindow({
                 <MessageBubble 
                   message={m} 
                   conversation={conversation}
-                  onReactionChange={refreshMessages}
+                  onReactionChange={(messageId, emoji) => handleReactionChange(messageId, emoji)}
                   forceReactionOpen={reactionTargetId === m.id}
-                  onContextMenu={(e) => handleContextMenu(e, m)}
                   onResend={resendMessage}
+                  onReply={handleReply}
+                  onCopy={handleCopy}
+                  onPin={handlePin}
+                  onUnpin={handleUnpin}
+                  onDelete={handleDelete}
                 />
               </div>
             ))}
@@ -1100,29 +1122,40 @@ export default function ChatWindow({
         </div>
       </div>
 
+      {/* Affichage du message quoted au-dessus de la barre de saisie */}
+      {replyingToMessage && (
+        <div className="message-input__reply-preview">
+          <div className="message-input__reply-content">
+            <div className="message-input__reply-indicator"></div>
+            <div className="message-input__reply-info">
+              <div className="message-input__reply-author">
+                {replyingToMessage.direction === "outbound" ? "Vous" : (displayName || "Contact")}
+              </div>
+              <div className="message-input__reply-text">
+                {replyingToMessage.content_text || "Message"}
+              </div>
+            </div>
+            <button
+              className="message-input__reply-close"
+              onClick={() => setReplyingToMessage(null)}
+              aria-label="Annuler la réponse"
+            >
+              <FiX />
+            </button>
+          </div>
+        </div>
+      )}
+      
       <AdvancedMessageInput 
         conversation={conversation}
         onSend={onSend}
         disabled={!canSend || !conversationId}
         accountId={conversation?.account_id}
         messages={messages}
+        replyingToMessage={replyingToMessage}
+        onCancelReply={() => setReplyingToMessage(null)}
       />
 
-      {contextMenu.open && (
-        <div
-          className="context-menu"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button onClick={() => handleMenuAction("react")}>Ajouter une réaction</button>
-          {contextMenu.message?.is_pinned ? (
-            <button onClick={() => handleMenuAction("unpin")}>Désépingler</button>
-          ) : (
-            <button onClick={() => handleMenuAction("pin")}>Épingler</button>
-          )}
-          <button onClick={() => handleMenuAction("delete_me")}>Supprimer pour moi</button>
-        </div>
-      )}
     </div>
   );
 }

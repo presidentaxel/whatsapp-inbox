@@ -1063,11 +1063,11 @@ body {
   border-radius: 0;
   overflow: hidden;
   box-shadow: 0 25px 60px rgba(0, 0, 0, 0.45);
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
 }
 
 .sidebar-nav {
-  width: 80px;
+  width: 65px;
   background: var(--bg-tertiary);
   display: flex;
   flex-direction: column;
@@ -1142,6 +1142,7 @@ body {
 }
 
 .workspace-main {
+  background: var(--bg-secondary);
   border-radius: 10px;
   flex: 1;
   display: flex;
@@ -2053,6 +2054,221 @@ body {
 
 [data-theme="light"] .bubble__quoted-message-text {
   color: rgba(0, 0, 0, 0.6);
+}
+
+/* Styles pour l'icône de menu au hover */
+.bubble__menu-icon-wrapper {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+}
+
+.bubble.them .bubble__menu-icon-wrapper {
+  right: 8px;
+}
+
+.bubble.me .bubble__menu-icon-wrapper {
+  left: 8px;
+  right: auto;
+}
+
+.bubble__menu-icon {
+  background: rgba(0, 0, 0, 0.4);
+  border: none;
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.bubble__menu-icon:hover {
+  background: rgba(0, 0, 0, 0.6);
+  transform: scale(1.1);
+}
+
+/* Overlay pour fermer le menu */
+.bubble__menu-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+  background: transparent;
+}
+
+/* Menu contextuel du message */
+.bubble__menu {
+  position: fixed;
+  background: var(--bg-secondary, #2b2b2b);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  min-width: 200px;
+  z-index: 1000;
+  overflow: hidden;
+  animation: menuFadeIn 0.2s ease;
+}
+
+@keyframes menuFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Réactions dans le menu */
+.bubble__menu-reactions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.bubble__menu-reaction {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.bubble__menu-reaction:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.2);
+}
+
+.bubble__menu-reaction--more {
+  font-size: 18px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.bubble__menu-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 4px 0;
+}
+
+/* Items du menu */
+.bubble__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary, #ffffff);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  font-size: 14px;
+}
+
+.bubble__menu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.bubble__menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.bubble__menu-item svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.bubble__menu-item--danger {
+  color: #ff4444;
+}
+
+.bubble__menu-item--danger:hover:not(:disabled) {
+  background: rgba(255, 68, 68, 0.1);
+}
+
+/* Styles pour l'affichage du message quoted au-dessus de la barre de saisie */
+.message-input__reply-preview {
+  padding: 8px 16px;
+  background: rgba(17, 27, 33, 0.95);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.message-input__reply-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.message-input__reply-indicator {
+  width: 3px;
+  height: 40px;
+  background: #25d366;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.message-input__reply-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.message-input__reply-author {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  margin-bottom: 2px;
+}
+
+.message-input__reply-text {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-input__reply-close {
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.message-input__reply-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.message-input__reply-close svg {
+  width: 18px;
+  height: 18px;
 }
 
 .bubble__footer {

@@ -12,6 +12,10 @@ import {
   FiLink,
   FiSend,
   FiArrowLeft,
+  FiMoreVertical,
+  FiCornerUpLeft,
+  FiCopy,
+  FiTrash2,
 } from "react-icons/fi";
 import { MdPushPin } from "react-icons/md";
 import { api } from "../../api/axiosClient";
@@ -471,7 +475,7 @@ function renderBody(message) {
   };
 }
 
-export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend }) {
+export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend, onReply, onCopy, onPin, onUnpin, onDelete, onOpenMenu }) {
   const mine = message.direction === "outbound";
   const timestamp = message.timestamp ? formatRelativeDateTime(message.timestamp) : "";
 
@@ -484,6 +488,12 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   const isDeletedForAll = !!message.deleted_for_all_at;
   const isEdited = !!message.edited_at;
   const isPinned = !!message.is_pinned;
+  
+  const [showMenuIcon, setShowMenuIcon] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+  const menuRef = useRef(null);
+  const menuIconRef = useRef(null);
 
   const bodyResult = renderBody(message);
   const bodyContent = bodyResult?.content || bodyResult;
@@ -491,6 +501,108 @@ export default function MessageBubble({ message, conversation, onReactionChange,
 
   // Récupérer le message cité (quoted message)
   const quotedMessage = message.reply_to_message;
+
+  // Fermer le menu quand on clique ailleurs
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setShowMenu(false);
+      }
+    }
+    if (showMenu) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [showMenu]);
+
+  const calculateMenuPosition = (elementRect) => {
+    const menuHeight = 300; // Hauteur approximative du menu (réactions + options)
+    const windowHeight = window.innerHeight;
+    const spaceBelow = windowHeight - elementRect.bottom;
+    const spaceAbove = elementRect.top;
+    
+    // Si pas assez d'espace en dessous mais assez au-dessus, afficher au-dessus
+    const showAbove = spaceBelow < menuHeight && spaceAbove > menuHeight;
+    
+    // Positionner le menu en dessous ou au-dessus selon l'espace disponible
+    const newPosition = {
+      top: showAbove ? elementRect.top - menuHeight - 8 : elementRect.bottom + 8,
+      left: mine ? elementRect.left : elementRect.right - 200, // 200px = min-width du menu
+    };
+    
+    // S'assurer que le menu ne dépasse pas à droite
+    if (newPosition.left + 200 > window.innerWidth) {
+      newPosition.left = window.innerWidth - 200 - 8;
+    }
+    
+    // S'assurer que le menu ne dépasse pas à gauche
+    if (newPosition.left < 8) {
+      newPosition.left = 8;
+    }
+    
+    return newPosition;
+  };
+
+  const handleMenuClick = (e) => {
+    e.stopPropagation();
+    if (menuIconRef.current) {
+      const rect = menuIconRef.current.getBoundingClientRect();
+      setMenuPosition(calculateMenuPosition(rect));
+    }
+    setShowMenu(!showMenu);
+  };
+
+  // Gérer le clic droit pour ouvrir le même menu
+  const handleRightClick = (e) => {
+    if (onContextMenu) {
+      e.preventDefault();
+      // Calculer la position du menu basée sur la position du clic
+      const rect = e.currentTarget.getBoundingClientRect();
+      const clickX = e.clientX;
+      const clickY = e.clientY;
+      
+      // Créer un rectangle virtuel pour la position du menu
+      const virtualRect = {
+        top: clickY,
+        bottom: clickY,
+        left: clickX,
+        right: clickX,
+      };
+      
+      setMenuPosition(calculateMenuPosition(virtualRect));
+      setShowMenu(true);
+      
+      // Appeler le callback si fourni
+      if (onOpenMenu) {
+        onOpenMenu(message);
+      }
+    }
+  };
+
+  const handleMenuAction = (action, e) => {
+    e.stopPropagation();
+    setShowMenu(false);
+    
+    switch (action) {
+      case "reply":
+        onReply?.(message);
+        break;
+      case "copy":
+        onCopy?.(message);
+        break;
+      case "pin":
+        onPin?.(message);
+        break;
+      case "unpin":
+        onUnpin?.(message);
+        break;
+      case "delete":
+        onDelete?.(message);
+        break;
+      default:
+        break;
+    }
+  };
 
   // Fonction pour rendre le message cité de manière compacte
   const renderQuotedMessage = (quotedMsg) => {
@@ -541,16 +653,190 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   };
 
   return (
-    <div className="message-with-buttons-wrapper">
+    <div 
+      className="message-with-buttons-wrapper"
+      onMouseEnter={() => !isDeletedForAll && setShowMenuIcon(true)}
+      onMouseLeave={() => setShowMenuIcon(false)}
+      style={{ position: "relative" }}
+    >
       <div
         className={`bubble ${mine ? "me" : "them"} ${isMedia ? "bubble--media" : ""} ${isDeletedForAll ? "bubble--deleted" : ""} ${isPinned ? "bubble--pinned" : ""} ${buttons ? "bubble--with-buttons" : ""} ${quotedMessage ? "bubble--with-quote" : ""}`}
-        onContextMenu={onContextMenu}
+        onContextMenu={handleRightClick}
         style={{ position: "relative" }}
       >
         {isPinned && (
           <div className="bubble__pinned-indicator" title="Message épinglé">
             <MdPushPin />
           </div>
+        )}
+        {/* Icône de menu au hover pour tous les messages */}
+        {!isDeletedForAll && showMenuIcon && (
+          <div className="bubble__menu-icon-wrapper">
+            <button
+              ref={menuIconRef}
+              className="bubble__menu-icon"
+              onClick={handleMenuClick}
+              aria-label="Options du message"
+            >
+              <FiMoreVertical />
+            </button>
+          </div>
+        )}
+        {/* Menu contextuel en position fixed pour éviter d'être coupé */}
+        {showMenu && !isDeletedForAll && (
+          <>
+            <div 
+              className="bubble__menu-overlay"
+              onClick={() => setShowMenu(false)}
+            />
+            <div 
+              className="bubble__menu"
+              style={{
+                top: `${menuPosition.top}px`,
+                left: `${menuPosition.left}px`,
+              }}
+              ref={menuRef}
+              onClick={(e) => e.stopPropagation()}
+            >
+                {/* Réactions en haut */}
+                <div className="bubble__menu-reactions">
+                  <button
+                    className="bubble__menu-reaction"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      // Ajouter réaction 👍
+                      if (onReactionChange) {
+                        onReactionChange(message.id, "👍");
+                      }
+                    }}
+                    title="👍"
+                  >
+                    👍
+                  </button>
+                  <button
+                    className="bubble__menu-reaction"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      if (onReactionChange) {
+                        onReactionChange(message.id, "❤️");
+                      }
+                    }}
+                    title="❤️"
+                  >
+                    ❤️
+                  </button>
+                  <button
+                    className="bubble__menu-reaction"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      if (onReactionChange) {
+                        onReactionChange(message.id, "😂");
+                      }
+                    }}
+                    title="😂"
+                  >
+                    😂
+                  </button>
+                  <button
+                    className="bubble__menu-reaction"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      if (onReactionChange) {
+                        onReactionChange(message.id, "😮");
+                      }
+                    }}
+                    title="😮"
+                  >
+                    😮
+                  </button>
+                  <button
+                    className="bubble__menu-reaction"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      if (onReactionChange) {
+                        onReactionChange(message.id, "😥");
+                      }
+                    }}
+                    title="😥"
+                  >
+                    😥
+                  </button>
+                  <button
+                    className="bubble__menu-reaction"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      if (onReactionChange) {
+                        onReactionChange(message.id, "🙏");
+                      }
+                    }}
+                    title="🙏"
+                  >
+                    🙏
+                  </button>
+                  <button
+                    className="bubble__menu-reaction bubble__menu-reaction--more"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      // Ouvrir le sélecteur de réactions
+                      if (onContextMenu) {
+                        const fakeEvent = { preventDefault: () => {}, stopPropagation: () => {} };
+                        onContextMenu(fakeEvent, message);
+                      }
+                    }}
+                    title="Plus de réactions"
+                  >
+                    +
+                  </button>
+                </div>
+                {/* Options du menu */}
+                <div className="bubble__menu-divider"></div>
+                <button
+                  className="bubble__menu-item"
+                  onClick={(e) => handleMenuAction("reply", e)}
+                >
+                  <FiCornerUpLeft />
+                  <span>Répondre</span>
+                </button>
+                <button
+                  className="bubble__menu-item"
+                  onClick={(e) => handleMenuAction("copy", e)}
+                >
+                  <FiCopy />
+                  <span>Copier</span>
+                </button>
+                {isPinned ? (
+                  <button
+                    className="bubble__menu-item"
+                    onClick={(e) => handleMenuAction("unpin", e)}
+                  >
+                    <MdPushPin />
+                    <span>Désépingler</span>
+                  </button>
+                ) : (
+                  <button
+                    className="bubble__menu-item"
+                    onClick={(e) => handleMenuAction("pin", e)}
+                  >
+                    <MdPushPin />
+                    <span>Épingler</span>
+                  </button>
+                )}
+                <button
+                  className="bubble__menu-item bubble__menu-item--danger"
+                  onClick={(e) => handleMenuAction("delete", e)}
+                >
+                  <FiTrash2 />
+                  <span>Supprimer</span>
+                </button>
+              </div>
+            </>
         )}
         {isDeletedForAll ? (
           <span className="bubble__text bubble__text--deleted">

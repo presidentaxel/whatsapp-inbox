@@ -1393,6 +1393,25 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         "text": {"body": text},
     }
 
+    # Ajouter le contexte de réponse si reply_to_message_id est fourni
+    reply_to_message_id = payload.get("reply_to_message_id")
+    if reply_to_message_id:
+        # Récupérer le message original pour obtenir son wa_message_id
+        try:
+            original_message_result = await supabase_execute(
+                supabase.table("messages")
+                .select("wa_message_id")
+                .eq("id", reply_to_message_id)
+                .single()
+            )
+            if original_message_result.data and original_message_result.data.get("wa_message_id"):
+                wa_message_id = original_message_result.data["wa_message_id"]
+                body["context"] = {"message_id": wa_message_id}
+                logger.info(f"📎 [SEND MESSAGE] Adding reply context: reply_to_message_id={reply_to_message_id}, wa_message_id={wa_message_id}")
+        except Exception as e:
+            logger.warning(f"⚠️ [SEND MESSAGE] Could not fetch original message for reply: {e}")
+            # Continuer sans contexte si on ne peut pas récupérer le message original
+
     # Utiliser le client HTTP partagé avec retry automatique
     timestamp_iso = datetime.now(timezone.utc).isoformat()
     
@@ -1502,6 +1521,10 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         "message_type": "text",
         "status": "sent",
     }
+    
+    # Ajouter reply_to_message_id si présent
+    if reply_to_message_id:
+        message_payload["reply_to_message_id"] = reply_to_message_id
 
     # Exécuter l'insertion en base en arrière-plan (fire-and-forget)
     async def _save_message_async():
