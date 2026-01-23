@@ -75,11 +75,13 @@ export default function ChatWindow({
     // Pour le polling, on charge seulement les 100 derniers messages
     // et on met à jour la liste en gardant les anciens messages déjà chargés
     return getMessages(conversationId, { limit: 100 }).then((res) => {
-      // Filtrer réactions/statuts
+      // Filtrer réactions/statuts et messages système
       const currentUserId = profile?.id;
       const filtered = res.data.filter((msg) => {
         const type = (msg.message_type || "").toLowerCase();
         if (["reaction", "status"].includes(type)) return false;
+        // Exclure les messages système (notifications d'épinglage, etc.)
+        if (msg.is_system === true) return false;
         if (currentUserId && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(currentUserId)) {
           return false;
         }
@@ -237,6 +239,8 @@ export default function ChatWindow({
       const firstFiltered = firstRes.data.filter((msg) => {
         const type = (msg.message_type || "").toLowerCase();
         if (["reaction", "status"].includes(type)) return false;
+        // Exclure les messages système (notifications d'épinglage, etc.)
+        if (msg.is_system === true) return false;
         if (profile?.id && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(profile.id)) {
           return false;
         }
@@ -286,6 +290,8 @@ export default function ChatWindow({
         const filtered = res.data.filter((msg) => {
           const type = (msg.message_type || "").toLowerCase();
           if (["reaction", "status"].includes(type)) return false;
+          // Exclure les messages système (notifications d'épinglage, etc.)
+          if (msg.is_system === true) return false;
           if (profile?.id && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(profile.id)) {
             return false;
           }
@@ -438,6 +444,11 @@ export default function ChatWindow({
           
           // Ignorer les réactions - elles ne doivent pas être affichées comme des messages normaux
           if (incoming.message_type === "reaction") {
+            return;
+          }
+          
+          // Ignorer les messages système (notifications d'épinglage, etc.)
+          if (incoming.is_system === true) {
             return;
           }
           
@@ -708,6 +719,9 @@ export default function ChatWindow({
 
   const filteredMessages = useMemo(() => {
     let filtered = messages;
+    
+    // Exclure les messages système (sécurité supplémentaire)
+    filtered = filtered.filter((m) => m.is_system !== true);
     
     // Appliquer la recherche si active
     if (showSearch && searchTerm.trim()) {

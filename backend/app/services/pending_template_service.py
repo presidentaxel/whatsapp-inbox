@@ -323,6 +323,347 @@ async def create_and_queue_template(
         }
 
 
+async def create_and_queue_image_template(
+    conversation_id: str,
+    account_id: str,
+    message_id: str,
+    media_id: str,
+    body_text: str = "(image)"
+) -> Dict[str, Any]:
+    """Crée un template Meta avec HEADER IMAGE et le met en file d'attente
+    
+    Args:
+        conversation_id: ID de la conversation
+        account_id: ID du compte WhatsApp
+        message_id: ID du message
+        media_id: ID du média WhatsApp (image)
+        body_text: Texte du body (par défaut "(image)")
+    """
+    
+    logger.info("=" * 80)
+    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] ========== DÉBUT CRÉATION TEMPLATE IMAGE ==========")
+    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] conversation_id={conversation_id}")
+    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] account_id={account_id}")
+    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] message_id={message_id}")
+    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] media_id={media_id}")
+    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] body_text={body_text}")
+    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] =============================================")
+    
+    # Valider le texte du body
+    is_valid, errors = TemplateValidator.validate_text(body_text)
+    
+    if not is_valid:
+        logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Texte invalide: {errors}")
+        return {
+            "success": False,
+            "errors": errors
+        }
+    
+    # Générer un nom de template unique pour les images
+    # Utiliser un préfixe "auto_img_" pour identifier les templates d'images auto-créés
+    template_name = f"auto_img_{conversation_id[:8]}_{message_id[:8]}_{int(datetime.now(timezone.utc).timestamp())}"
+    
+    # Valider le nom généré
+    name_valid, name_errors = TemplateValidator.validate_template_name(template_name)
+    if not name_valid:
+        return {
+            "success": False,
+            "errors": name_errors
+        }
+    
+    # Sanitizer le texte du body
+    sanitized_body = TemplateValidator.sanitize_for_template(body_text)
+    
+    # Récupérer le compte
+    account = await get_account_by_id(account_id)
+    if not account:
+        logger.error(f"❌ Compte {account_id} non trouvé pour la création du template")
+        return {"success": False, "errors": ["Compte non trouvé"]}
+    
+    waba_id = account.get("waba_id")
+    access_token = account.get("access_token")
+    account_name = account.get("name", "Inconnu")
+    
+    logger.info(f"📝 Création du template image '{template_name}' pour le message {message_id}")
+    logger.info(f"   Compte WhatsApp: {account_name} (ID: {account_id}, WABA: {waba_id})")
+    
+    if not waba_id or not access_token:
+        logger.error(f"❌ WhatsApp non configuré pour le compte {account_name}: waba_id={waba_id}, access_token={'présent' if access_token else 'absent'}")
+        return {"success": False, "errors": ["WhatsApp non configuré (waba_id ou access_token manquant)"]}
+    
+    # Récupérer le phone_number_id pour l'upload
+    phone_number_id = account.get("phone_number_id")
+    if not phone_number_id:
+        logger.error(f"❌ phone_number_id manquant pour le compte {account_name}")
+        return {"success": False, "errors": ["phone_number_id manquant"]}
+    
+    # Créer le template via Meta API avec HEADER IMAGE
+    try:
+        # Meta exige un exemple (example) pour les templates avec HEADER IMAGE
+        # Il faut télécharger l'image depuis WhatsApp, puis l'uploader vers le WABA
+        # pour obtenir un media_id à utiliser dans header_handle
+        logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Téléchargement de l'image depuis WhatsApp (media_id: {media_id})...")
+        
+        # Télécharger l'image depuis WhatsApp
+        from app.services.whatsapp_api_service import get_media_url, upload_media_from_bytes
+        import asyncio
+        
+        uploaded_media_id = None  # Initialiser pour éviter les problèmes de scope
+        result = None  # Résultat de la création du template
+        meta_template_id = None  # ID du template créé sur Meta
+        
+        try:
+            # Récupérer l'URL de téléchargement
+            media_info = await get_media_url(media_id, access_token)
+            download_url = media_info.get("url")
+            
+            if not download_url:
+                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Pas d'URL de téléchargement pour media_id: {media_id}")
+                return {"success": False, "errors": ["Impossible de télécharger l'image depuis WhatsApp"]}
+            
+            # Télécharger le contenu de l'image
+            logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Téléchargement depuis l'URL: {download_url[:100]}...")
+            from app.core.http_client import get_http_client_for_media
+            client = await get_http_client_for_media()
+            media_response = await client.get(download_url, headers={"Authorization": f"Bearer {access_token}"})
+            media_response.raise_for_status()
+            
+            # Détecter le content-type
+            content_type = media_response.headers.get("content-type", "image/jpeg")
+            media_data = media_response.content
+            
+            logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Image téléchargée: {len(media_data)} bytes, type: {content_type}")
+            
+            # Uploader vers WhatsApp API (WABA) pour obtenir un media_id
+            logger.info(f"📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers WhatsApp API (WABA)...")
+            upload_result = await upload_media_from_bytes(
+                phone_number_id=phone_number_id,
+                access_token=access_token,
+                file_content=media_data,
+                filename=f"{template_name}_image.png",
+                mime_type=content_type
+            )
+            
+            uploaded_media_id = upload_result.get("id")
+            
+            if not uploaded_media_id:
+                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Pas de media_id retourné par WhatsApp API")
+                return {"success": False, "errors": ["Impossible d'uploader l'image vers WhatsApp API"]}
+            
+            logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Image uploadée vers WABA avec media_id: {uploaded_media_id}")
+            
+            # Attendre un peu avant de commencer les tentatives (donner le temps à Meta de traiter l'upload)
+            logger.info(f"⏳ [CREATE-IMAGE-TEMPLATE] Attente initiale de 5 secondes pour laisser Meta traiter l'upload...")
+            await asyncio.sleep(5.0)
+            
+            # Attendre que l'image soit validée par Meta avant de créer le template
+            # On va essayer de créer le template plusieurs fois jusqu'à ce que Meta accepte le media_id
+            logger.info(f"⏳ [CREATE-IMAGE-TEMPLATE] Attente de validation de l'image par Meta...")
+            max_retries = 60  # 60 tentatives maximum (5 minutes au total)
+            retry_delay = 5.0  # 5 secondes entre chaque tentative
+            template_created = False
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    # Construire les composants du template avec le media_id (en string)
+                    components = [
+                        {
+                            "type": "HEADER",
+                            "format": "IMAGE",
+                            "example": {
+                                "header_handle": [str(uploaded_media_id)]  # S'assurer que c'est une string
+                            }
+                        },
+                        {
+                            "type": "BODY",
+                            "text": sanitized_body
+                        }
+                    ]
+                    
+                    # Essayer de créer le template
+                    if attempt == 0:
+                        logger.info(f"🔄 [CREATE-IMAGE-TEMPLATE] Première tentative de création du template avec media_id: {uploaded_media_id}")
+                    elif attempt % 10 == 0:  # Logger tous les 10 essais
+                        logger.info(f"🔄 [CREATE-IMAGE-TEMPLATE] Tentative {attempt + 1}/{max_retries} de création du template...")
+                    
+                    result = await whatsapp_api_service.create_message_template(
+                        waba_id=waba_id,
+                        access_token=access_token,
+                        name=template_name,
+                        category="UTILITY",
+                        language="fr",
+                        components=components
+                    )
+                    
+                    # Si on arrive ici, le template a été créé avec succès
+                    meta_template_id = result.get("id")
+                    if meta_template_id:
+                        logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Template créé avec succès après {attempt + 1} tentatives!")
+                        logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] ========== RÉPONSE META ==========")
+                        logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Réponse complète: {json.dumps(result, indent=2, ensure_ascii=False)}")
+                        logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] =================================")
+                        template_created = True
+                        break
+                    else:
+                        logger.warning(f"⚠️ [CREATE-IMAGE-TEMPLATE] Template créé mais pas d'ID retourné, nouvelle tentative...")
+                        if attempt < max_retries - 1:
+                            await asyncio.sleep(retry_delay)
+                        
+                except Exception as template_error:
+                    last_error = template_error
+                    error_str = str(template_error)
+                    
+                    # Extraire le error_subcode depuis WhatsAppAPIError
+                    error_subcode = None
+                    if hasattr(template_error, 'error_subcode'):
+                        error_subcode = template_error.error_subcode
+                    elif hasattr(template_error, 'detail'):
+                        error_detail = template_error.detail
+                        if isinstance(error_detail, dict):
+                            error_obj = error_detail.get('error', {})
+                            error_subcode = error_obj.get('error_subcode')
+                    
+                    # Convertir en int pour la comparaison
+                    if error_subcode is not None:
+                        try:
+                            error_subcode = int(error_subcode)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # DEBUG: Logger les attributs de l'erreur pour comprendre sa structure
+                    if attempt == 0:
+                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - Type d'erreur: {type(template_error)}")
+                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - Attributs: {dir(template_error)}")
+                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - error_subcode: {error_subcode}")
+                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - error_str: {error_str[:200]}")
+                    
+                    # Si l'erreur indique que le media n'est pas valide (2388273 ou 2494102), on continue à attendre
+                    # On vérifie d'abord le error_subcode, puis les strings dans le message d'erreur
+                    is_media_validation_error = (
+                        error_subcode == 2388273 or
+                        error_subcode == 2494102 or
+                        "2494102" in error_str or
+                        "2388273" in error_str or
+                        "Uploaded Media Handle Is Invalid" in error_str or
+                        "Paramètre d'exemple manquant" in error_str or
+                        ("Invalid parameter" in error_str and ("header_handle" in error_str.lower() or "IMAGE" in error_str))
+                    )
+                    
+                    if is_media_validation_error:
+                        if attempt < max_retries - 1:
+                            if attempt == 0 or attempt % 10 == 0:  # Logger au début et tous les 10 essais
+                                logger.info(f"⏳ [CREATE-IMAGE-TEMPLATE] Image pas encore validée par Meta (tentative {attempt + 1}/{max_retries}, error_subcode={error_subcode}), nouvelle tentative dans {retry_delay}s...")
+                            await asyncio.sleep(retry_delay)
+                        else:
+                            logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Image non validée après {max_retries} tentatives (error_subcode={error_subcode})")
+                    else:
+                        # Autre erreur, on la propage
+                        logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Erreur non liée à la validation du media: {error_str} (error_subcode={error_subcode})")
+                        raise
+            
+            if not template_created:
+                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Impossible de créer le template après {max_retries} tentatives")
+                if last_error:
+                    raise last_error
+                return {"success": False, "errors": [f"Impossible de créer le template: image non validée après {max_retries} tentatives"]}
+            
+            # Le template a été créé, on continue avec le reste du code
+            # (le code suivant utilise result et meta_template_id qui sont maintenant définis)
+            
+        except Exception as media_error:
+            logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Erreur lors du téléchargement/upload de l'image: {media_error}", exc_info=True)
+            return {"success": False, "errors": [f"Erreur lors du traitement de l'image: {str(media_error)}"]}
+        
+        # Vérification de sécurité
+        if not uploaded_media_id:
+            logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] uploaded_media_id n'est pas défini")
+            return {"success": False, "errors": ["Erreur: media_id non disponible pour le template"]}
+        
+        if not meta_template_id:
+            logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] meta_template_id n'est pas défini")
+            return {"success": False, "errors": ["Erreur: template non créé"]}
+        
+        logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Template créé sur Meta avec l'ID: {meta_template_id}")
+        
+        # Stocker dans la base avec le media_id pour référence
+        from app.services.template_deduplication import TemplateDeduplication
+        
+        template_hash = TemplateDeduplication.compute_template_hash(
+            sanitized_body, None, None  # Pas de header/footer texte pour les images
+        )
+        
+        pending_template_payload = {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "account_id": account_id,
+            "template_name": template_name,
+            "text_content": body_text,
+            "meta_template_id": meta_template_id,
+            "template_status": "PENDING",
+            "template_hash": template_hash,
+            "header_media_id": uploaded_media_id  # Stocker le media_id uploadé vers WABA pour l'envoi ultérieur
+        }
+        
+        await supabase_execute(
+            supabase.table("pending_template_messages").insert(pending_template_payload)
+        )
+        
+        logger.info(f"✅ Template image '{template_name}' créé et mis en file d'attente (ID Meta: {meta_template_id})")
+        logger.info(f"   Compte: {account_name} (WABA: {waba_id})")
+        
+        # Faire une première vérification immédiate
+        asyncio.create_task(check_template_status_once(message_id))
+        
+        # Lancer la vérification périodique en arrière-plan
+        asyncio.create_task(check_template_status_async(message_id))
+        
+        # Vérifier si le message est déjà lu
+        message_check = await supabase_execute(
+            supabase.table("messages")
+            .select("status")
+            .eq("id", message_id)
+            .limit(1)
+        )
+        if message_check.data and len(message_check.data) > 0 and message_check.data[0].get("status") == "read":
+            asyncio.create_task(delete_auto_template_for_message(message_id))
+        
+        return {
+            "success": True,
+            "template_name": template_name,
+            "meta_template_id": meta_template_id
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Erreur lors de la création du template: {e}", exc_info=True)
+        error_msg = str(e)
+        
+        # Extraire le message d'erreur de Meta si disponible
+        if hasattr(e, 'response'):
+            try:
+                if hasattr(e.response, 'json'):
+                    error_data = e.response.json()
+                    logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Détails de l'erreur Meta: {error_data}")
+                    if 'error' in error_data:
+                        error_info = error_data['error']
+                        error_msg = error_info.get('message', error_msg)
+                        if 'error_subcode' in error_info:
+                            error_msg += f" (subcode: {error_info['error_subcode']})"
+                        if 'error_user_title' in error_info:
+                            error_msg += f" - {error_info['error_user_title']}"
+                elif hasattr(e.response, 'text'):
+                    error_text = e.response.text
+                    logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Réponse texte d'erreur Meta: {error_text}")
+                    error_msg = error_text[:200]
+            except Exception as parse_error:
+                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Erreur lors du parsing de l'erreur: {parse_error}")
+        
+        return {
+            "success": False,
+            "errors": [f"Erreur lors de la création du template: {error_msg}"]
+        }
+
+
 async def check_template_status_once(message_id: str):
     """Fait une vérification unique du statut du template (pour vérification immédiate)"""
     # Attendre 5 secondes pour que Meta synchronise
@@ -346,7 +687,22 @@ async def check_template_status_once(message_id: str):
         elif result["status"] == "REJECTED":
             logger.warning(f"❌ [CHECK-ONCE] Template rejeté immédiatement pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
             print(f"❌ [CHECK-ONCE] Template rejeté immédiatement pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
-            await mark_message_as_failed(message_id, result.get("rejection_reason", "Template rejeté par Meta"))
+            # Vérifier si c'est une campagne broadcast
+            pending_result = await supabase_execute(
+                supabase.table("pending_template_messages")
+                .select("campaign_id")
+                .eq("message_id", message_id)
+                .limit(1)
+            )
+            campaign_id = None
+            if pending_result.data and len(pending_result.data) > 0:
+                campaign_id = pending_result.data[0].get("campaign_id")
+            
+            if campaign_id:
+                # Marquer tous les destinataires payants de la campagne comme échoués
+                await _mark_campaign_as_failed(campaign_id, result.get("rejection_reason", "Template rejeté par Meta"))
+            else:
+                await mark_message_as_failed(message_id, result.get("rejection_reason", "Template rejeté par Meta"))
         else:
             logger.info(f"⏳ [CHECK-ONCE] Template encore en attente pour le message {message_id} (statut: {result.get('status')})")
             print(f"⏳ [CHECK-ONCE] Template encore en attente pour le message {message_id} (statut: {result.get('status')})")
@@ -387,8 +743,22 @@ async def check_template_status_async(message_id: str):
                 else:
                     logger.warning(f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
                     print(f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
-                    # Marquer le message comme échoué
-                    await mark_message_as_failed(message_id, result.get("rejection_reason", "Template rejeté par Meta"))
+                    # Vérifier si c'est une campagne broadcast
+                    pending_result = await supabase_execute(
+                        supabase.table("pending_template_messages")
+                        .select("campaign_id")
+                        .eq("message_id", message_id)
+                        .limit(1)
+                    )
+                    campaign_id = None
+                    if pending_result.data and len(pending_result.data) > 0:
+                        campaign_id = pending_result.data[0].get("campaign_id")
+                    
+                    if campaign_id:
+                        # Marquer tous les destinataires payants de la campagne comme échoués
+                        await _mark_campaign_as_failed(campaign_id, result.get("rejection_reason", "Template rejeté par Meta"))
+                    else:
+                        await mark_message_as_failed(message_id, result.get("rejection_reason", "Template rejeté par Meta"))
                 break
             elif result["status"] == "NOT_FOUND":
                 logger.warning(f"⚠️ [CHECK-ASYNC] Template non trouvé pour le message {message_id}, arrêt de la vérification")
@@ -566,10 +936,10 @@ async def cleanup_read_auto_templates():
         if not result.data or len(result.data) == 0:
             return
         
-        # Filtrer les templates auto-créés (commencent par "auto_")
+        # Filtrer les templates auto-créés (commencent par "auto_" ou "auto_img_")
         auto_templates = [
             row for row in result.data 
-            if row.get("template_name", "").startswith("auto_")
+            if row.get("template_name", "").startswith("auto_") or row.get("template_name", "").startswith("auto_img_")
         ]
         
         if not auto_templates:
@@ -610,6 +980,7 @@ async def send_pending_template(message_id: str):
     pending = result.data[0]
     template_name = pending.get("template_name", "inconnu")
     campaign_id = pending.get("campaign_id")
+    header_media_id = pending.get("header_media_id")  # Pour les templates avec image
     
     # Extraire les infos des relations
     conversation_info = pending.get("conversations", {})
@@ -649,6 +1020,20 @@ async def send_pending_template(message_id: str):
         logger.info(f"📤 [SEND-TEMPLATE] Envoi du template '{template_name}' vers {to_number} pour le message {message_id}")
         print(f"📤 [SEND-TEMPLATE] Envoi du template '{template_name}' vers {to_number} pour le message {message_id}")
         
+        # Si c'est un template avec image, inclure l'image dans les components
+        components = None
+        if header_media_id:
+            components = [
+                {
+                    "type": "HEADER",
+                    "format": "IMAGE",
+                    "image": {
+                        "id": header_media_id
+                    }
+                }
+            ]
+            logger.info(f"🖼️ [SEND-TEMPLATE] Template avec image, media_id: {header_media_id}")
+        
         # Utiliser la fonction existante pour envoyer le template
         response = await whatsapp_api_service.send_template_message(
             phone_number_id=phone_number_id,
@@ -656,7 +1041,7 @@ async def send_pending_template(message_id: str):
             to=to_number,
             template_name=template_name,
             language_code="fr",
-            components=None  # Pas de variables pour les templates auto-créés
+            components=components  # Inclure l'image si présente
         )
         
         logger.info(f"📥 [SEND-TEMPLATE] Réponse Meta pour le message {message_id}: {response}")
@@ -737,7 +1122,7 @@ async def _send_broadcast_template(
     # Récupérer toutes les stats de la campagne
     stats_result = await supabase_execute(
         supabase.table("broadcast_recipient_stats")
-        .select("id, phone_number, message_id")
+        .select("id, phone_number, message_id, sent_at")
         .eq("campaign_id", campaign_id)
     )
     
@@ -757,6 +1142,12 @@ async def _send_broadcast_template(
         
         if not stat:
             logger.warning(f"⚠️ [BROADCAST-TEMPLATE] Pas de stat trouvée pour {phone_number}")
+            continue
+        
+        # Dans le cas mix, les gratuits ont déjà reçu leur message normalement et ont un sent_at
+        # On ne doit envoyer le template qu'aux payants qui n'ont pas encore de sent_at
+        if stat.get("sent_at"):
+            logger.info(f"⏭️ [BROADCAST-TEMPLATE] Destinataire {phone_number} a déjà reçu le message (sent_at={stat.get('sent_at')}), skip")
             continue
         
         try:
@@ -811,14 +1202,17 @@ async def _send_broadcast_template(
 
 
 async def _mark_campaign_as_failed(campaign_id: str, error_message: str):
-    """Marque tous les destinataires d'une campagne comme échoués"""
+    """Marque tous les destinataires payants d'une campagne comme échoués (ceux qui attendaient le template)"""
     from app.core.db import supabase
     from app.services.broadcast_service import update_recipient_stat, update_campaign_counters
     
+    # Ne marquer comme échoués que les destinataires qui n'ont pas encore de sent_at
+    # (ceux qui attendaient le template, pas ceux qui ont déjà reçu le message en gratuit)
     stats_result = await supabase_execute(
         supabase.table("broadcast_recipient_stats")
         .select("id")
         .eq("campaign_id", campaign_id)
+        .is_("sent_at", "null")  # Seulement ceux qui n'ont pas encore été envoyés
     )
     
     if stats_result.data:
@@ -873,8 +1267,8 @@ async def delete_auto_template_for_message(message_id: str):
         pending["access_token"] = account_info.get("access_token")
         template_name = pending["template_name"]
         
-        # Vérifier que c'est bien un template auto-créé (commence par "auto_")
-        if not template_name.startswith("auto_"):
+        # Vérifier que c'est bien un template auto-créé (commence par "auto_" ou "auto_img_")
+        if not (template_name.startswith("auto_") or template_name.startswith("auto_img_")):
             logger.info(f"ℹ️ Template {template_name} n'est pas un template auto-créé, pas de suppression")
             return
         

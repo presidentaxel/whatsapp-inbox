@@ -363,11 +363,14 @@ async def upload_media(
     """
     client = await get_http_client_for_media()
     
+    # Convertir le mime_type en type WhatsApp (image, video, audio, document)
+    whatsapp_type = _mime_type_to_whatsapp_type(mime_type)
+    
     with open(file_path, "rb") as f:
         files = {
             "file": (file_path.split("/")[-1], f, mime_type),
             "messaging_product": (None, "whatsapp"),
-            "type": (None, mime_type)
+            "type": (None, whatsapp_type)  # Type WhatsApp, pas le mime_type
         }
         
         response = await client.post(
@@ -378,6 +381,25 @@ async def upload_media(
     
     response.raise_for_status()
     return response.json()
+
+
+def _mime_type_to_whatsapp_type(mime_type: str) -> str:
+    """
+    Convertit un mime_type en type WhatsApp (image, video, audio, document)
+    """
+    if not mime_type:
+        return "document"
+    
+    mime_lower = mime_type.lower()
+    
+    if mime_lower.startswith("image/"):
+        return "image"
+    elif mime_lower.startswith("video/"):
+        return "video"
+    elif mime_lower.startswith("audio/"):
+        return "audio"
+    else:
+        return "document"
 
 
 @retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)
@@ -391,14 +413,26 @@ async def upload_media_from_bytes(
     """
     Upload un fichier média depuis bytes
     POST /{PHONE_NUMBER_ID}/media
+    
+    Args:
+        phone_number_id: ID du numéro de téléphone WhatsApp
+        access_token: Token d'accès
+        file_content: Contenu du fichier en bytes
+        filename: Nom du fichier
+        mime_type: Type MIME du fichier (ex: "image/jpeg", "video/mp4")
     """
     client = await get_http_client_for_media()
+    
+    # Convertir le mime_type en type WhatsApp (image, video, audio, document)
+    whatsapp_type = _mime_type_to_whatsapp_type(mime_type)
     
     files = {
         "file": (filename, file_content, mime_type),
         "messaging_product": (None, "whatsapp"),
-        "type": (None, mime_type)
+        "type": (None, whatsapp_type)  # Type WhatsApp, pas le mime_type
     }
+    
+    logger.info(f"📤 Uploading media: filename={filename}, mime_type={mime_type}, whatsapp_type={whatsapp_type}, size={len(file_content)} bytes")
     
     response = await client.post(
         f"{GRAPH_API_BASE}/{phone_number_id}/media",

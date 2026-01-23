@@ -3,6 +3,30 @@ import { formatPhoneNumber } from "../../utils/formatPhone";
 import { formatRelativeDate } from "../../utils/date";
 import { markConversationUnread } from "../../api/conversationsApi";
 
+const HIDDEN_CONVERSATIONS_KEY = "hidden_conversations";
+
+// Fonctions utilitaires pour gérer les conversations masquées dans localStorage
+const getHiddenConversations = () => {
+  try {
+    const stored = localStorage.getItem(HIDDEN_CONVERSATIONS_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+};
+
+const addHiddenConversation = (conversationId) => {
+  try {
+    const hidden = getHiddenConversations();
+    if (!hidden.includes(conversationId)) {
+      hidden.push(conversationId);
+      localStorage.setItem(HIDDEN_CONVERSATIONS_KEY, JSON.stringify(hidden));
+    }
+  } catch (error) {
+    console.error("Error hiding conversation:", error);
+  }
+};
+
 export default function ConversationList({
   data,
   selectedId,
@@ -11,6 +35,7 @@ export default function ConversationList({
   emptyLabel = "Aucune conversation",
 }) {
   const [contextMenu, setContextMenu] = useState({ open: false, x: 0, y: 0, conversation: null });
+  const [hiddenConversations, setHiddenConversations] = useState(getHiddenConversations());
   const containerRef = useRef(null);
 
   useEffect(() => {
@@ -27,7 +52,7 @@ export default function ConversationList({
     event.preventDefault();
     event.stopPropagation();
     const menuWidth = 200;
-    const menuHeight = 100;
+    const menuHeight = 150; // Ajusté pour 2 boutons
     const clampedX = Math.min(event.clientX, window.innerWidth - menuWidth);
     const clampedY = Math.min(event.clientY, window.innerHeight - menuHeight);
     setContextMenu({
@@ -50,13 +75,28 @@ export default function ConversationList({
     }
   };
 
-  if (!data.length) {
+  const handleHideConversation = () => {
+    if (!contextMenu.conversation) return;
+    const conversationId = contextMenu.conversation.id;
+    addHiddenConversation(conversationId);
+    setHiddenConversations(getHiddenConversations());
+    setContextMenu({ open: false, x: 0, y: 0, conversation: null });
+    // Si la conversation masquée est actuellement sélectionnée, la désélectionner
+    if (selectedId === conversationId) {
+      onSelect(null);
+    }
+  };
+
+  // Filtrer les conversations masquées
+  const visibleConversations = data.filter((c) => !hiddenConversations.includes(c.id));
+
+  if (!visibleConversations.length) {
     return <div className="conversation-list empty">{emptyLabel}</div>;
   }
 
   return (
     <div className="conversation-list" ref={containerRef}>
-      {data.map((c) => {
+      {visibleConversations.map((c) => {
         const displayName =
           c.contacts?.display_name || c.contacts?.whatsapp_number || c.client_number;
         const timeLabel = c.updated_at
@@ -98,6 +138,7 @@ export default function ConversationList({
           onClick={(e) => e.stopPropagation()}
         >
           <button onClick={handleMarkUnread}>Marquer comme non lu</button>
+          <button onClick={handleHideConversation}>Masquer la conversation</button>
         </div>
       )}
     </div>

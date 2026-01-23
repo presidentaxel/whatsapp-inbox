@@ -2148,7 +2148,7 @@ async def pin_message(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """
-    Épingle un message dans une conversation.
+    Épingle un message dans une conversation et envoie une notification à l'autre personne.
     """
     from app.core.db import supabase_execute, supabase
     
@@ -2172,6 +2172,67 @@ async def pin_message(
     if not result.data:
         raise HTTPException(status_code=500, detail="failed_to_pin_message")
     
+    # Vérifier si on est dans la fenêtre gratuite et envoyer ou mettre en file d'attente
+    try:
+        from app.services.message_service import is_within_free_window
+        from app.services.pinned_notification_service import queue_pin_notification
+        
+        # Vérifier si on est dans la fenêtre gratuite
+        is_free, _ = await is_within_free_window(conversation["id"])
+        
+        # Préparer le message de notification
+        notification_text = "💡 Astuce : Ce message a été marqué comme important. Vous pouvez aussi épingler des messages en maintenant appuyé sur un message et en sélectionnant 'Épingler'."
+        
+        # Vérifier que le message a un wa_message_id pour pouvoir le référencer
+        wa_message_id = message.get("wa_message_id")
+        reply_to_message_id = message_id if wa_message_id else None
+        
+        if is_free:
+            # On est dans la fenêtre gratuite, envoyer immédiatement
+            account = await get_account_by_id(conversation["account_id"])
+            if account:
+                message_payload = {
+                    "conversation_id": conversation["id"],
+                    "content": notification_text
+                }
+                
+                if reply_to_message_id:
+                    message_payload["reply_to_message_id"] = reply_to_message_id
+                    logger.info(f"📎 [PIN] Envoi immédiat avec référence au message épinglé: message_id={message_id}, wa_message_id={wa_message_id}")
+                else:
+                    logger.info(f"📎 [PIN] Envoi immédiat sans référence (pas de wa_message_id): message_id={message_id}")
+                
+                result = await send_message(
+                    message_payload,
+                    skip_bot_trigger=True,
+                    force_send=False,  # Pas besoin de forcer, on est dans la fenêtre gratuite
+                    is_system=True  # Message système, ne pas afficher dans l'interface
+                )
+                
+                if result.get("error"):
+                    logger.error(f"❌ [PIN] Erreur lors de l'envoi de la notification: {result.get('error')}")
+                else:
+                    logger.info(f"✅ [PIN] Notification d'épinglage envoyée immédiatement")
+            else:
+                logger.warning(f"⚠️ [PIN] Compte non trouvé pour account_id={conversation['account_id']}")
+        else:
+            # Hors de la fenêtre gratuite, mettre en file d'attente
+            queue_result = await queue_pin_notification(
+                message_id=message_id,
+                conversation_id=conversation["id"],
+                notification_text=notification_text,
+                reply_to_message_id=reply_to_message_id
+            )
+            
+            if queue_result.get("status") == "queued":
+                logger.info(f"📌 [PIN] Notification mise en file d'attente (hors fenêtre gratuite)")
+            else:
+                logger.warning(f"⚠️ [PIN] Échec de la mise en file d'attente: {queue_result.get('error')}")
+                
+    except Exception as e:
+        # Logger l'erreur mais ne pas faire échouer l'épinglage si l'envoi échoue
+        logger.error(f"❌ [PIN] Exception lors de l'envoi/queue de la notification d'épinglage : {e}", exc_info=True)
+    
     return {"status": "pinned", "message_id": message_id}
 
 
@@ -2181,7 +2242,7 @@ async def unpin_message(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """
-    Désépingle un message dans une conversation.
+    Désépingle un message dans une conversation et envoie une notification à l'autre personne.
     """
     from app.core.db import supabase_execute, supabase
     
@@ -2204,5 +2265,46 @@ async def unpin_message(
     
     if not result.data:
         raise HTTPException(status_code=500, detail="failed_to_unpin_message")
+    
+    # Envoyer un message WhatsApp à l'autre personne pour l'informer (optionnel)
+    try:
+        # Récupérer le compte pour obtenir les credentials WhatsApp
+        account = await get_account_by_id(conversation["account_id"])
+        if account:
+            # Préparer le message de notification
+            notification_text = "📌 Ce message a été désépinglé."
+            
+            # Vérifier que le message a un wa_message_id pour pouvoir le référencer
+            wa_message_id = message.get("wa_message_id")
+            
+            # Préparer le payload avec reply_to_message_id si disponible
+            message_payload = {
+                "conversation_id": conversation["id"],
+                "content": notification_text
+            }
+            
+            # Ajouter la référence au message désépinglé si wa_message_id existe
+            if wa_message_id:
+                message_payload["reply_to_message_id"] = message_id
+                logger.info(f"📎 [UNPIN] Envoi de la notification avec référence au message désépinglé: message_id={message_id}, wa_message_id={wa_message_id}")
+            
+            # Envoyer le message via WhatsApp
+            result = await send_message(
+                message_payload,
+                skip_bot_trigger=True,  # Ne pas déclencher le bot pour ce message système
+                force_send=True,  # Forcer l'envoi même hors fenêtre gratuite
+                is_system=True  # Message système, ne pas afficher dans l'interface
+            )
+            
+            # Logger le résultat
+            if result.get("error"):
+                logger.error(f"❌ [UNPIN] Erreur lors de l'envoi de la notification: {result.get('error')} - {result.get('details', '')}")
+            else:
+                logger.info(f"✅ [UNPIN] Notification de désépinglage envoyée avec succès")
+        else:
+            logger.warning(f"⚠️ [UNPIN] Compte non trouvé pour account_id={conversation['account_id']}")
+    except Exception as e:
+        # Logger l'erreur mais ne pas faire échouer le désépinglage si l'envoi échoue
+        logger.error(f"❌ [UNPIN] Exception lors de l'envoi de la notification de désépinglage : {e}", exc_info=True)
     
     return {"status": "unpinned", "message_id": message_id}

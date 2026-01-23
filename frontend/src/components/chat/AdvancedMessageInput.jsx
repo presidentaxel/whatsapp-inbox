@@ -35,7 +35,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   
   const menuRef = useRef(null);
   const emojiRef = useRef(null);
-  const fileInputRef = useRef(null);
+  const mediaInputRef = useRef(null); // Input pour photos et vidéos
+  const documentInputRef = useRef(null); // Input pour documents
   const textAreaRef = useRef(null);
   
   // States pour boutons interactifs
@@ -757,13 +758,24 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const openMediaPicker = () => {
-    console.log("openMediaPicker called");
+    console.log("openMediaPicker called for photos/videos");
     setShowMenu(false);
-    if (fileInputRef.current) {
-      console.log("Clicking file input");
-      fileInputRef.current.click();
+    if (mediaInputRef.current) {
+      console.log("Clicking media input");
+      mediaInputRef.current.click();
     } else {
-      console.error("fileInputRef.current is null");
+      console.error("mediaInputRef.current is null");
+    }
+  };
+
+  const openDocumentPicker = () => {
+    console.log("openDocumentPicker called");
+    setShowMenu(false);
+    if (documentInputRef.current) {
+      console.log("Clicking document input");
+      documentInputRef.current.click();
+    } else {
+      console.error("documentInputRef.current is null");
     }
   };
 
@@ -1502,13 +1514,13 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       )}
 
       <div className="input-area">
-        {/* Input file caché - doit être en dehors du menu pour fonctionner */}
+        {/* Input file pour photos et vidéos - doit être en dehors du menu pour fonctionner */}
         <input
-          ref={fileInputRef}
+          ref={mediaInputRef}
           type="file"
           style={{ display: "none" }}
           onChange={(e) => {
-            console.log("File input changed", e.target.files);
+            console.log("Media input changed", e.target.files);
             if (e.target.files && e.target.files[0]) {
               console.log("File selected:", e.target.files[0].name, e.target.files[0].type);
               handleMediaSend(e.target.files[0]);
@@ -1518,7 +1530,26 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
               console.log("No file selected");
             }
           }}
-          accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
+          accept="image/*,video/*"
+        />
+        
+        {/* Input file pour documents - doit être en dehors du menu pour fonctionner */}
+        <input
+          ref={documentInputRef}
+          type="file"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            console.log("Document input changed", e.target.files);
+            if (e.target.files && e.target.files[0]) {
+              console.log("File selected:", e.target.files[0].name, e.target.files[0].type);
+              handleMediaSend(e.target.files[0]);
+              // Réinitialiser l'input pour permettre de sélectionner le même fichier à nouveau
+              e.target.value = '';
+            } else {
+              console.log("No file selected");
+            }
+          }}
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv"
         />
 
         {/* Boutons à gauche - toujours affichés maintenant */}
@@ -1568,7 +1599,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
               
               {showMenu && (
                 <div className="dropdown-menu">
-                  <button className="menu-item" onClick={openMediaPicker}>
+                  <button className="menu-item" onClick={openDocumentPicker}>
                     <div className="menu-icon menu-icon--document">
                       <FiFileText />
                     </div>

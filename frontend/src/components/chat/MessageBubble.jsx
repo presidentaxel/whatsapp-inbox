@@ -502,6 +502,36 @@ export default function MessageBubble({ message, conversation, onReactionChange,
   // Récupérer le message cité (quoted message)
   const quotedMessage = message.reply_to_message;
 
+  const calculateMenuPosition = (elementRect, menuWidth = 200) => {
+    const menuHeight = 300; // Hauteur approximative du menu (réactions + options)
+    const windowHeight = window.innerHeight;
+    const windowWidth = window.innerWidth;
+    const spaceBelow = windowHeight - elementRect.bottom;
+    const spaceAbove = elementRect.top;
+    
+    // Si pas assez d'espace en dessous mais assez au-dessus, afficher au-dessus
+    const showAbove = spaceBelow < menuHeight && spaceAbove > menuHeight;
+    
+    // Positionner le menu en dessous ou au-dessus selon l'espace disponible
+    let newPosition = {
+      top: showAbove ? elementRect.top - menuHeight + 46 : elementRect.bottom + 8,
+      left: mine ? elementRect.left : elementRect.right - menuWidth,
+    };
+    
+    // S'assurer que le menu ne dépasse pas à droite
+    const padding = 8;
+    if (newPosition.left + menuWidth > windowWidth - padding) {
+      newPosition.left = windowWidth - menuWidth - padding;
+    }
+    
+    // S'assurer que le menu ne dépasse pas à gauche
+    if (newPosition.left < padding) {
+      newPosition.left = padding;
+    }
+    
+    return newPosition;
+  };
+
   // Fermer le menu quand on clique ailleurs
   useEffect(() => {
     function handleClickOutside(event) {
@@ -515,33 +545,38 @@ export default function MessageBubble({ message, conversation, onReactionChange,
     }
   }, [showMenu]);
 
-  const calculateMenuPosition = (elementRect) => {
-    const menuHeight = 300; // Hauteur approximative du menu (réactions + options)
-    const windowHeight = window.innerHeight;
-    const spaceBelow = windowHeight - elementRect.bottom;
-    const spaceAbove = elementRect.top;
-    
-    // Si pas assez d'espace en dessous mais assez au-dessus, afficher au-dessus
-    const showAbove = spaceBelow < menuHeight && spaceAbove > menuHeight;
-    
-    // Positionner le menu en dessous ou au-dessus selon l'espace disponible
-    const newPosition = {
-      top: showAbove ? elementRect.top - menuHeight - 8 : elementRect.bottom + 8,
-      left: mine ? elementRect.left : elementRect.right - 200, // 200px = min-width du menu
-    };
-    
-    // S'assurer que le menu ne dépasse pas à droite
-    if (newPosition.left + 200 > window.innerWidth) {
-      newPosition.left = window.innerWidth - 200 - 8;
+  // Ajuster la position du menu après le rendu pour éviter le débordement
+  useEffect(() => {
+    if (showMenu && menuRef.current && menuIconRef.current) {
+      // Utiliser requestAnimationFrame pour s'assurer que le menu est rendu
+      requestAnimationFrame(() => {
+        if (menuRef.current && menuIconRef.current) {
+          const menuRect = menuRef.current.getBoundingClientRect();
+          const iconRect = menuIconRef.current.getBoundingClientRect();
+          const menuWidth = menuRect.width;
+          const windowWidth = window.innerWidth;
+          const padding = 8;
+          
+          // Vérifier si le menu dépasse à droite
+          const currentLeft = menuRect.left;
+          const maxLeft = windowWidth - menuWidth - padding;
+          
+          if (currentLeft > maxLeft || currentLeft < padding) {
+            // Recalculer la position avec la largeur réelle du menu
+            const virtualRect = {
+              top: iconRect.top,
+              bottom: iconRect.bottom,
+              left: iconRect.left,
+              right: iconRect.right,
+            };
+            
+            const adjustedPosition = calculateMenuPosition(virtualRect, menuWidth);
+            setMenuPosition(adjustedPosition);
+          }
+        }
+      });
     }
-    
-    // S'assurer que le menu ne dépasse pas à gauche
-    if (newPosition.left < 8) {
-      newPosition.left = 8;
-    }
-    
-    return newPosition;
-  };
+  }, [showMenu]);
 
   const handleMenuClick = (e) => {
     e.stopPropagation();

@@ -217,6 +217,11 @@ async def send_broadcast_campaign(
 ) -> Dict[str, Any]:
     """
     Envoie un message à tous les destinataires d'un groupe et crée une campagne de suivi
+    
+    Gère trois cas :
+    1. Tous gratuits (-24h) : envoi normal immédiat
+    2. Tous payants (+24h) : création template puis envoi avec template
+    3. Mix : envoi immédiat aux gratuits, création template puis envoi aux payants
     """
     # 1. Créer la campagne
     campaign = await create_broadcast_campaign(
@@ -235,31 +240,102 @@ async def send_broadcast_campaign(
         logger.warning(f"No recipients in group {group_id}")
         return campaign
     
-    # 3. Vérifier si on est hors fenêtre (vérifier une conversation représentative)
+    # 3. Vérifier chaque destinataire pour séparer gratuits et payants
     account = await get_account_by_id(account_id)
     if not account:
         raise ValueError("Account not found")
     
-    # Vérifier si on doit utiliser un template (hors fenêtre)
-    use_template = False
-    if recipients:
-        first_recipient = recipients[0]
-        first_conversation = await _find_or_create_conversation(account_id, first_recipient["phone_number"])
-        if first_conversation:
-            is_free, _ = await is_within_free_window(first_conversation["id"])
-            if not is_free:
-                use_template = True
-                logger.info(f"📧 Broadcast campaign outside 24h window, will create template for: '{content_text[:50]}...'")
-            else:
-                logger.info("✅ Broadcast campaign within 24h window, sending as free messages")
+    free_recipients = []  # Destinataires dans la fenêtre gratuite (-24h)
+    paid_recipients = []  # Destinataires hors fenêtre (+24h)
     
-    # 4. Si hors fenêtre, créer un template et des messages "fake" pour tous
-    if use_template:
-        # Créer un message "fake" principal pour la campagne (utilisé pour le template)
-        # On utilise la première conversation comme référence
-        first_conversation = await _find_or_create_conversation(account_id, recipients[0]["phone_number"])
-        if not first_conversation:
-            raise ValueError("Failed to create reference conversation")
+    for recipient in recipients:
+        phone_number = recipient["phone_number"]
+        conversation = await _find_or_create_conversation(account_id, phone_number)
+        if not conversation:
+            logger.error(f"Failed to find/create conversation for {phone_number}")
+            # Marquer comme échoué
+            await create_recipient_stat(
+                campaign_id=campaign["id"],
+                recipient_id=recipient["id"],
+                phone_number=phone_number,
+                message_id=None,
+                failed_at=datetime.now(timezone.utc).isoformat(),
+                error_message="Failed to find/create conversation",
+            )
+            continue
+        
+        is_free, _ = await is_within_free_window(conversation["id"])
+        if is_free:
+            free_recipients.append((recipient, conversation))
+        else:
+            paid_recipients.append((recipient, conversation))
+    
+    logger.info(f"📊 Broadcast campaign {campaign['id']}: {len(free_recipients)} gratuits, {len(paid_recipients)} payants")
+    
+    # 4. Cas 1 : Tous gratuits - Envoi normal immédiat
+    if len(paid_recipients) == 0:
+        logger.info("✅ Broadcast campaign: tous les destinataires sont en fenêtre gratuite, envoi normal")
+        sent_count = 0
+        failed_count = 0
+        
+        for recipient, conversation in free_recipients:
+            try:
+                phone_number = recipient["phone_number"]
+                
+                # Envoyer le message normalement
+                message_result = await send_message({
+                    "conversation_id": conversation["id"],
+                    "content": content_text,
+                }, force_send=True)
+                
+                if message_result.get("error"):
+                    logger.error(f"Failed to send message to {phone_number}: {message_result.get('error')}")
+                    failed_count += 1
+                    await create_recipient_stat(
+                        campaign_id=campaign["id"],
+                        recipient_id=recipient["id"],
+                        phone_number=phone_number,
+                        message_id=None,
+                        failed_at=datetime.now(timezone.utc).isoformat(),
+                        error_message=message_result.get("message", "Unknown error"),
+                    )
+                else:
+                    import asyncio
+                    await asyncio.sleep(0.5)  # Attendre l'insertion asynchrone
+                    
+                    wa_message_id = message_result.get("message_id")
+                    message_db = None
+                    if wa_message_id:
+                        message_db_result = await supabase_execute(
+                            supabase.table("messages")
+                            .select("id")
+                            .eq("wa_message_id", wa_message_id)
+                            .limit(1)
+                        )
+                        if message_db_result.data and len(message_db_result.data) > 0:
+                            message_db = message_db_result.data[0]["id"]
+                    
+                    await create_recipient_stat(
+                        campaign_id=campaign["id"],
+                        recipient_id=recipient["id"],
+                        phone_number=phone_number,
+                        message_id=message_db,
+                    )
+                    sent_count += 1
+                    
+            except Exception as e:
+                logger.error(f"Error sending to recipient {recipient.get('phone_number')}: {e}", exc_info=True)
+                failed_count += 1
+        
+        await update_campaign_counters(campaign["id"])
+        return campaign
+    
+    # 5. Cas 2 : Tous payants - Créer template puis envoyer avec template
+    if len(free_recipients) == 0:
+        logger.info("📧 Broadcast campaign: tous les destinataires sont hors fenêtre, création template")
+        
+        # Utiliser la première conversation comme référence pour le template
+        first_recipient, first_conversation = paid_recipients[0]
         
         timestamp_iso = datetime.now(timezone.utc).isoformat()
         fake_message_payload = {
@@ -268,7 +344,7 @@ async def send_broadcast_campaign(
             "content_text": content_text,
             "timestamp": timestamp_iso,
             "message_type": "text",
-            "status": "sent",  # Message "fake" marqué comme envoyé
+            "status": "sent",
         }
         
         fake_message_result = await supabase_execute(
@@ -280,7 +356,7 @@ async def send_broadcast_campaign(
         
         fake_message_id = fake_message_result.data[0]["id"]
         
-        # Créer le template pour la campagne (un seul template pour tous, ou réutiliser un existant)
+        # Créer le template pour la campagne
         template_result = await find_or_create_template(
             conversation_id=first_conversation["id"],
             account_id=account_id,
@@ -292,16 +368,14 @@ async def send_broadcast_campaign(
         if not template_result.get("success"):
             error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
             logger.error(f"❌ Failed to create template for broadcast: {error_message}")
-            # Marquer la campagne comme échouée
             await supabase_execute(
                 supabase.table("broadcast_campaigns")
-                .update({"failed_count": len(recipients)})
+                .update({"failed_count": len(paid_recipients)})
                 .eq("id", campaign["id"])
             )
             raise ValueError(f"Template creation failed: {error_message}")
         
-        # Lier le template à la campagne (déjà fait dans create_and_queue_template si campaign_id est passé)
-        # Mais on doit le mettre à jour car create_and_queue_template ne prend pas encore campaign_id
+        # Lier le template à la campagne
         await supabase_execute(
             supabase.table("pending_template_messages")
             .update({"campaign_id": campaign["id"]})
@@ -310,23 +384,17 @@ async def send_broadcast_campaign(
         
         logger.info(f"✅ Template '{template_result.get('template_name')}' created and queued for campaign {campaign['id']}")
         
-        # Créer des messages "fake" pour tous les destinataires
-        for recipient in recipients:
+        # Créer des messages "fake" pour tous les destinataires payants
+        for recipient, conversation in paid_recipients:
             phone_number = recipient["phone_number"]
-            conversation = await _find_or_create_conversation(account_id, phone_number)
-            if not conversation:
-                logger.error(f"Failed to find/create conversation for {phone_number}")
-                failed_count += 1
-                continue
             
-            # Créer un message "fake" pour ce destinataire
             recipient_fake_message = {
                 "conversation_id": conversation["id"],
                 "direction": "outbound",
                 "content_text": content_text,
                 "timestamp": timestamp_iso,
                 "message_type": "text",
-                "status": "sent",  # Message "fake" marqué comme envoyé
+                "status": "sent",
             }
             
             recipient_message_result = await supabase_execute(
@@ -337,35 +405,27 @@ async def send_broadcast_campaign(
             if recipient_message_result.data:
                 message_db_id = recipient_message_result.data[0]["id"]
             
-            # Créer la stat pour ce destinataire
             await create_recipient_stat(
                 campaign_id=campaign["id"],
                 recipient_id=recipient["id"],
                 phone_number=phone_number,
                 message_id=message_db_id,
             )
-            sent_count += 1
         
-        # Mettre à jour les compteurs
         await update_campaign_counters(campaign["id"])
         return campaign
     
-    # 5. Si dans la fenêtre, envoyer normalement à tous
+    # 6. Cas 3 : Mix - Envoyer aux gratuits immédiatement, créer template pour les payants
+    logger.info(f"📧 Broadcast campaign: mix de gratuits ({len(free_recipients)}) et payants ({len(paid_recipients)})")
+    
+    # 6a. Envoyer immédiatement aux gratuits
     sent_count = 0
     failed_count = 0
     
-    for recipient in recipients:
+    for recipient, conversation in free_recipients:
         try:
             phone_number = recipient["phone_number"]
             
-            # Trouver ou créer la conversation
-            conversation = await _find_or_create_conversation(account_id, phone_number)
-            if not conversation:
-                logger.error(f"Failed to find/create conversation for {phone_number}")
-                failed_count += 1
-                continue
-            
-            # Envoyer le message normalement
             message_result = await send_message({
                 "conversation_id": conversation["id"],
                 "content": content_text,
@@ -374,7 +434,6 @@ async def send_broadcast_campaign(
             if message_result.get("error"):
                 logger.error(f"Failed to send message to {phone_number}: {message_result.get('error')}")
                 failed_count += 1
-                # Créer quand même la stat avec failed_at
                 await create_recipient_stat(
                     campaign_id=campaign["id"],
                     recipient_id=recipient["id"],
@@ -384,14 +443,12 @@ async def send_broadcast_campaign(
                     error_message=message_result.get("message", "Unknown error"),
                 )
             else:
-                # Récupérer l'UUID du message depuis la base (le message est inséré en arrière-plan)
                 import asyncio
-                await asyncio.sleep(0.5)  # Attendre 500ms pour l'insertion asynchrone
+                await asyncio.sleep(0.5)
                 
                 wa_message_id = message_result.get("message_id")
                 message_db = None
                 if wa_message_id:
-                    # Chercher le message en base par wa_message_id
                     message_db_result = await supabase_execute(
                         supabase.table("messages")
                         .select("id")
@@ -401,7 +458,6 @@ async def send_broadcast_campaign(
                     if message_db_result.data and len(message_db_result.data) > 0:
                         message_db = message_db_result.data[0]["id"]
                 
-                # Créer l'entrée de stats
                 await create_recipient_stat(
                     campaign_id=campaign["id"],
                     recipient_id=recipient["id"],
@@ -413,6 +469,104 @@ async def send_broadcast_campaign(
         except Exception as e:
             logger.error(f"Error sending to recipient {recipient.get('phone_number')}: {e}", exc_info=True)
             failed_count += 1
+    
+    logger.info(f"✅ Envoyé aux gratuits: {sent_count} réussis, {failed_count} échoués")
+    
+    # 6b. Créer le template pour les payants (un seul template pour tous)
+    first_paid_recipient, first_paid_conversation = paid_recipients[0]
+    
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    fake_message_payload = {
+        "conversation_id": first_paid_conversation["id"],
+        "direction": "outbound",
+        "content_text": content_text,
+        "timestamp": timestamp_iso,
+        "message_type": "text",
+        "status": "sent",
+    }
+    
+    fake_message_result = await supabase_execute(
+        supabase.table("messages").insert(fake_message_payload)
+    )
+    
+    if not fake_message_result.data:
+        logger.error("❌ Failed to create fake message for template (mix case)")
+        # Marquer les payants comme échoués
+        for recipient, _ in paid_recipients:
+            await create_recipient_stat(
+                campaign_id=campaign["id"],
+                recipient_id=recipient["id"],
+                phone_number=recipient["phone_number"],
+                message_id=None,
+                failed_at=datetime.now(timezone.utc).isoformat(),
+                error_message="Failed to create template",
+            )
+        await update_campaign_counters(campaign["id"])
+        return campaign
+    
+    fake_message_id = fake_message_result.data[0]["id"]
+    
+    # Créer le template pour la campagne
+    template_result = await find_or_create_template(
+        conversation_id=first_paid_conversation["id"],
+        account_id=account_id,
+        message_id=fake_message_id,
+        text_content=content_text,
+        campaign_id=campaign["id"]
+    )
+    
+    if not template_result.get("success"):
+        error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
+        logger.error(f"❌ Failed to create template for broadcast (mix case): {error_message}")
+        # Marquer les payants comme échoués
+        for recipient, _ in paid_recipients:
+            await create_recipient_stat(
+                campaign_id=campaign["id"],
+                recipient_id=recipient["id"],
+                phone_number=recipient["phone_number"],
+                message_id=None,
+                failed_at=datetime.now(timezone.utc).isoformat(),
+                error_message=f"Template creation failed: {error_message}",
+            )
+        await update_campaign_counters(campaign["id"])
+        return campaign
+    
+    # Lier le template à la campagne
+    await supabase_execute(
+        supabase.table("pending_template_messages")
+        .update({"campaign_id": campaign["id"]})
+        .eq("message_id", fake_message_id)
+    )
+    
+    logger.info(f"✅ Template '{template_result.get('template_name')}' created and queued for campaign {campaign['id']} (mix case)")
+    
+    # Créer des messages "fake" pour tous les destinataires payants
+    for recipient, conversation in paid_recipients:
+        phone_number = recipient["phone_number"]
+        
+        recipient_fake_message = {
+            "conversation_id": conversation["id"],
+            "direction": "outbound",
+            "content_text": content_text,
+            "timestamp": timestamp_iso,
+            "message_type": "text",
+            "status": "sent",
+        }
+        
+        recipient_message_result = await supabase_execute(
+            supabase.table("messages").insert(recipient_fake_message)
+        )
+        
+        message_db_id = None
+        if recipient_message_result.data:
+            message_db_id = recipient_message_result.data[0]["id"]
+        
+        await create_recipient_stat(
+            campaign_id=campaign["id"],
+            recipient_id=recipient["id"],
+            phone_number=phone_number,
+            message_id=message_db_id,
+        )
     
     # Mettre à jour les compteurs de la campagne
     await update_campaign_counters(campaign["id"])

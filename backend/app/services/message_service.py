@@ -584,6 +584,15 @@ async def _process_incoming_message(
         
         logger.info(f"✅ Message processed successfully: conversation_id={conversation['id']}, type={msg_type}, from={wa_id}")
         
+        # Vérifier et envoyer les notifications d'épinglage en attente
+        # car un nouveau message entrant réinitialise la fenêtre gratuite
+        try:
+            from app.services.pinned_notification_service import send_pending_pin_notifications
+            # Lancer en arrière-plan pour ne pas bloquer
+            asyncio.create_task(send_pending_pin_notifications())
+        except Exception as e:
+            logger.debug(f"Note: Could not check pending pin notifications: {e}")
+        
     except Exception as e:
         logger.error(f"❌ Error in _process_incoming_message (from={message.get('from', 'unknown')}, account_id={account_id}): {e}", exc_info=True)
         # Ne pas lever l'exception pour ne pas bloquer le traitement des autres messages
@@ -1334,7 +1343,7 @@ async def _send_to_whatsapp_with_retry(phone_id: str, token: str, body: dict) ->
     return response
 
 
-async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send: bool = False):
+async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send: bool = False, is_system: bool = False):
     """
     Envoie un message WhatsApp.
     
@@ -1345,6 +1354,7 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         payload: Dict avec 'conversation_id' et 'content'
         skip_bot_trigger: Si True, ne déclenche pas le bot après envoi (utilisé quand le bot envoie lui-même)
         force_send: Si True, force l'envoi même hors fenêtre (sans template, message conversationnel normal)
+        is_system: Si True, marque le message comme système (ne sera pas affiché dans l'interface)
     """
     import asyncio
     
@@ -1520,6 +1530,7 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         "wa_message_id": message_id,
         "message_type": "text",
         "status": "sent",
+        "is_system": is_system,
     }
     
     # Ajouter reply_to_message_id si présent
@@ -2063,11 +2074,38 @@ async def send_media_message_with_storage(
     caption: Optional[str] = None
 ):
     """
-    Envoie un message média ET l'enregistre correctement dans la base
+    Envoie un message média ET l'enregistre correctement dans la base.
+    Si hors fenêtre des 24h, crée un template avec l'image en HEADER et "(image)" en BODY.
     """
     if not conversation_id or not media_id:
         return {"error": "invalid_payload"}
 
+    # Vérifier si on est dans la fenêtre gratuite
+    is_free, last_inbound_time = await is_within_free_window(conversation_id)
+    
+    # Si dans la fenêtre gratuite, envoyer normalement
+    if is_free:
+        return await _send_media_message_normal(conversation_id, media_type, media_id, caption)
+    
+    # Hors fenêtre : créer un template avec l'image en HEADER
+    logger.info(f"💰 Sending paid media message with template for conversation {conversation_id}")
+    
+    # Pour les images, utiliser un template avec HEADER IMAGE
+    if media_type == "image":
+        return await _send_image_with_template_queue(conversation_id, media_id, caption)
+    
+    # Pour les autres types de médias, essayer d'envoyer normalement (sera facturé)
+    logger.warning(f"⚠️ Media type {media_type} hors fenêtre - envoi normal (sera facturé)")
+    return await _send_media_message_normal(conversation_id, media_type, media_id, caption)
+
+
+async def _send_media_message_normal(
+    conversation_id: str,
+    media_type: str,
+    media_id: str,
+    caption: Optional[str] = None
+):
+    """Envoie un message média normalement (dans la fenêtre gratuite)"""
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
         return {"error": "conversation_not_found"}
@@ -2188,6 +2226,78 @@ async def send_media_message_with_storage(
     await _update_conversation_timestamp(conversation_id, timestamp_iso)
 
     return {"status": "sent", "message_id": message_id}
+
+
+async def _send_image_with_template_queue(
+    conversation_id: str,
+    media_id: str,
+    caption: Optional[str] = None
+):
+    """
+    Crée un template avec l'image en HEADER et "(image)" en BODY, puis attend l'approbation.
+    """
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        return {"error": "conversation_not_found"}
+
+    account = await get_account_by_id(conversation.get("account_id"))
+    if not account:
+        return {"error": "account_not_found"}
+
+    # Créer le message en base avec status "pending"
+    display_text = caption if caption else "(image)"
+    message_payload = {
+        "conversation_id": conversation_id,
+        "direction": "outbound",
+        "content_text": display_text,
+        "status": "pending",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "message_type": "image",
+        "media_id": media_id,  # Conserver le media_id pour référence
+    }
+    
+    # Insérer le message et récupérer l'ID
+    message_result = await supabase_execute(
+        supabase.table("messages").insert(message_payload)
+    )
+    
+    if not message_result.data or len(message_result.data) == 0:
+        logger.error("❌ Échec de la création du message en base")
+        return {"error": "failed_to_create_message"}
+    
+    message_id = message_result.data[0]["id"]
+    logger.info(f"✅ Message créé en base: message_id={message_id}")
+    
+    # Créer le template avec HEADER IMAGE
+    from app.services.pending_template_service import create_and_queue_image_template
+    template_result = await create_and_queue_image_template(
+        conversation_id=conversation_id,
+        account_id=conversation["account_id"],
+        message_id=message_id,
+        media_id=media_id,
+        body_text=display_text
+    )
+    
+    if not template_result.get("success"):
+        error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
+        logger.error(f"❌ Erreur de création du template: {error_message}")
+        await supabase_execute(
+            supabase.table("messages")
+            .update({"status": "failed", "error_message": error_message})
+            .eq("id", message_id)
+        )
+        return {
+            "error": "template_creation_failed",
+            "message": error_message
+        }
+    
+    logger.info(f"✅ Template créé avec succès, en attente d'approbation Meta")
+    return {
+        "status": "pending",
+        "message_id": message_id,
+        "template_name": template_result.get("template_name"),
+        "message": "Image en cours de validation par Meta. Elle sera envoyée automatiquement une fois approuvée."
+    }
 
 
 def _extract_media_metadata(message: Dict[str, Any]) -> Dict[str, Optional[str]]:

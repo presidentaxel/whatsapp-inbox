@@ -36,6 +36,7 @@ from app.core.config import settings
 from app.core.http_client import close_http_client
 from app.services.profile_picture_service import periodic_profile_picture_update
 from app.services.media_background_service import periodic_media_backfill
+from app.services.pinned_notification_service import periodic_pin_notification_check
 
 app = FastAPI(
     title="WhatsApp Inbox API",
@@ -111,6 +112,11 @@ async def startup_event():
     task2 = asyncio.create_task(periodic_media_backfill())
     _periodic_tasks.append(task2)
     logger.info("✅ Media background backfill task started")
+    
+    # Démarrer la tâche périodique de vérification des notifications d'épinglage
+    task3 = asyncio.create_task(periodic_pin_notification_check())
+    _periodic_tasks.append(task3)
+    logger.info("✅ Pin notification periodic check task started")
 
 
 @app.on_event("shutdown")
