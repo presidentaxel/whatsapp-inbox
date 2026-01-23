@@ -434,8 +434,30 @@ async def create_and_queue_image_template(
             
             logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Image téléchargée: {len(media_data)} bytes, type: {content_type}")
             
+            # Uploader vers Supabase Storage pour obtenir une URL publique accessible
+            # Meta exige une URL publique pour les exemples de templates (pas un media_id)
+            # Selon la documentation Meta: https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates
+            from app.services.storage_service import upload_template_media
+            
+            logger.info(f"📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers Supabase Storage pour obtenir une URL publique...")
+            public_url = await upload_template_media(
+                template_name=template_name,
+                template_language="fr",
+                account_id=account_id,
+                media_data=media_data,
+                media_type="IMAGE",
+                content_type=content_type
+            )
+            
+            if not public_url:
+                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Impossible d'obtenir une URL publique pour l'image")
+                return {"success": False, "errors": ["Impossible d'obtenir une URL publique pour l'exemple"]}
+            
+            logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Image uploadée vers Supabase Storage, URL publique: {public_url}")
+            
             # Uploader vers WhatsApp API (WABA) pour obtenir un media_id
-            logger.info(f"📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers WhatsApp API (WABA)...")
+            # Selon la documentation Meta, header_handle doit utiliser un media_id uploadé via leur API
+            logger.info(f"📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers WhatsApp API (WABA) pour obtenir le media_id...")
             upload_result = await upload_media_from_bytes(
                 phone_number_id=phone_number_id,
                 access_token=access_token,
@@ -452,12 +474,8 @@ async def create_and_queue_image_template(
             
             logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Image uploadée vers WABA avec media_id: {uploaded_media_id}")
             
-            # Attendre un peu avant de commencer les tentatives (donner le temps à Meta de traiter l'upload)
-            logger.info(f"⏳ [CREATE-IMAGE-TEMPLATE] Attente initiale de 5 secondes pour laisser Meta traiter l'upload...")
-            await asyncio.sleep(5.0)
-            
             # Attendre que l'image soit validée par Meta avant de créer le template
-            # On va essayer de créer le template plusieurs fois jusqu'à ce que Meta accepte le media_id
+            # Meta exige que le media_id soit validé avant de pouvoir être utilisé dans un template
             logger.info(f"⏳ [CREATE-IMAGE-TEMPLATE] Attente de validation de l'image par Meta...")
             max_retries = 60  # 60 tentatives maximum (5 minutes au total)
             retry_delay = 5.0  # 5 secondes entre chaque tentative
@@ -472,7 +490,7 @@ async def create_and_queue_image_template(
                             "type": "HEADER",
                             "format": "IMAGE",
                             "example": {
-                                "header_handle": [str(uploaded_media_id)]  # S'assurer que c'est une string
+                                "header_handle": [str(uploaded_media_id)]  # Utiliser le media_id uploadé
                             }
                         },
                         {
@@ -531,15 +549,7 @@ async def create_and_queue_image_template(
                         except (ValueError, TypeError):
                             pass
                     
-                    # DEBUG: Logger les attributs de l'erreur pour comprendre sa structure
-                    if attempt == 0:
-                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - Type d'erreur: {type(template_error)}")
-                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - Attributs: {dir(template_error)}")
-                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - error_subcode: {error_subcode}")
-                        logger.info(f"🔍 [CREATE-IMAGE-TEMPLATE] DEBUG - error_str: {error_str[:200]}")
-                    
                     # Si l'erreur indique que le media n'est pas valide (2388273 ou 2494102), on continue à attendre
-                    # On vérifie d'abord le error_subcode, puis les strings dans le message d'erreur
                     is_media_validation_error = (
                         error_subcode == 2388273 or
                         error_subcode == 2494102 or
@@ -568,23 +578,28 @@ async def create_and_queue_image_template(
                     raise last_error
                 return {"success": False, "errors": [f"Impossible de créer le template: image non validée après {max_retries} tentatives"]}
             
-            # Le template a été créé, on continue avec le reste du code
-            # (le code suivant utilise result et meta_template_id qui sont maintenant définis)
+            meta_template_id = result.get("id")
+            
+            if not meta_template_id:
+                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Meta n'a pas retourné d'ID pour le template '{template_name}'")
+                return {
+                    "success": False,
+                    "errors": ["Erreur lors de la création du template: aucun ID retourné par Meta"]
+                }
+            
+            logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Template créé sur Meta avec l'ID: {meta_template_id}")
+            logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] ========== RÉPONSE META ==========")
+            logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Réponse complète: {json.dumps(result, indent=2, ensure_ascii=False)}")
+            logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] =================================")
             
         except Exception as media_error:
             logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Erreur lors du téléchargement/upload de l'image: {media_error}", exc_info=True)
             return {"success": False, "errors": [f"Erreur lors du traitement de l'image: {str(media_error)}"]}
         
         # Vérification de sécurité
-        if not uploaded_media_id:
-            logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] uploaded_media_id n'est pas défini")
-            return {"success": False, "errors": ["Erreur: media_id non disponible pour le template"]}
-        
         if not meta_template_id:
             logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] meta_template_id n'est pas défini")
             return {"success": False, "errors": ["Erreur: template non créé"]}
-        
-        logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Template créé sur Meta avec l'ID: {meta_template_id}")
         
         # Stocker dans la base avec le media_id pour référence
         from app.services.template_deduplication import TemplateDeduplication

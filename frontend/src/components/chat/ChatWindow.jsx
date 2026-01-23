@@ -85,6 +85,10 @@ export default function ChatWindow({
         if (currentUserId && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(currentUserId)) {
           return false;
         }
+        // Exclure les messages supprimés visuellement (soft delete)
+        if (removedMessageIds.has(msg.id) || (msg.wa_message_id && removedMessageIds.has(msg.wa_message_id))) {
+          return false;
+        }
         return true;
       });
 
@@ -203,7 +207,7 @@ export default function ChatWindow({
       
       return filtered;
     });
-  }, [conversationId, sortMessages, profile?.id]);
+  }, [conversationId, sortMessages, profile?.id, removedMessageIds]);
 
   // Charger tous les messages au démarrage
   useEffect(() => {
@@ -723,6 +727,12 @@ export default function ChatWindow({
     // Exclure les messages système (sécurité supplémentaire)
     filtered = filtered.filter((m) => m.is_system !== true);
     
+    // Exclure les messages supprimés visuellement (soft delete)
+    filtered = filtered.filter((m) => {
+      return !removedMessageIds.has(m.id) && 
+             (!m.wa_message_id || !removedMessageIds.has(m.wa_message_id));
+    });
+    
     // Appliquer la recherche si active
     if (showSearch && searchTerm.trim()) {
       const term = searchTerm.toLowerCase().trim();
@@ -734,7 +744,7 @@ export default function ChatWindow({
     
     // Retourner les messages dans l'ordre chronologique (sans séparer les épinglés)
     return filtered;
-  }, [messages, searchTerm, showSearch]);
+  }, [messages, searchTerm, showSearch, removedMessageIds]);
 
   // Messages épinglés pour le header
   const pinnedMessages = useMemo(() => {
@@ -953,12 +963,20 @@ export default function ChatWindow({
   };
 
   const handleDelete = async (message) => {
-    try {
-      await deleteMessageApi(message.id, { scope: "me" });
-      refreshMessages();
-    } catch (error) {
-      console.error("Erreur lors de la suppression:", error);
-    }
+    // Soft delete visuel uniquement - ne supprime pas de la base de données
+    // Ajouter l'ID du message à la liste des messages supprimés pour cet utilisateur
+    setRemovedMessageIds((prev) => {
+      const newSet = new Set(prev);
+      if (message.id) newSet.add(message.id);
+      if (message.wa_message_id) newSet.add(message.wa_message_id);
+      return newSet;
+    });
+    
+    // Retirer le message de la liste locale immédiatement
+    setMessages((prev) => prev.filter((msg) => {
+      return msg.id !== message.id && 
+             (!message.wa_message_id || msg.wa_message_id !== message.wa_message_id);
+    }));
   };
 
   const handleReactionChange = async (messageId, emoji) => {
