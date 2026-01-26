@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FiArrowLeft, FiMoreVertical, FiUser, FiSearch, FiUsers, FiImage, FiChevronDown, FiFileText, FiLink, FiX, FiCpu, FiVideo, FiHeadphones, FiSliders } from "react-icons/fi";
-import { getMessages, sendMessage } from "../../api/messagesApi";
+import { getMessages } from "../../api/messagesApi";
 import { toggleConversationBotMode } from "../../api/conversationsApi";
 import { supabaseClient } from "../../api/supabaseClient";
 import MessageBubble from "../chat/MessageBubble";
@@ -67,7 +67,71 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
           const latest = newMessages[newMessages.length - 1];
           console.log(`   Latest message: ${latest.content_text?.substring(0, 50)}... (type: ${latest.message_type}, direction: ${latest.direction})`);
         }
-        setMessages(sortMessages(newMessages));
+        
+          // Fusionner intelligemment avec les messages optimistes existants
+          setMessages((prev) => {
+            // Garder les messages optimistes qui n'ont pas encore de correspondant réel
+            const optimisticMessages = prev.filter(msg => msg._isOptimistic || msg.id?.startsWith('temp-'));
+            
+            // Pour chaque message optimiste, vérifier s'il a un correspondant dans les nouveaux messages
+            const stillOptimistic = optimisticMessages.filter(optMsg => {
+              // Pour les messages texte
+              if (optMsg._optimisticContent !== undefined) {
+                const optContent = optMsg._optimisticContent || optMsg.content_text;
+                const optTime = optMsg._optimisticTime || new Date(optMsg.timestamp || optMsg.created_at).getTime();
+                
+                // Chercher un message réel correspondant (même contenu, temps proche)
+                const matching = newMessages.find(realMsg => {
+                  const realContent = realMsg.content_text?.trim();
+                  const realTime = new Date(realMsg.timestamp || realMsg.created_at).getTime();
+                  const timeDiff = Math.abs(realTime - optTime);
+                  
+                  // Correspondance si même contenu et moins de 10 secondes de différence
+                  return realContent === optContent?.trim() && timeDiff < 10000;
+                });
+                
+                // Si on trouve un correspondant, on ne garde pas l'optimiste
+                return !matching;
+              }
+              
+              // Pour les messages média
+              if (optMsg._optimisticMediaId !== undefined) {
+                const optMediaId = optMsg._optimisticMediaId;
+                const optMediaType = optMsg._optimisticMediaType;
+                const optCaption = optMsg._optimisticCaption;
+                const optTime = optMsg._optimisticTime || new Date(optMsg.timestamp || optMsg.created_at).getTime();
+                
+                // Chercher un message réel correspondant (même media_id ou même type + caption + temps proche)
+                const matching = newMessages.find(realMsg => {
+                  const realMediaId = realMsg.media_id;
+                  const realMediaType = realMsg.message_type;
+                  const realCaption = realMsg.content_text?.trim();
+                  const realTime = new Date(realMsg.timestamp || realMsg.created_at).getTime();
+                  const timeDiff = Math.abs(realTime - optTime);
+                  
+                  // Correspondance si :
+                  // - Même media_id OU
+                  // - Même type + même caption (ou les deux sans caption) + moins de 10 secondes
+                  const sameMediaId = realMediaId === optMediaId;
+                  const sameTypeAndCaption = realMediaType === optMediaType && 
+                                           ((!realCaption && !optCaption) || realCaption === optCaption) &&
+                                           timeDiff < 10000;
+                  
+                  return sameMediaId || sameTypeAndCaption;
+                });
+                
+                // Si on trouve un correspondant, on ne garde pas l'optimiste
+                return !matching;
+              }
+              
+              // Pour les autres messages optimistes (fallback)
+              return true;
+            });
+            
+            // Combiner les nouveaux messages réels avec les optimistes qui n'ont pas encore de correspondant
+            const combined = [...newMessages, ...stillOptimistic];
+            return sortMessages(combined);
+          });
       })
       .catch(error => {
         console.error("❌ Erreur refresh messages:", error);
@@ -75,24 +139,53 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
   }, [conversation?.id, sortMessages]);
 
   // Fonction pour envoyer un message avec affichage optimiste (instantané)
-  const handleSendMessage = useCallback(async (text) => {
+  // Cette fonction est maintenant appelée par MobileMessageInput qui gère l'envoi
+  const handleSendMessage = useCallback((text, forceRefresh = false, optimisticMessageOrId = null) => {
+    if (forceRefresh) {
+      // Si on passe un ID, supprimer uniquement ce message optimiste
+      if (typeof optimisticMessageOrId === 'string' && optimisticMessageOrId.startsWith('temp-')) {
+        setMessages((prev) => prev.filter(msg => msg.id !== optimisticMessageOrId && msg.client_temp_id !== optimisticMessageOrId));
+      } else {
+        // Sinon, supprimer tous les messages optimistes et rafraîchir
+        setMessages((prev) => prev.filter(msg => !msg._isOptimistic && !msg.id?.startsWith('temp-')));
+        refreshMessages();
+      }
+      return;
+    }
+
     if (!conversation?.id || !text?.trim()) return;
 
-    // Créer un message optimiste (affiché immédiatement)
-    const tempId = `temp-${Date.now()}`;
-    const optimisticMessage = {
-      id: tempId,
-      client_temp_id: tempId,
+    // Si un message optimiste est fourni, l'utiliser
+    const messageToAdd = optimisticMessageOrId || {
+      id: `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      client_temp_id: `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       conversation_id: conversation.id,
       direction: "outbound",
       content_text: text.trim(),
       message_type: "text",
       status: "pending",
       timestamp: new Date().toISOString(),
+      _isOptimistic: true,
+      _optimisticContent: text.trim(),
+      _optimisticTime: Date.now()
     };
 
-    // Ajouter immédiatement le message à l'interface
-    setMessages((prev) => sortMessages([...prev, optimisticMessage]));
+    // Vérifier qu'on n'ajoute pas un doublon
+    setMessages((prev) => {
+      // Vérifier si un message optimiste avec le même contenu existe déjà
+      const existingOptimistic = prev.find(msg => 
+        msg._isOptimistic && 
+        msg._optimisticContent === messageToAdd._optimisticContent &&
+        Math.abs((msg._optimisticTime || 0) - (messageToAdd._optimisticTime || 0)) < 2000
+      );
+      
+      if (existingOptimistic) {
+        console.log("⚠️ Message optimiste déjà présent, on ne l'ajoute pas");
+        return prev;
+      }
+      
+      return sortMessages([...prev, messageToAdd]);
+    });
 
     // Scroller vers le bas immédiatement sans animation
     setTimeout(() => {
@@ -101,24 +194,11 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
       setShowScrollToBottom(false);
     }, 50);
 
-    // Envoyer réellement le message
-    try {
-      await sendMessage({
-        conversation_id: conversation.id,
-        content: text.trim(),
-      });
-      
-      // Rafraîchir après un délai pour obtenir le message réel
-      // Le message optimiste reste visible pendant l'envoi
-      setTimeout(() => {
-        refreshMessages();
-      }, 1500);
-    } catch (error) {
-      console.error("❌ Erreur envoi message:", error);
-      // En cas d'erreur, retirer le message optimiste et afficher une erreur
-      setMessages((prev) => prev.filter(msg => msg.id !== tempId));
-      alert("Erreur lors de l'envoi du message");
-    }
+    // Rafraîchir après un délai pour obtenir le message réel
+    // Le message optimiste reste visible pendant l'envoi
+    setTimeout(() => {
+      refreshMessages();
+    }, 1500);
   }, [conversation?.id, sortMessages, refreshMessages]);
 
   useEffect(() => {
@@ -158,20 +238,63 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
         (payload) => {
           const incoming = payload.new;
           setMessages((prev) => {
-            // Ne pas ajouter si c'est un doublon
+            // Ne pas ajouter si c'est un doublon (même ID)
             const exists = prev.some((msg) => msg.id === incoming.id);
             if (exists) return prev;
             
-            // Remplacer les messages temporaires par le message réel si même timestamp
+            // Remplacer les messages optimistes par le message réel
+            const incomingContent = incoming.content_text?.trim();
+            const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
+            
             const withoutTemp = prev.filter(msg => {
-              if (msg.client_temp_id && incoming.content_text === msg.content_text) {
-                const timeDiff = Math.abs(
-                  new Date(incoming.timestamp).getTime() - 
-                  new Date(msg.timestamp).getTime()
-                );
-                // Si moins de 3 secondes de différence, c'est le même message
-                return timeDiff > 3000;
+              // Garder les messages réels (non optimistes)
+              if (!msg._isOptimistic && !msg.id?.startsWith('temp-')) {
+                return true;
               }
+              
+              // Pour les messages texte optimistes
+              if (msg._optimisticContent !== undefined) {
+                const optContent = msg._optimisticContent || msg.content_text?.trim();
+                const optTime = msg._optimisticTime || new Date(msg.timestamp || msg.created_at).getTime();
+                
+                // Si le contenu correspond et le temps est proche (moins de 10 secondes), c'est le même message
+                if (optContent === incomingContent) {
+                  const timeDiff = Math.abs(incomingTime - optTime);
+                  if (timeDiff < 10000) {
+                    // C'est le même message, on supprime l'optimiste
+                    console.log("✅ Message texte optimiste remplacé par message réel:", incoming.id);
+                    return false;
+                  }
+                }
+              }
+              
+              // Pour les messages média optimistes
+              if (msg._optimisticMediaId !== undefined) {
+                const optMediaId = msg._optimisticMediaId;
+                const optMediaType = msg._optimisticMediaType;
+                const optCaption = msg._optimisticCaption;
+                const optTime = msg._optimisticTime || new Date(msg.timestamp || msg.created_at).getTime();
+                
+                const incomingMediaId = incoming.media_id;
+                const incomingMediaType = incoming.message_type;
+                const incomingCaption = incoming.content_text?.trim();
+                
+                // Correspondance si :
+                // - Même media_id OU
+                // - Même type + même caption (ou les deux sans caption) + moins de 10 secondes
+                const sameMediaId = incomingMediaId === optMediaId;
+                const sameTypeAndCaption = incomingMediaType === optMediaType && 
+                                         ((!incomingCaption && !optCaption) || incomingCaption === optCaption);
+                const timeDiff = Math.abs(incomingTime - optTime);
+                
+                if ((sameMediaId || sameTypeAndCaption) && timeDiff < 10000) {
+                  // C'est le même message, on supprime l'optimiste
+                  console.log("✅ Message média optimiste remplacé par message réel:", incoming.id);
+                  return false;
+                }
+              }
+              
+              // Garder les autres messages optimistes qui ne correspondent pas
               return true;
             });
             
@@ -520,9 +643,24 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
           accountId={conversation?.account_id}
           onSend={handleSendMessage}
           onMediaSent={(optimisticMessage) => {
-            // Ajouter le message optimiste immédiatement
+            // Ajouter le message optimiste immédiatement avec vérification de doublon
             if (optimisticMessage) {
-              setMessages((prev) => sortMessages([...prev, optimisticMessage]));
+              setMessages((prev) => {
+                // Vérifier si un message optimiste avec le même media_id existe déjà
+                const existingOptimistic = prev.find(msg => 
+                  msg._isOptimistic && 
+                  msg._optimisticMediaId === optimisticMessage._optimisticMediaId &&
+                  msg._optimisticMediaType === optimisticMessage._optimisticMediaType &&
+                  Math.abs((msg._optimisticTime || 0) - (optimisticMessage._optimisticTime || 0)) < 2000
+                );
+                
+                if (existingOptimistic) {
+                  console.log("⚠️ Message média optimiste déjà présent, on ne l'ajoute pas");
+                  return prev;
+                }
+                
+                return sortMessages([...prev, optimisticMessage]);
+              });
               
               // Scroller vers le bas immédiatement sans animation
               setTimeout(() => {
@@ -537,6 +675,7 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
               refreshMessages();
             }, 2000);
           }}
+          messages={messages}
           disabled={false}
         />
       </div>

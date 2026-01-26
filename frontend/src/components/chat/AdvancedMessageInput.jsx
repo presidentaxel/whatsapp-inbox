@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock, FiLink, FiPhone, FiEdit, FiDollarSign, FiFile } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
-import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage, sendMessageWithAutoTemplate } from "../../api/messagesApi";
+import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage, sendMessageWithAutoTemplate, sendMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 import { useTheme } from "../../hooks/useTheme";
 import TemplateVariablesModal from "./TemplateVariablesModal";
@@ -399,7 +399,18 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         optimisticMessage.reply_to_message = replyingToMessage;
       }
       
-      await sendMessageWithAutoTemplate(payload);
+      // Utiliser l'API appropriée selon l'état de la fenêtre gratuite
+      // Si dans la fenêtre gratuite : utiliser sendMessage (gratuit)
+      // Si hors fenêtre : utiliser sendMessageWithAutoTemplate (gère les templates automatiquement)
+      if (!isOutsideFreeWindow) {
+        // Dans la fenêtre gratuite : envoi normal gratuit
+        console.log("✅ [DESKTOP] Envoi dans la fenêtre gratuite - message gratuit");
+        await sendMessage(payload);
+      } else {
+        // Hors fenêtre gratuite : utiliser auto-template
+        console.log("💰 [DESKTOP] Envoi hors fenêtre gratuite - utilisation auto-template");
+        await sendMessageWithAutoTemplate(payload);
+      }
       
       // Le message optimiste sera remplacé automatiquement par le message réel
       // via le webhook Supabase ou le refreshMessages
