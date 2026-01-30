@@ -18,6 +18,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
   const [useAutoTemplate, setUseAutoTemplate] = useState(true); // Mode auto-template par défaut
   const [mobileTemplates, setMobileTemplates] = useState([]);
   const [loadingMobileTemplates, setLoadingMobileTemplates] = useState(false);
+  const [mobileTemplatesAccountNotConfigured, setMobileTemplatesAccountNotConfigured] = useState(false);
   const [mobilePreviewTemplate, setMobilePreviewTemplate] = useState(null);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
@@ -336,9 +337,13 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         .then((res) => {
           const list = res.data?.templates || [];
           setMobileTemplates(list);
+          setMobileTemplatesAccountNotConfigured(res.data?.account_not_configured === true);
           if (list.length > 0 && !mobilePreviewTemplate) setMobilePreviewTemplate(list[0]);
         })
-        .catch(() => setMobileTemplates([]))
+        .catch((err) => {
+          setMobileTemplates([]);
+          setMobileTemplatesAccountNotConfigured(err.response?.data?.detail?.includes?.("account_not_configured"));
+        })
         .finally(() => setLoadingMobileTemplates(false));
     } else {
       setMobilePreviewTemplate(null);
@@ -645,7 +650,11 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
             {loadingMobileTemplates ? (
               <div className="mobile-template-sheet__loading">Chargement des templates...</div>
             ) : mobileTemplates.length === 0 ? (
-              <div className="mobile-template-sheet__empty">Aucun template disponible. Créez-en un dans Meta Business Manager.</div>
+              <div className="mobile-template-sheet__empty">
+                {mobileTemplatesAccountNotConfigured
+                  ? "Connectez votre compte WhatsApp Business (access_token et WABA ID) dans les paramètres du compte pour afficher les templates."
+                  : "Aucun template disponible. Créez-en un dans Meta Business Manager."}
+              </div>
             ) : (
               <div className="mobile-template-sheet__body">
                 <div className="mobile-template-sheet__list">

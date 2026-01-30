@@ -451,16 +451,18 @@ async def get_available_templates(
             logger.warning(f"⚠️ Impossible de récupérer le WABA ID depuis phone_number_id: {e}")
     
     if not access_token:
-        raise HTTPException(
-            status_code=400, 
-            detail="account_not_configured: access_token is missing. Please configure the WhatsApp account."
-        )
+        return {
+            "templates": [],
+            "account_not_configured": True,
+            "message": "Configure the WhatsApp account (access_token) to list templates.",
+        }
     
     if not waba_id:
-        raise HTTPException(
-            status_code=400, 
-            detail="account_not_configured: waba_id is missing. Please configure the WhatsApp Business Account ID in the account settings."
-        )
+        return {
+            "templates": [],
+            "account_not_configured": True,
+            "message": "Configure the WhatsApp Business Account ID (waba_id) in account settings to list templates.",
+        }
     
     try:
         # Récupérer tous les templates avec pagination

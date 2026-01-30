@@ -29,6 +29,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   const [previewTemplate, setPreviewTemplate] = useState(null); // Template sélectionné pour l'aperçu dans le menu latéral
   const [menuTemplates, setMenuTemplates] = useState([]); // Templates pour le menu (différents des templates hors fenêtre)
   const [loadingMenuTemplates, setLoadingMenuTemplates] = useState(false); // Chargement des templates du menu
+  const [menuTemplatesAccountNotConfigured, setMenuTemplatesAccountNotConfigured] = useState(false); // Compte WhatsApp non configuré
   const [menuPreviewTemplate, setMenuPreviewTemplate] = useState(null); // Template sélectionné dans le menu
   const [useAutoTemplate, setUseAutoTemplate] = useState(true); // Utiliser le système auto-template (true) ou sélection manuelle (false)
   const discussionPrefs = useTheme();
@@ -798,17 +799,22 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     // Si on ouvre le mode template, charger les templates
     if (newMode === "template" && conversation?.id) {
       setLoadingMenuTemplates(true);
+      setMenuTemplatesAccountNotConfigured(false);
       try {
         const templatesResponse = await getAvailableTemplates(conversation.id);
         const newTemplates = templatesResponse.data?.templates || [];
+        const notConfigured = templatesResponse.data?.account_not_configured === true;
         setMenuTemplates(newTemplates);
+        setMenuTemplatesAccountNotConfigured(notConfigured);
         // Sélectionner automatiquement le premier template si disponible
         if (newTemplates.length > 0 && !menuPreviewTemplate) {
           setMenuPreviewTemplate(newTemplates[0]);
         }
       } catch (error) {
-        console.error("Error loading templates for menu:", error);
+        const notConfigured = error.response?.data?.detail?.includes?.("account_not_configured");
         setMenuTemplates([]);
+        setMenuTemplatesAccountNotConfigured(notConfigured);
+        if (!notConfigured) console.error("Error loading templates for menu:", error);
       } finally {
         setLoadingMenuTemplates(false);
       }
@@ -1316,7 +1322,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                   <div className="template-selector-menu__loading">Chargement des templates...</div>
                 ) : menuTemplates.length === 0 ? (
                   <div className="template-selector-menu__empty">
-                    Aucun template UTILITY, MARKETING ou AUTHENTICATION disponible. Créez-en un dans Meta Business Manager.
+                    {menuTemplatesAccountNotConfigured
+                      ? "Connectez votre compte WhatsApp Business (access_token et WABA ID) dans les paramètres du compte pour afficher les templates."
+                      : "Aucun template UTILITY, MARKETING ou AUTHENTICATION disponible. Créez-en un dans Meta Business Manager."}
                   </div>
                 ) : (
                   <div className="template-selector-menu__container">
