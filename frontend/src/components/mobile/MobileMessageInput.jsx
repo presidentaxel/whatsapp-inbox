@@ -434,7 +434,11 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
     try {
       const payload = { template_name: template.name, language_code: template.language || "fr" };
       if (components && components.length > 0) payload.components = components;
-      await sendTemplateMessage(conversationId, payload);
+      const result = await sendTemplateMessage(conversationId, payload);
+      const waMessageId = result?.data?.message_id;
+      if (onSend && tempId && waMessageId) {
+        onSend(null, false, { tempId, waMessageId });
+      }
       getMessagePrice(conversationId).then(r => {
         const isFree = r.data?.is_free ?? true;
         const lastInbound = r.data?.last_inbound_time ?? null;
