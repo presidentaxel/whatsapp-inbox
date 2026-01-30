@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import HTTPException, status
 
 from app.core.db import supabase
+from app.core.pg import fetch_all, fetch_one, execute, get_pool
+
+logger = logging.getLogger(__name__)
 
 
 class PermissionCodes:
@@ -449,4 +453,163 @@ def load_current_user(supabase_user: Any) -> CurrentUser:
         overrides=overrides_raw,
     )
 
+
+async def load_current_user_async(supabase_user: Any) -> CurrentUser:
+    """
+    Charge les permissions et rôles (async). Utilise PostgreSQL direct si DATABASE_URL est défini,
+    sinon délègue à load_current_user dans un thread pool.
+    """
+    from starlette.concurrency import run_in_threadpool
+
+    if not get_pool():
+        return await run_in_threadpool(load_current_user, supabase_user)
+
+    user_id = supabase_user.id
+    display_name = (supabase_user.user_metadata or {}).get("full_name") if supabase_user.user_metadata else None
+
+    # 1. Ensure app_users record
+    app_row = await fetch_one(
+        "SELECT * FROM app_users WHERE user_id = $1::uuid LIMIT 1",
+        user_id,
+    )
+    if not app_row:
+        await execute(
+            "INSERT INTO app_users (user_id, email, display_name) VALUES ($1::uuid, $2, $3) ON CONFLICT (user_id) DO NOTHING",
+            user_id,
+            supabase_user.email or "",
+            display_name,
+        )
+        app_row = await fetch_one(
+            "SELECT * FROM app_users WHERE user_id = $1::uuid LIMIT 1",
+            user_id,
+        )
+    if not app_row:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="user_record_failed")
+    app_profile = dict(app_row)
+    if not app_profile.get("is_active", True):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user_disabled")
+
+    # 2. Bootstrap admin (first user gets admin)
+    any_role = await fetch_one("SELECT id FROM app_user_roles LIMIT 1")
+    if not any_role:
+        admin_role = await fetch_one("SELECT id FROM app_roles WHERE slug = $1 LIMIT 1", "admin")
+        if admin_role:
+            await execute(
+                "INSERT INTO app_user_roles (user_id, role_id) VALUES ($1::uuid, $2::uuid)",
+                user_id,
+                admin_role["id"],
+            )
+
+    # 3. Default manager (user with no roles gets manager)
+    user_roles = await fetch_all(
+        "SELECT id, role_id, account_id FROM app_user_roles WHERE user_id = $1::uuid",
+        user_id,
+    )
+    if not user_roles:
+        manager_role = await fetch_one("SELECT id FROM app_roles WHERE slug = $1 LIMIT 1", "manager")
+        if manager_role:
+            await execute(
+                "INSERT INTO app_user_roles (user_id, role_id) VALUES ($1::uuid, $2::uuid)",
+                user_id,
+                manager_role["id"],
+            )
+        user_roles = await fetch_all(
+            "SELECT id, role_id, account_id FROM app_user_roles WHERE user_id = $1::uuid",
+            user_id,
+        )
+
+    role_ids = [r["role_id"] for r in user_roles]
+    role_map: Dict[str, Dict[str, Any]] = {}
+    perms_by_role: Dict[str, Set[str]] = defaultdict(set)
+    if role_ids:
+        roles_rows = await fetch_all(
+            "SELECT id, slug, name FROM app_roles WHERE id = ANY($1::uuid[])",
+            role_ids,
+        )
+        role_map = {str(r["id"]): r for r in roles_rows}
+        perms_rows = await fetch_all(
+            "SELECT role_id, permission_code FROM role_permissions WHERE role_id = ANY($1::uuid[])",
+            role_ids,
+        )
+        for p in perms_rows:
+            perms_by_role[str(p["role_id"])].add(p["permission_code"])
+
+    permissions = PermissionMatrix()
+    for row in user_roles:
+        role_id = str(row["role_id"])
+        scope = str(row["account_id"]) if row.get("account_id") else None
+        for perm in perms_by_role.get(role_id, set()):
+            permissions.grant(perm, scope)
+
+    role_assignments = [
+        {
+            "id": r["id"],
+            "role_id": r["role_id"],
+            "role_slug": role_map.get(str(r["role_id"]), {}).get("slug"),
+            "role_name": role_map.get(str(r["role_id"]), {}).get("name"),
+            "account_id": r.get("account_id"),
+        }
+        for r in user_roles
+    ]
+
+    overrides_raw = await fetch_all(
+        "SELECT id, permission_code, account_id, is_allowed FROM app_user_overrides WHERE user_id = $1::uuid",
+        user_id,
+    )
+    for override in overrides_raw:
+        perm = override["permission_code"]
+        scope = str(override["account_id"]) if override.get("account_id") else None
+        if override.get("is_allowed"):
+            permissions.grant(perm, scope)
+        else:
+            permissions.revoke(perm, scope)
+
+    account_access_raw = await fetch_all(
+        "SELECT account_id, access_level FROM user_account_access WHERE user_id = $1::uuid",
+        user_id,
+    )
+    for access in account_access_raw:
+        acc_id = str(access["account_id"])
+        level = access.get("access_level")
+        if acc_id and level:
+            permissions.account_access_levels[acc_id] = level
+    for access in account_access_raw:
+        acc_id = str(access["account_id"])
+        level = access.get("access_level")
+        if level == "aucun":
+            permissions.account_permissions.pop(acc_id, None)
+        elif level == "lecture" and acc_id in permissions.account_permissions:
+            perms = permissions.account_permissions[acc_id]
+            perms.discard(PermissionCodes.MESSAGES_SEND)
+            perms.discard(PermissionCodes.ACCOUNTS_MANAGE)
+            perms.discard(PermissionCodes.ACCOUNTS_ASSIGN)
+            perms.discard(PermissionCodes.USERS_MANAGE)
+            perms.discard(PermissionCodes.ROLES_MANAGE)
+            perms.discard(PermissionCodes.SETTINGS_MANAGE)
+            perms.discard(PermissionCodes.PERMISSIONS_MANAGE)
+            allowed_read = {
+                PermissionCodes.ACCOUNTS_VIEW,
+                PermissionCodes.CONVERSATIONS_VIEW,
+                PermissionCodes.MESSAGES_VIEW,
+                PermissionCodes.CONTACTS_VIEW,
+                PermissionCodes.PERMISSIONS_VIEW,
+            }
+            for p in list(perms):
+                if p not in allowed_read:
+                    perms.discard(p)
+
+    return CurrentUser(
+        id=str(supabase_user.id),
+        email=supabase_user.email,
+        is_active=app_profile.get("is_active", True),
+        app_profile={
+            **app_profile,
+            "display_name": app_profile.get("display_name"),
+            "profile_picture_url": app_profile.get("profile_picture_url"),
+        },
+        permissions=permissions,
+        supabase_user=supabase_user,
+        role_assignments=role_assignments,
+        overrides=overrides_raw,
+    )
 

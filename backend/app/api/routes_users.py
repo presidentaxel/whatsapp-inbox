@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.core.db import supabase, supabase_execute
+from app.core.pg import execute as pg_execute, get_pool
 from starlette.concurrency import run_in_threadpool
 import logging
 
@@ -25,18 +26,20 @@ async def delete_user(
         raise HTTPException(status_code=400, detail="cannot_delete_self")
     
     try:
-        # Supprimer les rôles et overrides
-        await supabase_execute(
-            supabase.table("app_user_roles").delete().eq("user_id", user_id)
-        )
-        await supabase_execute(
-            supabase.table("app_user_overrides").delete().eq("user_id", user_id)
-        )
-        
-        # Supprimer l'utilisateur de app_users
-        await supabase_execute(
-            supabase.table("app_users").delete().eq("user_id", user_id)
-        )
+        if get_pool():
+            await pg_execute("DELETE FROM app_user_roles WHERE user_id = $1::uuid", user_id)
+            await pg_execute("DELETE FROM app_user_overrides WHERE user_id = $1::uuid", user_id)
+            await pg_execute("DELETE FROM app_users WHERE user_id = $1::uuid", user_id)
+        else:
+            await supabase_execute(
+                supabase.table("app_user_roles").delete().eq("user_id", user_id)
+            )
+            await supabase_execute(
+                supabase.table("app_user_overrides").delete().eq("user_id", user_id)
+            )
+            await supabase_execute(
+                supabase.table("app_users").delete().eq("user_id", user_id)
+            )
         
         # Supprimer l'utilisateur de Supabase Auth (nécessite admin API)
         def _delete_auth_user():

@@ -8,8 +8,9 @@ from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from starlette.concurrency import run_in_threadpool
 
-from app.core.db import supabase
+from app.core.db import supabase, supabase_execute
 from app.core.config import settings
+from app.core.pg import execute as pg_execute, fetch_all, fetch_one, get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -352,12 +353,15 @@ async def _upload_media_task(
         if result:
             logger.info(f"✅ [ASYNC UPLOAD] Media uploaded successfully: message_id={message_id}, storage_url={result}")
             # Mettre à jour le message avec l'URL de stockage
-            from app.core.db import supabase_execute
-            await supabase_execute(
-                supabase.table("messages")
-                .update({"storage_url": result})
-                .eq("id", message_id)
-            )
+            if get_pool():
+                await pg_execute(
+                    "UPDATE messages SET storage_url = $2 WHERE id = $1::uuid",
+                    message_id, result,
+                )
+            else:
+                await supabase_execute(
+                    supabase.table("messages").update({"storage_url": result}).eq("id", message_id)
+                )
             logger.info(f"✅ [ASYNC UPLOAD] Message updated with storage_url: message_id={message_id}")
             
             # Gérer Google Drive si configuré et si account est fourni
@@ -517,33 +521,43 @@ async def cleanup_old_media(days: int = 60) -> int:
         Nombre de fichiers supprimés
     """
     try:
-        from app.core.db import supabase_execute
-        
-        # Calculer la date limite
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         cutoff_iso = cutoff_date.isoformat()
+        # S'assurer que cutoff_date est timezone-aware pour asyncpg
+        if cutoff_date.tzinfo is None:
+            cutoff_date = cutoff_date.replace(tzinfo=timezone.utc)
         
-        # Trouver tous les messages avec storage_url et timestamp < cutoff
-        query = (
-            supabase.table("messages")
-            .select("id, storage_url")
-            .not_.is_("storage_url", "null")
-            .lt("timestamp", cutoff_iso)
-        )
-        
-        result = await supabase_execute(query)
-        messages_to_clean = result.data or []
+        if get_pool():
+            messages_to_clean = await fetch_all(
+                """
+                SELECT id, storage_url FROM messages
+                WHERE storage_url IS NOT NULL AND timestamp < $1::timestamptz
+                """,
+                cutoff_date,
+            )
+        else:
+            query = (
+                supabase.table("messages")
+                .select("id, storage_url")
+                .not_.is_("storage_url", "null")
+                .lt("timestamp", cutoff_iso)
+            )
+            result = await supabase_execute(query)
+            messages_to_clean = result.data or []
         
         deleted_count = 0
         for msg in messages_to_clean:
             if await delete_message_media(msg["id"]):
                 deleted_count += 1
-                # Mettre à jour le message pour retirer storage_url
-                await supabase_execute(
-                    supabase.table("messages")
-                    .update({"storage_url": None})
-                    .eq("id", msg["id"])
-                )
+                if get_pool():
+                    await pg_execute(
+                        "UPDATE messages SET storage_url = NULL WHERE id = $1::uuid",
+                        msg["id"],
+                    )
+                else:
+                    await supabase_execute(
+                        supabase.table("messages").update({"storage_url": None}).eq("id", msg["id"])
+                    )
         
         logger.info(f"✅ Cleaned up {deleted_count} old media files")
         return deleted_count
@@ -631,19 +645,31 @@ async def upload_template_media(
             
             # Enregistrer les métadonnées dans la table template_media
             try:
-                await supabase_execute(
-                    supabase.table("template_media")
-                    .upsert({
-                        "template_name": template_name,
-                        "template_language": template_language,
-                        "account_id": account_id,
-                        "media_type": media_type,
-                        "storage_url": public_url,
-                        "storage_path": file_path,
-                        "mime_type": content_type,
-                        "file_size": len(media_data)
-                    }, on_conflict="template_name,template_language,account_id,media_type")
-                )
+                if get_pool():
+                    await pg_execute(
+                        """
+                        INSERT INTO template_media (template_name, template_language, account_id, media_type, storage_url, storage_path, mime_type, file_size)
+                        VALUES ($1, $2, $3::uuid, $4, $5, $6, $7, $8)
+                        ON CONFLICT (template_name, template_language, account_id, media_type)
+                        DO UPDATE SET storage_url = EXCLUDED.storage_url, storage_path = EXCLUDED.storage_path, mime_type = EXCLUDED.mime_type, file_size = EXCLUDED.file_size, updated_at = NOW()
+                        """,
+                        template_name, template_language, account_id, media_type,
+                        public_url, file_path, content_type, len(media_data),
+                    )
+                else:
+                    await supabase_execute(
+                        supabase.table("template_media")
+                        .upsert({
+                            "template_name": template_name,
+                            "template_language": template_language,
+                            "account_id": account_id,
+                            "media_type": media_type,
+                            "storage_url": public_url,
+                            "storage_path": file_path,
+                            "mime_type": content_type,
+                            "file_size": len(media_data)
+                        }, on_conflict="template_name,template_language,account_id,media_type")
+                    )
                 logger.info(f"✅ Template media uploaded and metadata saved: {public_url}")
             except Exception as db_error:
                 logger.warning(f"⚠️ Error saving template media metadata: {db_error}")
@@ -678,8 +704,18 @@ async def get_template_media_url(
         URL publique du média ou None si non trouvé ou si la table n'existe pas
     """
     try:
-        from app.core.db import supabase_execute
-        
+        if get_pool():
+            row = await fetch_one(
+                """
+                SELECT storage_url FROM template_media
+                WHERE template_name = $1 AND template_language = $2 AND account_id = $3::uuid AND media_type = $4
+                LIMIT 1
+                """,
+                template_name, template_language, account_id, media_type,
+            )
+            if row:
+                return row.get("storage_url")
+            return None
         result = await supabase_execute(
             supabase.table("template_media")
             .select("storage_url")
@@ -689,10 +725,8 @@ async def get_template_media_url(
             .eq("media_type", media_type)
             .limit(1)
         )
-        
         if result.data and len(result.data) > 0:
             return result.data[0].get("storage_url")
-        
         return None
         
     except Exception as e:

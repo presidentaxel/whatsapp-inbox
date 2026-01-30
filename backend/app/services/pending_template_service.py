@@ -4,10 +4,11 @@ Service pour gérer les templates en attente de validation Meta
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Dict, Optional, Any
+from datetime import datetime, timezone, timedelta
+from typing import Dict, Optional, Any, List
 
 from app.core.db import supabase, supabase_execute
+from app.core.pg import execute as pg_execute, fetch_all, fetch_one, get_pool
 from app.services import whatsapp_api_service
 from app.services.template_validator import TemplateValidator
 from app.services.message_service import send_template_message
@@ -247,22 +248,32 @@ async def create_and_queue_template(
             sanitized_body, sanitized_header, sanitized_footer
         )
         
-        pending_template_payload = {
-            "message_id": message_id,
-            "conversation_id": conversation_id,
-            "account_id": account_id,
-            "template_name": template_name,
-            "text_content": text_content,
-            "meta_template_id": meta_template_id,
-            "template_status": "PENDING",
-            "template_hash": template_hash  # Stocker le hash pour la déduplication
-        }
-        if campaign_id:
-            pending_template_payload["campaign_id"] = campaign_id
-        
-        await supabase_execute(
-            supabase.table("pending_template_messages").insert(pending_template_payload)
-        )
+        if get_pool():
+            await pg_execute(
+                """
+                INSERT INTO pending_template_messages
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, template_hash, campaign_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9)
+                """,
+                message_id, conversation_id, account_id, template_name, text_content,
+                meta_template_id, "PENDING", template_hash, campaign_id,
+            )
+        else:
+            pending_template_payload = {
+                "message_id": message_id,
+                "conversation_id": conversation_id,
+                "account_id": account_id,
+                "template_name": template_name,
+                "text_content": text_content,
+                "meta_template_id": meta_template_id,
+                "template_status": "PENDING",
+                "template_hash": template_hash,
+            }
+            if campaign_id:
+                pending_template_payload["campaign_id"] = campaign_id
+            await supabase_execute(
+                supabase.table("pending_template_messages").insert(pending_template_payload)
+            )
         
         logger.info(f"✅ Template '{template_name}' créé et mis en file d'attente (ID Meta: {meta_template_id})")
         logger.info(f"   Compte: {account_name} (WABA: {waba_id})")
@@ -275,14 +286,17 @@ async def create_and_queue_template(
         
         # Vérifier si le message est déjà lu (au cas où il serait lu très rapidement)
         # et nettoyer le template si nécessaire
-        from app.core.db import supabase
-        message_check = await supabase_execute(
-            supabase.table("messages")
-            .select("status")
-            .eq("id", message_id)
-            .limit(1)
-        )
-        if message_check.data and len(message_check.data) > 0 and message_check.data[0].get("status") == "read":
+        message_read = False
+        if get_pool():
+            row = await fetch_one("SELECT status FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
+            message_read = row and row.get("status") == "read"
+        else:
+            from app.core.db import supabase
+            message_check = await supabase_execute(
+                supabase.table("messages").select("status").eq("id", message_id).limit(1)
+            )
+            message_read = bool(message_check.data and len(message_check.data) > 0 and message_check.data[0].get("status") == "read")
+        if message_read:
             # Le message est déjà lu, supprimer le template immédiatement
             asyncio.create_task(delete_auto_template_for_message(message_id))
         
@@ -608,21 +622,31 @@ async def create_and_queue_image_template(
             sanitized_body, None, None  # Pas de header/footer texte pour les images
         )
         
-        pending_template_payload = {
-            "message_id": message_id,
-            "conversation_id": conversation_id,
-            "account_id": account_id,
-            "template_name": template_name,
-            "text_content": body_text,
-            "meta_template_id": meta_template_id,
-            "template_status": "PENDING",
-            "template_hash": template_hash,
-            "header_media_id": uploaded_media_id  # Stocker le media_id uploadé vers WABA pour l'envoi ultérieur
-        }
-        
-        await supabase_execute(
-            supabase.table("pending_template_messages").insert(pending_template_payload)
-        )
+        if get_pool():
+            await pg_execute(
+                """
+                INSERT INTO pending_template_messages
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, template_hash, header_media_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9)
+                """,
+                message_id, conversation_id, account_id, template_name, body_text,
+                meta_template_id, "PENDING", template_hash, uploaded_media_id,
+            )
+        else:
+            pending_template_payload = {
+                "message_id": message_id,
+                "conversation_id": conversation_id,
+                "account_id": account_id,
+                "template_name": template_name,
+                "text_content": body_text,
+                "meta_template_id": meta_template_id,
+                "template_status": "PENDING",
+                "template_hash": template_hash,
+                "header_media_id": uploaded_media_id,
+            }
+            await supabase_execute(
+                supabase.table("pending_template_messages").insert(pending_template_payload)
+            )
         
         logger.info(f"✅ Template image '{template_name}' créé et mis en file d'attente (ID Meta: {meta_template_id})")
         logger.info(f"   Compte: {account_name} (WABA: {waba_id})")
@@ -634,13 +658,16 @@ async def create_and_queue_image_template(
         asyncio.create_task(check_template_status_async(message_id))
         
         # Vérifier si le message est déjà lu
-        message_check = await supabase_execute(
-            supabase.table("messages")
-            .select("status")
-            .eq("id", message_id)
-            .limit(1)
-        )
-        if message_check.data and len(message_check.data) > 0 and message_check.data[0].get("status") == "read":
+        message_read = False
+        if get_pool():
+            row = await fetch_one("SELECT status FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
+            message_read = row and row.get("status") == "read"
+        else:
+            message_check = await supabase_execute(
+                supabase.table("messages").select("status").eq("id", message_id).limit(1)
+            )
+            message_read = bool(message_check.data and len(message_check.data) > 0 and message_check.data[0].get("status") == "read")
+        if message_read:
             asyncio.create_task(delete_auto_template_for_message(message_id))
         
         return {
@@ -703,15 +730,20 @@ async def check_template_status_once(message_id: str):
             logger.warning(f"❌ [CHECK-ONCE] Template rejeté immédiatement pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
             print(f"❌ [CHECK-ONCE] Template rejeté immédiatement pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
             # Vérifier si c'est une campagne broadcast
-            pending_result = await supabase_execute(
-                supabase.table("pending_template_messages")
-                .select("campaign_id")
-                .eq("message_id", message_id)
-                .limit(1)
-            )
             campaign_id = None
-            if pending_result.data and len(pending_result.data) > 0:
-                campaign_id = pending_result.data[0].get("campaign_id")
+            if get_pool():
+                row = await fetch_one("SELECT campaign_id FROM pending_template_messages WHERE message_id = $1::uuid LIMIT 1", message_id)
+                if row:
+                    campaign_id = row.get("campaign_id")
+            else:
+                pending_result = await supabase_execute(
+                    supabase.table("pending_template_messages")
+                    .select("campaign_id")
+                    .eq("message_id", message_id)
+                    .limit(1)
+                )
+                if pending_result.data and len(pending_result.data) > 0:
+                    campaign_id = pending_result.data[0].get("campaign_id")
             
             if campaign_id:
                 # Marquer tous les destinataires payants de la campagne comme échoués
@@ -759,15 +791,20 @@ async def check_template_status_async(message_id: str):
                     logger.warning(f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
                     print(f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
                     # Vérifier si c'est une campagne broadcast
-                    pending_result = await supabase_execute(
-                        supabase.table("pending_template_messages")
-                        .select("campaign_id")
-                        .eq("message_id", message_id)
-                        .limit(1)
-                    )
                     campaign_id = None
-                    if pending_result.data and len(pending_result.data) > 0:
-                        campaign_id = pending_result.data[0].get("campaign_id")
+                    if get_pool():
+                        row = await fetch_one("SELECT campaign_id FROM pending_template_messages WHERE message_id = $1::uuid LIMIT 1", message_id)
+                        if row:
+                            campaign_id = row.get("campaign_id")
+                    else:
+                        pending_result = await supabase_execute(
+                            supabase.table("pending_template_messages")
+                            .select("campaign_id")
+                            .eq("message_id", message_id)
+                            .limit(1)
+                        )
+                        if pending_result.data and len(pending_result.data) > 0:
+                            campaign_id = pending_result.data[0].get("campaign_id")
                     
                     if campaign_id:
                         # Marquer tous les destinataires payants de la campagne comme échoués
@@ -806,91 +843,125 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
     logger.info(f"🔍 [CHECK-STATUS] Vérification du statut Meta pour le message {message_id}")
     print(f"🔍 [CHECK-STATUS] Vérification du statut Meta pour le message {message_id}")
     
-    # Récupérer les infos du template en attente avec le compte associé
-    # On cherche d'abord les templates PENDING, mais aussi APPROVED au cas où le statut n'a pas été mis à jour
-    result = await supabase_execute(
-        supabase.table("pending_template_messages")
-        .select("*, whatsapp_accounts!inner(waba_id, access_token)")
-        .eq("message_id", message_id)
-        .in_("template_status", ["PENDING", "APPROVED"])  # Chercher aussi les APPROVED au cas où
-        .limit(1)
-    )
-    
-    if not result.data or len(result.data) == 0:
-        logger.info(f"⚠️ [CHECK-STATUS] Template non trouvé avec statut PENDING/APPROVED pour le message {message_id}, recherche de tous les statuts...")
-        print(f"⚠️ [CHECK-STATUS] Template non trouvé avec statut PENDING/APPROVED pour le message {message_id}, recherche de tous les statuts...")
-        # Si pas trouvé, vérifier si le message existe déjà avec un autre statut
-        result_all = await supabase_execute(
+    pending = None
+    if get_pool():
+        row = await fetch_one(
+            """
+            SELECT p.id, p.message_id, p.conversation_id, p.account_id, p.template_name, p.text_content,
+                   p.meta_template_id, p.template_status, p.rejection_reason, p.template_hash, p.header_media_id, p.campaign_id,
+                   w.waba_id, w.access_token
+            FROM pending_template_messages p
+            INNER JOIN whatsapp_accounts w ON w.id = p.account_id
+            WHERE p.message_id = $1::uuid AND p.template_status IN ('PENDING', 'APPROVED')
+            LIMIT 1
+            """,
+            message_id,
+        )
+        if row:
+            pending = dict(row)
+        if not pending:
+            row_all = await fetch_one(
+                """
+                SELECT p.template_status, w.waba_id, w.access_token
+                FROM pending_template_messages p
+                INNER JOIN whatsapp_accounts w ON w.id = p.account_id
+                WHERE p.message_id = $1::uuid
+                LIMIT 1
+                """,
+                message_id,
+            )
+            if row_all:
+                status = row_all.get("template_status", "UNKNOWN")
+                logger.info(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
+                print(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
+                return {"status": status}
+            logger.warning(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
+            print(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
+            return {"status": "NOT_FOUND"}
+    else:
+        result = await supabase_execute(
             supabase.table("pending_template_messages")
             .select("*, whatsapp_accounts!inner(waba_id, access_token)")
             .eq("message_id", message_id)
+            .in_("template_status", ["PENDING", "APPROVED"])
             .limit(1)
         )
-        if result_all.data and len(result_all.data) > 0:
-            # Le template existe mais avec un statut différent (probablement REJECTED)
-            status = result_all.data[0].get("template_status", "UNKNOWN")
-            logger.info(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
-            print(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
-            return {"status": status}
-        logger.warning(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
-        print(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
-        return {"status": "NOT_FOUND"}
+        if not result.data or len(result.data) == 0:
+            logger.info(f"⚠️ [CHECK-STATUS] Template non trouvé avec statut PENDING/APPROVED pour le message {message_id}, recherche de tous les statuts...")
+            print(f"⚠️ [CHECK-STATUS] Template non trouvé avec statut PENDING/APPROVED pour le message {message_id}, recherche de tous les statuts...")
+            result_all = await supabase_execute(
+                supabase.table("pending_template_messages")
+                .select("*, whatsapp_accounts!inner(waba_id, access_token)")
+                .eq("message_id", message_id)
+                .limit(1)
+            )
+            if result_all.data and len(result_all.data) > 0:
+                status = result_all.data[0].get("template_status", "UNKNOWN")
+                logger.info(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
+                print(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
+                return {"status": status}
+            logger.warning(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
+            print(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
+            return {"status": "NOT_FOUND"}
+        pending = result.data[0]
+        account_info = pending.get("whatsapp_accounts", {})
+        if isinstance(account_info, list) and len(account_info) > 0:
+            account_info = account_info[0]
+        elif not isinstance(account_info, dict):
+            account_info = {}
+        pending["waba_id"] = account_info.get("waba_id")
+        pending["access_token"] = account_info.get("access_token")
     
-    pending = result.data[0]
     template_name = pending.get("template_name", "inconnu")
     logger.info(f"📋 [CHECK-STATUS] Template trouvé: {template_name} (ID Meta: {pending.get('meta_template_id')}) pour le message {message_id}")
     print(f"📋 [CHECK-STATUS] Template trouvé: {template_name} (ID Meta: {pending.get('meta_template_id')}) pour le message {message_id}")
-    # Extraire les infos du compte depuis la relation
-    account_info = pending.get("whatsapp_accounts", {})
-    if isinstance(account_info, list) and len(account_info) > 0:
-        account_info = account_info[0]
-    elif isinstance(account_info, dict):
-        pass  # Déjà un dict
-    else:
-        account_info = {}
-    
-    pending["waba_id"] = account_info.get("waba_id")
-    pending["access_token"] = account_info.get("access_token")
     
     # Vérifier le statut auprès de Meta
     try:
-        # Récupérer tous les templates avec pagination pour trouver le nôtre
-        all_templates = []
-        after = None
-        limit = 100
-        
-        while True:
-            templates_result = await whatsapp_api_service.list_message_templates(
-                waba_id=pending["waba_id"],
-                access_token=pending["access_token"],
-                limit=limit,
-                after=after
-            )
-            
-            templates_batch = templates_result.get("data", [])
-            if not templates_batch:
-                break
-            
-            all_templates.extend(templates_batch)
-            
-            # Vérifier s'il y a une page suivante
-            paging = templates_result.get("paging", {})
-            after = paging.get("cursors", {}).get("after")
-            if not after:
-                break
-        
-        # Chercher notre template par ID Meta ou par nom
+        # Essayer d'abord de récupérer le template directement par ID (plus rapide et fiable)
         template = None
-        for t in all_templates:
-            if t.get("id") == pending["meta_template_id"]:
-                template = t
-                break
-            elif t.get("name") == pending["template_name"]:
-                template = t
-                break
+        if pending.get("meta_template_id"):
+            logger.info(f"🔍 [CHECK-STATUS] Récupération directe du template par ID: {pending['meta_template_id']}")
+            template = await whatsapp_api_service.get_message_template_by_id(
+                template_id=pending["meta_template_id"],
+                access_token=pending["access_token"]
+            )
+        
+        # Si pas trouvé par ID (peut arriver si le template vient d'être créé), chercher par nom dans la liste
+        if not template:
+            logger.info(f"🔍 [CHECK-STATUS] Template non trouvé par ID, recherche par nom dans la liste...")
+            all_templates = []
+            after = None
+            limit = 100
+            
+            while True:
+                templates_result = await whatsapp_api_service.list_message_templates(
+                    waba_id=pending["waba_id"],
+                    access_token=pending["access_token"],
+                    limit=limit,
+                    after=after
+                )
+                
+                templates_batch = templates_result.get("data", [])
+                if not templates_batch:
+                    break
+                
+                all_templates.extend(templates_batch)
+                
+                # Vérifier s'il y a une page suivante
+                paging = templates_result.get("paging", {})
+                after = paging.get("cursors", {}).get("after")
+                if not after:
+                    break
+            
+            # Chercher notre template par nom
+            for t in all_templates:
+                if t.get("name") == pending["template_name"]:
+                    template = t
+                    break
         
         if not template:
-            logger.warning(f"⚠️ Template {pending['template_name']} (ID: {pending['meta_template_id']}) non trouvé dans la liste Meta")
+            logger.warning(f"⚠️ [CHECK-STATUS] Template {pending['template_name']} (ID: {pending['meta_template_id']}) non trouvé dans Meta - peut-être pas encore synchronisé")
             return {"status": "PENDING"}  # Peut-être pas encore synchronisé
         
         status = template.get("status", "PENDING")
@@ -906,20 +977,32 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
         print(f"📊 [CHECK-STATUS] Statut Meta: {meta_status_upper}, Statut base: {current_status} pour le message {message_id}")
         
         if meta_status_upper == "APPROVED" and current_status != "APPROVED":
-            await supabase_execute(
-                supabase.table("pending_template_messages")
-                .update({"template_status": "APPROVED"})
-                .eq("message_id", message_id)
-            )
+            if get_pool():
+                await pg_execute(
+                    "UPDATE pending_template_messages SET template_status = $2 WHERE message_id = $1::uuid",
+                    message_id, "APPROVED",
+                )
+            else:
+                await supabase_execute(
+                    supabase.table("pending_template_messages")
+                    .update({"template_status": "APPROVED"})
+                    .eq("message_id", message_id)
+                )
             logger.info(f"✅ [CHECK-STATUS] Template {pending['template_name']} approuvé par Meta (statut mis à jour) pour le message {message_id}")
             print(f"✅ [CHECK-STATUS] Template {pending['template_name']} approuvé par Meta (statut mis à jour) pour le message {message_id}")
         elif meta_status_upper == "REJECTED" and current_status != "REJECTED":
             reason = template.get("reason", "Rejeté par Meta")
-            await supabase_execute(
-                supabase.table("pending_template_messages")
-                .update({"template_status": "REJECTED", "rejection_reason": reason})
-                .eq("message_id", message_id)
-            )
+            if get_pool():
+                await pg_execute(
+                    "UPDATE pending_template_messages SET template_status = $2, rejection_reason = $3 WHERE message_id = $1::uuid",
+                    message_id, "REJECTED", reason,
+                )
+            else:
+                await supabase_execute(
+                    supabase.table("pending_template_messages")
+                    .update({"template_status": "REJECTED", "rejection_reason": reason})
+                    .eq("message_id", message_id)
+                )
             logger.warning(f"❌ [CHECK-STATUS] Template {pending['template_name']} rejeté par Meta: {reason} pour le message {message_id}")
             print(f"❌ [CHECK-STATUS] Template {pending['template_name']} rejeté par Meta: {reason} pour le message {message_id}")
         elif meta_status_upper == "APPROVED" and current_status == "APPROVED":
@@ -938,24 +1021,35 @@ async def cleanup_read_auto_templates():
     from app.core.db import supabase
     
     try:
-        # Récupérer tous les templates auto-créés associés à des messages lus
-        # Note: Supabase ne supporte pas directement LIKE dans le query builder,
-        # on va filtrer après récupération ou utiliser une fonction RPC
-        result = await supabase_execute(
-            supabase.table("pending_template_messages")
-            .select("message_id, template_name, messages!inner(status)")
-            .eq("messages.status", "read")
-            .limit(1000)  # Limite pour éviter de charger trop de données
-        )
-        
-        if not result.data or len(result.data) == 0:
-            return
-        
-        # Filtrer les templates auto-créés (commencent par "auto_" ou "auto_img_")
-        auto_templates = [
-            row for row in result.data 
-            if row.get("template_name", "").startswith("auto_") or row.get("template_name", "").startswith("auto_img_")
-        ]
+        if get_pool():
+            rows = await fetch_all(
+                """
+                SELECT p.message_id, p.template_name
+                FROM pending_template_messages p
+                INNER JOIN messages m ON m.id = p.message_id
+                WHERE m.status = $1
+                LIMIT 1000
+                """,
+                "read",
+            )
+            auto_templates = [
+                {"message_id": r["message_id"], "template_name": r["template_name"]}
+                for r in rows
+                if (r.get("template_name") or "").startswith("auto_") or (r.get("template_name") or "").startswith("auto_img_")
+            ]
+        else:
+            result = await supabase_execute(
+                supabase.table("pending_template_messages")
+                .select("message_id, template_name, messages!inner(status)")
+                .eq("messages.status", "read")
+                .limit(1000)
+            )
+            if not result.data or len(result.data) == 0:
+                return
+            auto_templates = [
+                row for row in result.data
+                if row.get("template_name", "").startswith("auto_") or row.get("template_name", "").startswith("auto_img_")
+            ]
         
         if not auto_templates:
             return
@@ -979,35 +1073,79 @@ async def send_pending_template(message_id: str):
     logger.info(f"📤 [SEND-TEMPLATE] Début de l'envoi du template pour le message {message_id}")
     print(f"📤 [SEND-TEMPLATE] Début de l'envoi du template pour le message {message_id}")
     
-    result = await supabase_execute(
-        supabase.table("pending_template_messages")
-        .select("*, conversations!inner(client_number), whatsapp_accounts!inner(phone_number_id, access_token)")
-        .eq("message_id", message_id)
-        .eq("template_status", "APPROVED")
-        .limit(1)
-    )
+    # Vérifier d'abord si le message n'a pas déjà été envoyé (éviter les doublons)
+    if get_pool():
+        msg_check = await fetch_one(
+            "SELECT wa_message_id, status FROM messages WHERE id = $1::uuid LIMIT 1",
+            message_id,
+        )
+        if msg_check and msg_check.get("wa_message_id"):
+            logger.info(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé (wa_message_id: {msg_check['wa_message_id']}), skip")
+            print(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé, skip")
+            return
+    else:
+        msg_check_result = await supabase_execute(
+            supabase.table("messages")
+            .select("wa_message_id, status")
+            .eq("id", message_id)
+            .limit(1)
+        )
+        if msg_check_result.data and msg_check_result.data[0].get("wa_message_id"):
+            logger.info(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé (wa_message_id: {msg_check_result.data[0]['wa_message_id']}), skip")
+            print(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé, skip")
+            return
     
-    if not result.data or len(result.data) == 0:
+    pending = None
+    if get_pool():
+        row = await fetch_one(
+            """
+            SELECT p.id, p.message_id, p.conversation_id, p.account_id, p.template_name, p.text_content,
+                   p.meta_template_id, p.template_status, p.header_media_id, p.campaign_id,
+                   c.client_number, w.phone_number_id, w.access_token
+            FROM pending_template_messages p
+            INNER JOIN conversations c ON c.id = p.conversation_id
+            INNER JOIN whatsapp_accounts w ON w.id = p.account_id
+            WHERE p.message_id = $1::uuid AND p.template_status = $2
+            LIMIT 1
+            """,
+            message_id, "APPROVED",
+        )
+        if row:
+            pending = dict(row)
+            phone_number_id = pending.get("phone_number_id")
+            access_token = pending.get("access_token")
+            conversation_info = {"client_number": pending.get("client_number")}
+            account_info = {"phone_number_id": phone_number_id, "access_token": access_token}
+    else:
+        result = await supabase_execute(
+            supabase.table("pending_template_messages")
+            .select("*, conversations!inner(client_number), whatsapp_accounts!inner(phone_number_id, access_token)")
+            .eq("message_id", message_id)
+            .eq("template_status", "APPROVED")
+            .limit(1)
+        )
+        if not result.data or len(result.data) == 0:
+            logger.warning(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
+            print(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
+            return
+        pending = result.data[0]
+        conversation_info = pending.get("conversations", {})
+        if isinstance(conversation_info, list) and len(conversation_info) > 0:
+            conversation_info = conversation_info[0]
+        account_info = pending.get("whatsapp_accounts", {})
+        if isinstance(account_info, list) and len(account_info) > 0:
+            account_info = account_info[0]
+        phone_number_id = account_info.get("phone_number_id")
+        access_token = account_info.get("access_token")
+    
+    if not pending:
         logger.warning(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
         print(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
         return
     
-    pending = result.data[0]
     template_name = pending.get("template_name", "inconnu")
     campaign_id = pending.get("campaign_id")
-    header_media_id = pending.get("header_media_id")  # Pour les templates avec image
-    
-    # Extraire les infos des relations
-    conversation_info = pending.get("conversations", {})
-    if isinstance(conversation_info, list) and len(conversation_info) > 0:
-        conversation_info = conversation_info[0]
-    
-    account_info = pending.get("whatsapp_accounts", {})
-    if isinstance(account_info, list) and len(account_info) > 0:
-        account_info = account_info[0]
-    
-    phone_number_id = account_info.get("phone_number_id")
-    access_token = account_info.get("access_token")
+    header_media_id = pending.get("header_media_id")
     
     if not phone_number_id or not access_token:
         logger.error(f"❌ WhatsApp non configuré pour le compte {pending['account_id']}")
@@ -1067,19 +1205,26 @@ async def send_pending_template(message_id: str):
         if wa_message_id:
             logger.info(f"✅ [SEND-TEMPLATE] Message envoyé avec succès! wa_message_id={wa_message_id} pour le message {message_id}")
             print(f"✅ [SEND-TEMPLATE] Message envoyé avec succès! wa_message_id={wa_message_id} pour le message {message_id}")
-            await supabase_execute(
-                supabase.table("messages")
-                .update({"wa_message_id": wa_message_id, "status": "sent"})
-                .eq("id", message_id)
-            )
+            if get_pool():
+                await pg_execute(
+                    "UPDATE messages SET wa_message_id = $2, status = $3 WHERE id = $1::uuid",
+                    message_id, wa_message_id, "sent",
+                )
+            else:
+                await supabase_execute(
+                    supabase.table("messages")
+                    .update({"wa_message_id": wa_message_id, "status": "sent"})
+                    .eq("id", message_id)
+                )
         else:
             logger.warning(f"⚠️ [SEND-TEMPLATE] Pas de wa_message_id dans la réponse pour le message {message_id}, mais on marque comme envoyé")
             print(f"⚠️ [SEND-TEMPLATE] Pas de wa_message_id dans la réponse pour le message {message_id}, mais on marque comme envoyé")
-            await supabase_execute(
-                supabase.table("messages")
-                .update({"status": "sent"})
-                .eq("id", message_id)
-            )
+            if get_pool():
+                await pg_execute("UPDATE messages SET status = $2 WHERE id = $1::uuid", message_id, "sent")
+            else:
+                await supabase_execute(
+                    supabase.table("messages").update({"status": "sent"}).eq("id", message_id)
+                )
         
         logger.info(f"✅ [SEND-TEMPLATE] Template '{template_name}' envoyé avec succès et message {message_id} mis à jour")
         print(f"✅ [SEND-TEMPLATE] Template '{template_name}' envoyé avec succès et message {message_id} mis à jour")
@@ -1111,19 +1256,25 @@ async def _send_broadcast_template(
     logger.info(f"📧 [BROADCAST-TEMPLATE] Envoi du template '{template_name}' à tous les destinataires de la campagne {campaign_id}")
     print(f"📧 [BROADCAST-TEMPLATE] Envoi du template '{template_name}' à tous les destinataires de la campagne {campaign_id}")
     
-    # Récupérer la campagne
-    campaign_result = await supabase_execute(
-        supabase.table("broadcast_campaigns")
-        .select("group_id, account_id")
-        .eq("id", campaign_id)
-        .limit(1)
-    )
-    
-    if not campaign_result.data or len(campaign_result.data) == 0:
+    campaign = None
+    if get_pool():
+        campaign = await fetch_one(
+            "SELECT group_id, account_id FROM broadcast_campaigns WHERE id = $1::uuid LIMIT 1",
+            campaign_id,
+        )
+    else:
+        campaign_result = await supabase_execute(
+            supabase.table("broadcast_campaigns")
+            .select("group_id, account_id")
+            .eq("id", campaign_id)
+            .limit(1)
+        )
+        if campaign_result.data and len(campaign_result.data) > 0:
+            campaign = campaign_result.data[0]
+    if not campaign:
         logger.error(f"❌ [BROADCAST-TEMPLATE] Campagne {campaign_id} non trouvée")
         return
     
-    campaign = campaign_result.data[0]
     group_id = campaign["group_id"]
     account_id = campaign["account_id"]
     
@@ -1135,17 +1286,23 @@ async def _send_broadcast_template(
         return
     
     # Récupérer toutes les stats de la campagne
-    stats_result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .select("id, phone_number, message_id, sent_at")
-        .eq("campaign_id", campaign_id)
-    )
+    if get_pool():
+        stats_rows = await fetch_all(
+            "SELECT id, phone_number, message_id, sent_at FROM broadcast_recipient_stats WHERE campaign_id = $1::uuid",
+            campaign_id,
+        )
+        stats = {s["phone_number"]: s for s in stats_rows}
+    else:
+        stats_result = await supabase_execute(
+            supabase.table("broadcast_recipient_stats")
+            .select("id, phone_number, message_id, sent_at")
+            .eq("campaign_id", campaign_id)
+        )
+        stats = {stat["phone_number"]: stat for stat in (stats_result.data or [])}
     
-    if not stats_result.data:
+    if not stats:
         logger.warning(f"⚠️ [BROADCAST-TEMPLATE] Aucune stat trouvée pour la campagne {campaign_id}")
         return
-    
-    stats = {stat["phone_number"]: stat for stat in stats_result.data}
     
     # Envoyer le template à chaque destinataire
     sent_count = 0
@@ -1181,15 +1338,22 @@ async def _send_broadcast_template(
             
             # Mettre à jour le message "fake" avec le vrai wa_message_id
             if stat.get("message_id"):
-                await supabase_execute(
-                    supabase.table("messages")
-                    .update({
-                        "wa_message_id": wa_message_id,
-                        "status": "sent",
-                        "timestamp": timestamp_iso
-                    })
-                    .eq("id", stat["message_id"])
-                )
+                if get_pool():
+                    from app.services.message_service import _parse_timestamp_iso
+                    await pg_execute(
+                        "UPDATE messages SET wa_message_id = $2, status = $3, timestamp = $4::timestamptz WHERE id = $1::uuid",
+                        stat["message_id"], wa_message_id, "sent", _parse_timestamp_iso(timestamp_iso),
+                    )
+                else:
+                    await supabase_execute(
+                        supabase.table("messages")
+                        .update({
+                            "wa_message_id": wa_message_id,
+                            "status": "sent",
+                            "timestamp": timestamp_iso
+                        })
+                        .eq("id", stat["message_id"])
+                    )
             
             # Mettre à jour la stat
             await update_recipient_stat(stat["id"], {
@@ -1221,17 +1385,23 @@ async def _mark_campaign_as_failed(campaign_id: str, error_message: str):
     from app.core.db import supabase
     from app.services.broadcast_service import update_recipient_stat, update_campaign_counters
     
-    # Ne marquer comme échoués que les destinataires qui n'ont pas encore de sent_at
-    # (ceux qui attendaient le template, pas ceux qui ont déjà reçu le message en gratuit)
-    stats_result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .select("id")
-        .eq("campaign_id", campaign_id)
-        .is_("sent_at", "null")  # Seulement ceux qui n'ont pas encore été envoyés
-    )
+    stats_list = []
+    if get_pool():
+        stats_list = await fetch_all(
+            "SELECT id FROM broadcast_recipient_stats WHERE campaign_id = $1::uuid AND sent_at IS NULL",
+            campaign_id,
+        )
+    else:
+        stats_result = await supabase_execute(
+            supabase.table("broadcast_recipient_stats")
+            .select("id")
+            .eq("campaign_id", campaign_id)
+            .is_("sent_at", "null")
+        )
+        stats_list = stats_result.data or []
     
-    if stats_result.data:
-        for stat in stats_result.data:
+    if stats_list:
+        for stat in stats_list:
             await update_recipient_stat(stat["id"], {
                 "failed_at": datetime.now(timezone.utc).isoformat(),
                 "error_message": error_message
@@ -1243,11 +1413,17 @@ async def _mark_campaign_as_failed(campaign_id: str, error_message: str):
 async def mark_message_as_failed(message_id: str, error_message: str):
     """Marque un message comme échoué dans la base"""
     from app.core.db import supabase
-    await supabase_execute(
-        supabase.table("messages")
-        .update({"status": "failed", "error_message": error_message})
-        .eq("id", message_id)
-    )
+    if get_pool():
+        await pg_execute(
+            "UPDATE messages SET status = $2, error_message = $3 WHERE id = $1::uuid",
+            message_id, "failed", error_message,
+        )
+    else:
+        await supabase_execute(
+            supabase.table("messages")
+            .update({"status": "failed", "error_message": error_message})
+            .eq("id", message_id)
+        )
     logger.info(f"❌ Message {message_id} marqué comme échoué: {error_message}")
 
 
@@ -1256,30 +1432,41 @@ async def delete_auto_template_for_message(message_id: str):
     from app.core.db import supabase
     
     try:
-        # Récupérer les infos du template en attente
-        result = await supabase_execute(
-            supabase.table("pending_template_messages")
-            .select("*, whatsapp_accounts!inner(waba_id, access_token)")
-            .eq("message_id", message_id)
-            .limit(1)
-        )
+        pending = None
+        if get_pool():
+            row = await fetch_one(
+                """
+                SELECT p.id, p.message_id, p.template_name, w.waba_id, w.access_token
+                FROM pending_template_messages p
+                INNER JOIN whatsapp_accounts w ON w.id = p.account_id
+                WHERE p.message_id = $1::uuid
+                LIMIT 1
+                """,
+                message_id,
+            )
+            if row:
+                pending = dict(row)
+        else:
+            result = await supabase_execute(
+                supabase.table("pending_template_messages")
+                .select("*, whatsapp_accounts!inner(waba_id, access_token)")
+                .eq("message_id", message_id)
+                .limit(1)
+            )
+            if not result.data or len(result.data) == 0:
+                return
+            pending = result.data[0]
+            account_info = pending.get("whatsapp_accounts", {})
+            if isinstance(account_info, list) and len(account_info) > 0:
+                account_info = account_info[0]
+            elif not isinstance(account_info, dict):
+                account_info = {}
+            pending["waba_id"] = account_info.get("waba_id")
+            pending["access_token"] = account_info.get("access_token")
         
-        if not result.data or len(result.data) == 0:
-            # Pas de template auto-créé pour ce message
+        if not pending:
             return
         
-        pending = result.data[0]
-        # Extraire les infos du compte depuis la relation
-        account_info = pending.get("whatsapp_accounts", {})
-        if isinstance(account_info, list) and len(account_info) > 0:
-            account_info = account_info[0]
-        elif isinstance(account_info, dict):
-            pass  # Déjà un dict
-        else:
-            account_info = {}
-        
-        pending["waba_id"] = account_info.get("waba_id")
-        pending["access_token"] = account_info.get("access_token")
         template_name = pending["template_name"]
         
         # Vérifier que c'est bien un template auto-créé (commence par "auto_" ou "auto_img_")
@@ -1309,15 +1496,178 @@ async def delete_auto_template_for_message(message_id: str):
             # Continuer quand même pour supprimer l'entrée en base
         
         # Supprimer l'entrée dans pending_template_messages
-        from app.core.db import supabase
-        await supabase_execute(
-            supabase.table("pending_template_messages")
-            .delete()
-            .eq("message_id", message_id)
-        )
+        if get_pool():
+            await pg_execute("DELETE FROM pending_template_messages WHERE message_id = $1::uuid", message_id)
+        else:
+            from app.core.db import supabase
+            await supabase_execute(
+                supabase.table("pending_template_messages").delete().eq("message_id", message_id)
+            )
         
         logger.info(f"✅ Entrée pending_template_messages supprimée pour le message {message_id}")
         
     except Exception as e:
         logger.error(f"❌ Erreur lors de la suppression du template auto-créé pour le message {message_id}: {e}", exc_info=True)
+
+
+async def resume_pending_templates_on_startup():
+    """
+    Reprend les templates en attente au démarrage du backend.
+    - Templates APPROVED : envoie immédiatement
+    - Templates PENDING : relance la vérification
+    """
+    logger.info("=" * 80)
+    logger.info("🔄 [STARTUP] Reprise des templates en attente...")
+    
+    try:
+        # Récupérer tous les templates APPROVED ou PENDING créés dans les dernières 24h
+        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
+        # S'assurer que cutoff_time est timezone-aware pour asyncpg
+        if cutoff_time.tzinfo is None:
+            cutoff_time = cutoff_time.replace(tzinfo=timezone.utc)
+        
+        if get_pool():
+            rows = await fetch_all(
+                """
+                SELECT p.message_id, p.template_status, p.template_name, p.created_at, m.wa_message_id
+                FROM pending_template_messages p
+                INNER JOIN messages m ON m.id = p.message_id
+                WHERE p.template_status IN ('APPROVED', 'PENDING')
+                  AND p.created_at > $1::timestamptz
+                  AND m.wa_message_id IS NULL
+                ORDER BY p.created_at ASC
+                """,
+                cutoff_time,
+            )
+            pending_templates = [dict(r) for r in rows]
+        else:
+            result = await supabase_execute(
+                supabase.table("pending_template_messages")
+                .select("message_id, template_status, template_name, created_at, messages!inner(wa_message_id)")
+                .in_("template_status", ["APPROVED", "PENDING"])
+                .gte("created_at", cutoff_time.isoformat())
+                .is_("messages.wa_message_id", "null")
+                .order("created_at")
+            )
+            pending_templates = result.data or []
+        
+        if not pending_templates:
+            logger.info("✅ [STARTUP] Aucun template en attente à reprendre")
+            return
+        
+        logger.info(f"📋 [STARTUP] {len(pending_templates)} template(s) en attente trouvé(s)")
+        
+        approved_count = 0
+        pending_count = 0
+        
+        for template in pending_templates:
+            message_id = template["message_id"]
+            status = template["template_status"]
+            template_name = template["template_name"]
+            
+            if status == "APPROVED":
+                # Template déjà approuvé, envoyer immédiatement
+                logger.info(f"✅ [STARTUP] Template APPROVED trouvé: {template_name} (message {message_id}), envoi...")
+                try:
+                    await send_pending_template(message_id)
+                    approved_count += 1
+                except Exception as e:
+                    logger.error(f"❌ [STARTUP] Erreur lors de l'envoi du template {template_name}: {e}")
+            
+            elif status == "PENDING":
+                # Template en attente, relancer la vérification
+                logger.info(f"⏳ [STARTUP] Template PENDING trouvé: {template_name} (message {message_id}), vérification...")
+                try:
+                    result = await check_and_update_template_status(message_id)
+                    if result.get("status") == "APPROVED":
+                        await send_pending_template(message_id)
+                        approved_count += 1
+                    else:
+                        # Relancer la vérification périodique
+                        asyncio.create_task(check_template_status_async(message_id))
+                        pending_count += 1
+                except Exception as e:
+                    logger.error(f"❌ [STARTUP] Erreur lors de la vérification du template {template_name}: {e}")
+        
+        logger.info(f"✅ [STARTUP] Reprise terminée: {approved_count} envoyé(s), {pending_count} en attente de validation")
+        logger.info("=" * 80)
+        
+    except Exception as e:
+        logger.error(f"❌ [STARTUP] Erreur lors de la reprise des templates: {e}", exc_info=True)
+
+
+async def periodic_template_check():
+    """
+    Tâche périodique pour vérifier les templates en attente toutes les 5 minutes.
+    Utile si le backend a été coupé ou si des vérifications ont échoué.
+    """
+    logger.info("🔄 [PERIODIC] Démarrage de la vérification périodique des templates en attente")
+    
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 minutes
+            
+            logger.info("🔍 [PERIODIC] Vérification des templates en attente...")
+            
+            # Récupérer les templates PENDING ou APPROVED créés dans les dernières 24h
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
+            # S'assurer que cutoff_time est timezone-aware pour asyncpg
+            if cutoff_time.tzinfo is None:
+                cutoff_time = cutoff_time.replace(tzinfo=timezone.utc)
+            
+            if get_pool():
+                rows = await fetch_all(
+                    """
+                    SELECT p.message_id, p.template_status, p.template_name
+                    FROM pending_template_messages p
+                    INNER JOIN messages m ON m.id = p.message_id
+                    WHERE p.template_status IN ('APPROVED', 'PENDING')
+                      AND p.created_at > $1::timestamptz
+                      AND m.wa_message_id IS NULL
+                    """,
+                    cutoff_time,
+                )
+                pending_templates = [dict(r) for r in rows]
+            else:
+                result = await supabase_execute(
+                    supabase.table("pending_template_messages")
+                    .select("message_id, template_status, template_name, messages!inner(wa_message_id)")
+                    .in_("template_status", ["APPROVED", "PENDING"])
+                    .gte("created_at", cutoff_time.isoformat())
+                    .is_("messages.wa_message_id", "null")
+                )
+                pending_templates = result.data or []
+            
+            if not pending_templates:
+                logger.debug("✅ [PERIODIC] Aucun template en attente")
+                continue
+            
+            logger.info(f"📋 [PERIODIC] {len(pending_templates)} template(s) en attente")
+            
+            for template in pending_templates:
+                message_id = template["message_id"]
+                status = template["template_status"]
+                
+                if status == "APPROVED":
+                    # Template approuvé mais pas encore envoyé, envoyer maintenant
+                    try:
+                        await send_pending_template(message_id)
+                    except Exception as e:
+                        logger.error(f"❌ [PERIODIC] Erreur envoi template {message_id}: {e}")
+                
+                elif status == "PENDING":
+                    # Vérifier le statut auprès de Meta
+                    try:
+                        result = await check_and_update_template_status(message_id)
+                        if result.get("status") == "APPROVED":
+                            await send_pending_template(message_id)
+                    except Exception as e:
+                        logger.error(f"❌ [PERIODIC] Erreur vérification template {message_id}: {e}")
+        
+        except asyncio.CancelledError:
+            logger.info("🛑 [PERIODIC] Arrêt de la vérification périodique des templates")
+            break
+        except Exception as e:
+            logger.error(f"❌ [PERIODIC] Erreur dans la vérification périodique: {e}", exc_info=True)
+            # Continuer malgré l'erreur
 

@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Optional, Any, Tuple
 
 from app.core.db import supabase, supabase_execute
+from app.core.pg import execute as pg_execute, fetch_all, fetch_one, get_pool
 from app.services.account_service import get_account_by_id
 
 logger = logging.getLogger(__name__)
@@ -86,7 +87,8 @@ class TemplateDeduplication:
         logger.info(f"🔍 [DEDUP] Recherche de template existant pour hash: {template_hash[:16]}...")
         
         # Date limite (templates créés dans les X derniers jours)
-        date_limit = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+        date_limit_dt = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        date_limit_iso = date_limit_dt.isoformat()
         
         # Chercher dans la base de données
         # On cherche par hash du texte normalisé
@@ -102,22 +104,33 @@ class TemplateDeduplication:
             normalized_header = TemplateDeduplication.normalize_text_for_hash(header_text) if header_text else None
             normalized_footer = TemplateDeduplication.normalize_text_for_hash(footer_text) if footer_text else None
             
-            # Chercher dans pending_template_messages pour trouver des templates similaires
-            # On compare le text_content normalisé
-            query = supabase.table("pending_template_messages")\
-                .select("*, whatsapp_accounts!inner(id, waba_id, access_token)")\
-                .eq("account_id", account_id)\
-                .gte("created_at", date_limit)\
-                .in_("template_status", ["APPROVED", "PENDING"])  # Seulement les approuvés ou en attente
+            rows = None
+            if get_pool():
+                rows = await fetch_all(
+                    """
+                    SELECT p.id, p.message_id, p.conversation_id, p.account_id, p.template_name, p.text_content,
+                           p.meta_template_id, p.template_status, p.template_hash, p.created_at
+                    FROM pending_template_messages p
+                    WHERE p.account_id = $1::uuid AND p.created_at >= ($2::text)::timestamptz
+                      AND p.template_status IN ('APPROVED', 'PENDING')
+                    """,
+                    account_id, date_limit_iso,
+                )
+            else:
+                query = supabase.table("pending_template_messages")\
+                    .select("*, whatsapp_accounts!inner(id, waba_id, access_token)")\
+                    .eq("account_id", account_id)\
+                    .gte("created_at", date_limit_iso)\
+                    .in_("template_status", ["APPROVED", "PENDING"])
+                result = await supabase_execute(query)
+                rows = result.data
             
-            result = await supabase_execute(query)
-            
-            if not result.data:
+            if not rows:
                 logger.info(f"🔍 [DEDUP] Aucun template trouvé dans la période de {max_age_days} jours")
                 return None
             
             # Comparer avec les templates existants
-            for pending_template in result.data:
+            for pending_template in rows:
                 existing_text = pending_template.get("text_content", "")
                 existing_normalized = TemplateDeduplication.normalize_text_for_hash(existing_text)
                 
@@ -166,23 +179,34 @@ class TemplateDeduplication:
         normalized_body = TemplateDeduplication.normalize_text_for_hash(body_text)
         
         # Date limite
-        time_limit = (datetime.now(timezone.utc) - timedelta(minutes=time_window_minutes)).isoformat()
+        time_limit_dt = datetime.now(timezone.utc) - timedelta(minutes=time_window_minutes)
+        time_limit_iso = time_limit_dt.isoformat()
         
         try:
-            # Chercher les messages similaires récents
-            query = supabase.table("pending_template_messages")\
-                .select("id, template_name, created_at, template_status")\
-                .eq("account_id", account_id)\
-                .gte("created_at", time_limit)
+            rows = None
+            if get_pool():
+                rows = await fetch_all(
+                    """
+                    SELECT id, template_name, text_content, created_at, template_status
+                    FROM pending_template_messages
+                    WHERE account_id = $1::uuid AND created_at >= ($2::text)::timestamptz
+                    """,
+                    account_id, time_limit_iso,
+                )
+            else:
+                query = supabase.table("pending_template_messages")\
+                    .select("id, template_name, text_content, created_at, template_status")\
+                    .eq("account_id", account_id)\
+                    .gte("created_at", time_limit_iso)
+                result = await supabase_execute(query)
+                rows = result.data or []
             
-            result = await supabase_execute(query)
-            
-            if not result.data:
+            if not rows:
                 return False, {"count": 0, "window_minutes": time_window_minutes}
             
             # Compter les messages avec le même texte normalisé
             identical_count = 0
-            for template in result.data:
+            for template in rows:
                 existing_text = template.get("text_content", "")
                 existing_normalized = TemplateDeduplication.normalize_text_for_hash(existing_text)
                 if normalized_body == existing_normalized:
@@ -276,28 +300,38 @@ async def find_or_create_template(
         )
         
         # Créer une entrée dans pending_template_messages qui référence le template existant
-        # mais sans créer de nouveau template Meta
-        from app.core.db import supabase
         template_hash = TemplateDeduplication.compute_template_hash(
             actual_body_text, header_text, footer_text
         )
-        pending_template_payload = {
-            "message_id": message_id,
-            "conversation_id": conversation_id,
-            "account_id": account_id,
-            "template_name": template_name,  # Utiliser le nom du template existant
-            "text_content": text_content,
-            "meta_template_id": existing_template.get("meta_template_id"),  # Référence au template Meta existant
-            "template_status": "APPROVED",  # Déjà approuvé
-            "reused_from_template": existing_template.get("template_id"),  # Référence au template original (ID dans pending_template_messages)
-            "template_hash": template_hash  # Stocker le hash pour les recherches futures
-        }
-        if campaign_id:
-            pending_template_payload["campaign_id"] = campaign_id
-        
-        await supabase_execute(
-            supabase.table("pending_template_messages").insert(pending_template_payload)
-        )
+        if get_pool():
+            await pg_execute(
+                """
+                INSERT INTO pending_template_messages
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, reused_from_template, template_hash, campaign_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::uuid, $9, $10::uuid)
+                """,
+                message_id, conversation_id, account_id, template_name, text_content,
+                existing_template.get("meta_template_id"), "APPROVED",
+                existing_template.get("template_id"), template_hash, campaign_id,
+            )
+        else:
+            from app.core.db import supabase
+            pending_template_payload = {
+                "message_id": message_id,
+                "conversation_id": conversation_id,
+                "account_id": account_id,
+                "template_name": template_name,
+                "text_content": text_content,
+                "meta_template_id": existing_template.get("meta_template_id"),
+                "template_status": "APPROVED",
+                "reused_from_template": existing_template.get("template_id"),
+                "template_hash": template_hash,
+            }
+            if campaign_id:
+                pending_template_payload["campaign_id"] = campaign_id
+            await supabase_execute(
+                supabase.table("pending_template_messages").insert(pending_template_payload)
+            )
         
         logger.info(
             f"✅ [FIND-OR-CREATE] Template réutilisé '{template_name}' associé au message {message_id}"
@@ -329,27 +363,38 @@ async def find_or_create_template(
         # 2. Créer un nouveau template (déconseillé si trop de spam)
         
         # Option 1: Réutiliser le template en attente
-        from app.core.db import supabase
         template_hash = TemplateDeduplication.compute_template_hash(
             actual_body_text, header_text, footer_text
         )
-        pending_template_payload = {
-            "message_id": message_id,
-            "conversation_id": conversation_id,
-            "account_id": account_id,
-            "template_name": template_name,
-            "text_content": text_content,
-            "meta_template_id": existing_template.get("meta_template_id"),
-            "template_status": "PENDING",
-            "reused_from_template": existing_template.get("template_id"),  # Référence au template original (ID dans pending_template_messages)
-            "template_hash": template_hash  # Stocker le hash pour les recherches futures
-        }
-        if campaign_id:
-            pending_template_payload["campaign_id"] = campaign_id
-        
-        await supabase_execute(
-            supabase.table("pending_template_messages").insert(pending_template_payload)
-        )
+        if get_pool():
+            await pg_execute(
+                """
+                INSERT INTO pending_template_messages
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, reused_from_template, template_hash, campaign_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::uuid, $9, $10::uuid)
+                """,
+                message_id, conversation_id, account_id, template_name, text_content,
+                existing_template.get("meta_template_id"), "PENDING",
+                existing_template.get("template_id"), template_hash, campaign_id,
+            )
+        else:
+            from app.core.db import supabase
+            pending_template_payload = {
+                "message_id": message_id,
+                "conversation_id": conversation_id,
+                "account_id": account_id,
+                "template_name": template_name,
+                "text_content": text_content,
+                "meta_template_id": existing_template.get("meta_template_id"),
+                "template_status": "PENDING",
+                "reused_from_template": existing_template.get("template_id"),
+                "template_hash": template_hash,
+            }
+            if campaign_id:
+                pending_template_payload["campaign_id"] = campaign_id
+            await supabase_execute(
+                supabase.table("pending_template_messages").insert(pending_template_payload)
+            )
         
         logger.info(
             f"✅ [FIND-OR-CREATE] Template en attente réutilisé '{template_name}' associé au message {message_id}"

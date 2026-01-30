@@ -8,7 +8,8 @@ from typing import Any, Dict, Optional, Tuple
 import httpx
 
 from app.core.config import settings
-from app.core.db import supabase, supabase_execute
+from app.core.db import supabase, supabase_execute, SUPABASE_IN_CLAUSE_CHUNK_SIZE
+from app.core.pg import fetch_all, fetch_one, execute, get_pool
 from app.core.http_client import get_http_client, get_http_client_for_media
 from app.core.retry import retry_on_network_error
 from app.services import bot_service
@@ -266,7 +267,16 @@ async def _process_incoming_message(
         
         conversation = await _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
         logger.info(f"🔍 [BOT DEBUG] Conversation upserted: id={conversation.get('id')}, bot_enabled={conversation.get('bot_enabled')}")
-        
+
+        # Invalider immédiatement le cache fenêtre gratuite pour que le prochain envoi
+        # (ex. réponse rapide après "Eh") voie un état à jour et n'utilise pas un cache périmé
+        try:
+            from app.core.cache import get_cache
+            cache = await get_cache()
+            await cache.delete(f"free_window:{conversation['id']}")
+        except Exception as cache_err:
+            logger.debug("Free window cache invalidation (early): %s", cache_err)
+
         # Mettre à jour l'image de profil en arrière-plan si pas déjà disponible
         # Note: WhatsApp ne fournit généralement pas l'image dans les webhooks,
         # donc on essaie de la récupérer via l'API en arrière-plan
@@ -307,41 +317,64 @@ async def _process_incoming_message(
                 return
             
             # Trouver le message cible par son wa_message_id
-            target_message = await supabase_execute(
-                supabase.table("messages")
-                .select("id")
-                .eq("wa_message_id", target_message_id)
-                .limit(1)
-            )
-            
-            if not target_message.data:
+            if get_pool():
+                target_row = await fetch_one(
+                    "SELECT id FROM messages WHERE wa_message_id = $1 AND conversation_id = $2::uuid LIMIT 1",
+                    target_message_id,
+                    conversation["id"],
+                )
+                target_msg_id = target_row["id"] if target_row else None
+            else:
+                target_message = await supabase_execute(
+                    supabase.table("messages")
+                    .select("id")
+                    .eq("wa_message_id", target_message_id)
+                    .limit(1)
+                )
+                target_msg_id = target_message.data[0]["id"] if target_message.data else None
+            if not target_msg_id:
                 logger.warning("Target message not found for reaction: %s", target_message_id)
                 return
             
-            target_msg_id = target_message.data[0]["id"]
-            
-            # Si emoji est vide, c'est une suppression de réaction
             if not emoji or emoji == "":
-                # Supprimer la réaction existante
-                await supabase_execute(
-                    supabase.table("message_reactions")
-                    .delete()
-                    .eq("message_id", target_msg_id)
-                    .eq("from_number", wa_id)
-                )
-            else:
-                # Ajouter ou mettre à jour la réaction
-                await supabase_execute(
-                    supabase.table("message_reactions").upsert(
-                        {
-                            "message_id": target_msg_id,
-                            "wa_message_id": message.get("id"),
-                            "emoji": emoji,
-                            "from_number": wa_id,
-                        },
-                        on_conflict="message_id,from_number,emoji",
+                if get_pool():
+                    await execute(
+                        "DELETE FROM message_reactions WHERE message_id = $1::uuid AND from_number = $2",
+                        target_msg_id,
+                        wa_id,
                     )
-                )
+                else:
+                    await supabase_execute(
+                        supabase.table("message_reactions")
+                        .delete()
+                        .eq("message_id", target_msg_id)
+                        .eq("from_number", wa_id)
+                    )
+            else:
+                if get_pool():
+                    await execute(
+                        """
+                        INSERT INTO message_reactions (message_id, wa_message_id, emoji, from_number)
+                        VALUES ($1::uuid, $2, $3, $4)
+                        ON CONFLICT (message_id, from_number, emoji) DO UPDATE SET emoji = EXCLUDED.emoji, wa_message_id = EXCLUDED.wa_message_id
+                        """,
+                        target_msg_id,
+                        message.get("id"),
+                        emoji,
+                        wa_id,
+                    )
+                else:
+                    await supabase_execute(
+                        supabase.table("message_reactions").upsert(
+                            {
+                                "message_id": target_msg_id,
+                                "wa_message_id": message.get("id"),
+                                "emoji": emoji,
+                                "from_number": wa_id,
+                            },
+                            on_conflict="message_id,from_number,emoji",
+                        )
+                    )
             
             # Les réactions ne mettent pas à jour le timestamp de conversation ni le unread_count
             # et ne déclenchent pas le bot
@@ -368,26 +401,36 @@ async def _process_incoming_message(
         stored_message_type = "text" if msg_type == "button" else msg_type
 
         # Extraire le contexte (message référencé) si présent
-        # WhatsApp envoie le contexte dans le champ "context" avec l'ID du message original
         reply_to_message_id = None
         context = message.get("context")
         if context:
             referenced_wa_message_id = context.get("id")
             if referenced_wa_message_id:
                 logger.info(f"🔍 [MESSAGE PROCESSING] Message has context, referenced wa_message_id: {referenced_wa_message_id}")
-                # Chercher le message original dans la base de données
-                referenced_message = await supabase_execute(
-                    supabase.table("messages")
-                    .select("id")
-                    .eq("wa_message_id", referenced_wa_message_id)
-                    .eq("conversation_id", conversation["id"])  # S'assurer que c'est dans la même conversation
-                    .limit(1)
-                )
-                if referenced_message.data and len(referenced_message.data) > 0:
-                    reply_to_message_id = referenced_message.data[0]["id"]
-                    logger.info(f"✅ [MESSAGE PROCESSING] Found referenced message: reply_to_message_id={reply_to_message_id}")
+                if get_pool():
+                    ref_row = await fetch_one(
+                        "SELECT id FROM messages WHERE wa_message_id = $1 AND conversation_id = $2::uuid LIMIT 1",
+                        referenced_wa_message_id,
+                        conversation["id"],
+                    )
+                    if ref_row:
+                        reply_to_message_id = ref_row["id"]
+                        logger.info(f"✅ [MESSAGE PROCESSING] Found referenced message: reply_to_message_id={reply_to_message_id}")
+                    else:
+                        logger.warning(f"⚠️ [MESSAGE PROCESSING] Referenced message not found: wa_message_id={referenced_wa_message_id}")
                 else:
-                    logger.warning(f"⚠️ [MESSAGE PROCESSING] Referenced message not found: wa_message_id={referenced_wa_message_id}")
+                    referenced_message = await supabase_execute(
+                        supabase.table("messages")
+                        .select("id")
+                        .eq("wa_message_id", referenced_wa_message_id)
+                        .eq("conversation_id", conversation["id"])
+                        .limit(1)
+                    )
+                    if referenced_message.data and len(referenced_message.data) > 0:
+                        reply_to_message_id = referenced_message.data[0]["id"]
+                        logger.info(f"✅ [MESSAGE PROCESSING] Found referenced message: reply_to_message_id={reply_to_message_id}")
+                    else:
+                        logger.warning(f"⚠️ [MESSAGE PROCESSING] Referenced message not found: wa_message_id={referenced_wa_message_id}")
 
         # Insérer le message d'abord
         message_payload = {
@@ -407,53 +450,83 @@ async def _process_incoming_message(
         if reply_to_message_id:
             message_payload["reply_to_message_id"] = reply_to_message_id
         
-        # Faire l'upsert avec logging détaillé
         logger.info(f"💾 [MESSAGE INSERT] Attempting to upsert message: wa_message_id={message.get('id')}, conversation_id={conversation['id']}, direction=inbound")
         logger.info(f"💾 [MESSAGE INSERT] Payload: {json.dumps({k: v for k, v in message_payload.items() if k != 'content_text'}, indent=2)}")
         
+        message_db_id = None
         try:
-            upsert_result = await supabase_execute(
-                supabase.table("messages").upsert(
-                    message_payload,
-                    on_conflict="wa_message_id",
+            if get_pool():
+                row = await fetch_one(
+                    """
+                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, media_id, media_mime_type, media_filename, reply_to_message_id)
+                    VALUES ($1::uuid, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9, $10, $11::uuid)
+                    ON CONFLICT (wa_message_id) DO UPDATE SET
+                        conversation_id = EXCLUDED.conversation_id,
+                        direction = EXCLUDED.direction,
+                        content_text = EXCLUDED.content_text,
+                        timestamp = EXCLUDED.timestamp,
+                        message_type = EXCLUDED.message_type,
+                        status = EXCLUDED.status,
+                        media_id = EXCLUDED.media_id,
+                        media_mime_type = EXCLUDED.media_mime_type,
+                        media_filename = EXCLUDED.media_filename,
+                        reply_to_message_id = EXCLUDED.reply_to_message_id
+                    RETURNING id, conversation_id, direction
+                    """,
+                    message_payload["conversation_id"],
+                    message_payload["direction"],
+                    message_payload["content_text"],
+                    message_payload["timestamp"],
+                    message_payload["wa_message_id"],
+                    message_payload["message_type"],
+                    message_payload["status"],
+                    message_payload.get("media_id"),
+                    message_payload.get("media_mime_type"),
+                    message_payload.get("media_filename"),
+                    message_payload.get("reply_to_message_id"),
                 )
-            )
-            
-            if upsert_result.data:
-                logger.info(f"✅ [MESSAGE INSERT] Message upserted successfully: {len(upsert_result.data)} row(s) affected")
-                if len(upsert_result.data) > 0:
-                    message_db_id = upsert_result.data[0].get("id")
-                    logger.info(f"✅ [MESSAGE INSERT] Message ID from upsert result: {message_db_id}")
+                if row:
+                    message_db_id = row["id"]
+                    stored_conv_id = row["conversation_id"]
+                    stored_direction = row["direction"]
+                    logger.info(f"✅ [MESSAGE INSERT] Message upserted (pg): id={message_db_id}, conversation_id={stored_conv_id}, direction={stored_direction}")
+                    if stored_conv_id != conversation["id"]:
+                        logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation! Expected: {conversation['id']}, Got: {stored_conv_id}")
+                    if stored_direction != "inbound":
+                        logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction! Expected: inbound, Got: {stored_direction}")
             else:
-                logger.warning(f"⚠️ [MESSAGE INSERT] Upsert returned no data (might be an update, not insert)")
+                upsert_result = await supabase_execute(
+                    supabase.table("messages").upsert(
+                        message_payload,
+                        on_conflict="wa_message_id",
+                    )
+                )
+                if upsert_result.data and len(upsert_result.data) > 0:
+                    message_db_id = upsert_result.data[0].get("id")
+                    logger.info(f"✅ [MESSAGE INSERT] Message upserted successfully: {message_db_id}")
+                if message.get("id") and not message_db_id:
+                    existing_msg = await supabase_execute(
+                        supabase.table("messages")
+                        .select("id, conversation_id, direction")
+                        .eq("wa_message_id", message.get("id"))
+                        .limit(1)
+                    )
+                    if existing_msg.data:
+                        message_db_id = existing_msg.data[0].get("id")
+                        stored_conv_id = existing_msg.data[0].get("conversation_id")
+                        stored_direction = existing_msg.data[0].get("direction")
+                        logger.info(f"✅ [MESSAGE INSERT] Message ID retrieved: {message_db_id}")
+                        if stored_conv_id != conversation["id"]:
+                            logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation!")
+                        if stored_direction != "inbound":
+                            logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction!")
+                    else:
+                        logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message upserted but not found by wa_message_id: {message.get('id')}")
         except Exception as upsert_error:
             logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Failed to upsert message: {upsert_error}", exc_info=True)
-            raise  # Re-raise pour que l'erreur soit visible dans les logs
-        
-        # Récupérer l'ID du message en cherchant par wa_message_id
-        message_db_id = None
-        if message.get("id"):
-            existing_msg = await supabase_execute(
-                supabase.table("messages")
-                .select("id, conversation_id, direction")
-                .eq("wa_message_id", message.get("id"))
-                .limit(1)
-            )
-            if existing_msg.data:
-                message_db_id = existing_msg.data[0].get("id")
-                stored_conv_id = existing_msg.data[0].get("conversation_id")
-                stored_direction = existing_msg.data[0].get("direction")
-                logger.info(f"✅ [MESSAGE INSERT] Message ID retrieved: {message_db_id}, conversation_id={stored_conv_id}, direction={stored_direction}")
-                
-                # Vérifier que le message est bien dans la bonne conversation
-                if stored_conv_id != conversation["id"]:
-                    logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation! Expected: {conversation['id']}, Got: {stored_conv_id}")
-                if stored_direction != "inbound":
-                    logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction! Expected: inbound, Got: {stored_direction}")
-            else:
-                logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message upserted but not found by wa_message_id: {message.get('id')}")
-        else:
-            logger.warning("⚠️ [MESSAGE INSERT] Message has no wa_message_id, cannot retrieve database ID")
+            raise
+        if not message_db_id and message.get("id"):
+            logger.warning("⚠️ [MESSAGE INSERT] Message has no wa_message_id or upsert did not return id, cannot retrieve database ID")
 
         # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
         # IMPORTANT: Le téléchargement se fait automatiquement dès la réception, sans attendre que l'utilisateur ouvre le chat
@@ -471,14 +544,19 @@ async def _process_incoming_message(
                 # Vérifier que le compte a bien les colonnes Google Drive
                 logger.info(f"🔍 [AUTO-DOWNLOAD] Account retrieved: id={account.get('id')}, has_google_drive_enabled={'google_drive_enabled' in account}, has_google_drive_connected={'google_drive_connected' in account}")
                 if 'google_drive_enabled' not in account:
-                    # Forcer un refresh depuis la DB si les colonnes Google Drive ne sont pas présentes
                     logger.warning(f"⚠️ [AUTO-DOWNLOAD] Account cache might be stale, forcing refresh for Google Drive columns")
-                    fresh_account = await supabase_execute(
-                        supabase.table("whatsapp_accounts").select("*").eq("id", account_id).limit(1)
-                    )
-                    if fresh_account.data:
-                        account = fresh_account.data[0]
-                        logger.info(f"✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
+                    if get_pool():
+                        fresh_row = await fetch_one("SELECT * FROM whatsapp_accounts WHERE id = $1::uuid LIMIT 1", account_id)
+                        if fresh_row:
+                            account = dict(fresh_row)
+                            logger.info(f"✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
+                    else:
+                        fresh_account = await supabase_execute(
+                            supabase.table("whatsapp_accounts").select("*").eq("id", account_id).limit(1)
+                        )
+                        if fresh_account.data:
+                            account = fresh_account.data[0]
+                            logger.info(f"✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
             
             if message_db_id:
                 # Cas idéal : message_db_id disponible immédiatement
@@ -515,15 +593,18 @@ async def _process_incoming_message(
                         await asyncio.sleep(retry_delay)
                         
                         # Chercher le message par wa_message_id
-                        msg_result = await supabase_execute(
-                            supabase.table("messages")
-                            .select("id")
-                            .eq("wa_message_id", wa_message_id)
-                            .limit(1)
-                        )
-                        
-                        if msg_result.data and msg_result.data[0].get("id"):
-                            retry_message_db_id = msg_result.data[0].get("id")
+                        if get_pool():
+                            msg_row = await fetch_one("SELECT id FROM messages WHERE wa_message_id = $1 LIMIT 1", wa_message_id)
+                            retry_message_db_id = msg_row["id"] if msg_row else None
+                        else:
+                            msg_result = await supabase_execute(
+                                supabase.table("messages")
+                                .select("id")
+                                .eq("wa_message_id", wa_message_id)
+                                .limit(1)
+                            )
+                            retry_message_db_id = msg_result.data[0].get("id") if msg_result.data else None
+                        if retry_message_db_id:
                             logger.info(f"✅ [AUTO-DOWNLOAD] Found message_db_id on attempt {attempt + 1}: {retry_message_db_id}")
                             
                             # Lancer le téléchargement
@@ -666,27 +747,48 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
     if not message_id or not status_value:
         return
 
-    existing = await supabase_execute(
-        supabase.table("messages")
-        .select("id, conversation_id")
-        .eq("wa_message_id", message_id)
-        .limit(1)
-    )
-
-    if existing.data:
-        record = existing.data[0]
-        message_db_id = record["id"]
-        
-        # Ne mettre à jour que le statut et le timestamp, ne pas toucher au content_text
-        update_data = {"status": status_value, "timestamp": timestamp_iso}
-        if error_message:
-            update_data["error_message"] = error_message
-        await supabase_execute(
-            supabase.table("messages")
-            .update(update_data)
-            .eq("id", message_db_id)
+    if get_pool():
+        existing_row = await fetch_one(
+            "SELECT id, conversation_id FROM messages WHERE wa_message_id = $1 LIMIT 1",
+            message_id,
         )
-        await _update_conversation_timestamp(record["conversation_id"], timestamp_iso)
+    else:
+        existing = await supabase_execute(
+            supabase.table("messages")
+            .select("id, conversation_id")
+            .eq("wa_message_id", message_id)
+            .limit(1)
+        )
+        existing_row = existing.data[0] if existing.data else None
+
+    if existing_row:
+        record = dict(existing_row) if get_pool() else existing_row
+        message_db_id = record["id"]
+        conv_id = record["conversation_id"]
+        if get_pool():
+            if error_message:
+                await execute(
+                    "UPDATE messages SET status = $2, timestamp = $3::timestamptz, error_message = $4 WHERE id = $1::uuid",
+                    message_db_id,
+                    status_value,
+                    _parse_timestamp_iso(timestamp_iso),
+                    error_message,
+                )
+            else:
+                await execute(
+                    "UPDATE messages SET status = $2, timestamp = $3::timestamptz WHERE id = $1::uuid",
+                    message_db_id,
+                    status_value,
+                    _parse_timestamp_iso(timestamp_iso),
+                )
+        else:
+            update_data = {"status": status_value, "timestamp": timestamp_iso}
+            if error_message:
+                update_data["error_message"] = error_message
+            await supabase_execute(
+                supabase.table("messages").update(update_data).eq("id", message_db_id)
+            )
+        await _update_conversation_timestamp(conv_id, timestamp_iso)
         
         # 🆕 Mettre à jour les stats de campagne si applicable
         try:
@@ -714,72 +816,119 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
     if not recipient_id or not account:
         return
 
-    conversation = await supabase_execute(
-        supabase.table("conversations")
-        .select("id")
-        .eq("account_id", account.get("id"))
-        .eq("client_number", recipient_id)
-        .limit(1)
-    )
-
-    if conversation.data:
-        conv = conversation.data[0]
-    else:
-        contact = await _upsert_contact(recipient_id, None, None)
-        conv = await _upsert_conversation(account["id"], contact["id"], recipient_id, timestamp_iso)
-
-    # Vérifier si un message avec ce wa_message_id existe déjà
-    existing_msg = await supabase_execute(
-        supabase.table("messages")
-        .select("id, content_text")
-        .eq("wa_message_id", message_id)
-        .limit(1)
-    )
-    
-    # Si le message existe déjà, ne mettre à jour que le statut
-    if existing_msg.data:
-        existing_record = existing_msg.data[0]
-        update_data = {"status": status_value, "timestamp": timestamp_iso}
-        if error_message:
-            update_data["error_message"] = error_message
-        await supabase_execute(
-            supabase.table("messages")
-            .update(update_data)
-            .eq("id", existing_record["id"])
+    account_id = account.get("id")
+    if get_pool():
+        conv_row = await fetch_one(
+            "SELECT id FROM conversations WHERE account_id = $1::uuid AND client_number = $2 LIMIT 1",
+            account_id,
+            recipient_id,
         )
-    else:
-        # Si le message n'existe pas, créer un nouveau message de statut
-        await supabase_execute(
-            supabase.table("messages").upsert(
-                {
-                    "conversation_id": conv["id"],
-                    "direction": "outbound",
-                    "content_text": "[status update]",
-                    "timestamp": timestamp_iso,
-                    "wa_message_id": message_id,
-                    "message_type": status_payload.get("type") or "status",
-                    "status": status_value,
-                },
-                on_conflict="wa_message_id",
+        if conv_row:
+            conv = dict(conv_row)
+        else:
+            contact = await _upsert_contact(recipient_id, None, None)
+            conv = await _upsert_conversation(account_id, contact["id"], recipient_id, timestamp_iso)
+        existing_msg_row = await fetch_one(
+            "SELECT id, content_text FROM messages WHERE wa_message_id = $1 LIMIT 1",
+            message_id,
+        )
+        if existing_msg_row:
+            if error_message:
+                await execute(
+                    "UPDATE messages SET status = $2, timestamp = $3::timestamptz, error_message = $4 WHERE id = $1::uuid",
+                    existing_msg_row["id"],
+                    status_value,
+                    _parse_timestamp_iso(timestamp_iso),
+                    error_message,
+                )
+            else:
+                await execute(
+                    "UPDATE messages SET status = $2, timestamp = $3::timestamptz WHERE id = $1::uuid",
+                    existing_msg_row["id"],
+                    status_value,
+                    _parse_timestamp_iso(timestamp_iso),
+                )
+        else:
+            await execute(
+                """
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status)
+                VALUES ($1::uuid, 'outbound', '[status update]', $2::timestamptz, $3, $4, $5)
+                ON CONFLICT (wa_message_id) DO UPDATE SET status = EXCLUDED.status, timestamp = EXCLUDED.timestamp
+                """,
+                conv["id"],
+                _parse_timestamp_iso(timestamp_iso),
+                message_id,
+                status_payload.get("type") or "status",
+                status_value,
             )
+    else:
+        conversation = await supabase_execute(
+            supabase.table("conversations")
+            .select("id")
+            .eq("account_id", account_id)
+            .eq("client_number", recipient_id)
+            .limit(1)
         )
+        if conversation.data:
+            conv = conversation.data[0]
+        else:
+            contact = await _upsert_contact(recipient_id, None, None)
+            conv = await _upsert_conversation(account_id, contact["id"], recipient_id, timestamp_iso)
+        existing_msg = await supabase_execute(
+            supabase.table("messages").select("id, content_text").eq("wa_message_id", message_id).limit(1)
+        )
+        if existing_msg.data:
+            existing_record = existing_msg.data[0]
+            update_data = {"status": status_value, "timestamp": timestamp_iso}
+            if error_message:
+                update_data["error_message"] = error_message
+            await supabase_execute(
+                supabase.table("messages").update(update_data).eq("id", existing_record["id"])
+            )
+        else:
+            await supabase_execute(
+                supabase.table("messages").upsert(
+                    {
+                        "conversation_id": conv["id"],
+                        "direction": "outbound",
+                        "content_text": "[status update]",
+                        "timestamp": timestamp_iso,
+                        "wa_message_id": message_id,
+                        "message_type": status_payload.get("type") or "status",
+                        "status": status_value,
+                    },
+                    on_conflict="wa_message_id",
+                )
+            )
     await _update_conversation_timestamp(conv["id"], timestamp_iso)
 
 
 async def _upsert_contact(
-    wa_id: str, 
+    wa_id: str,
     profile_name: Optional[str],
-    profile_picture_url: Optional[str] = None
+    profile_picture_url: Optional[str] = None,
 ):
-    """
-    Crée ou met à jour un contact avec son nom et son image de profil
-    """
+    """Crée ou met à jour un contact avec son nom et son image de profil."""
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO contacts (whatsapp_number, display_name, profile_picture_url)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (whatsapp_number) DO UPDATE SET
+                display_name = COALESCE(EXCLUDED.display_name, contacts.display_name),
+                profile_picture_url = COALESCE(EXCLUDED.profile_picture_url, contacts.profile_picture_url)
+            RETURNING *
+            """,
+            wa_id,
+            profile_name,
+            profile_picture_url,
+        )
+        return dict(row) if row else None
     payload = {"whatsapp_number": wa_id}
     if profile_name:
         payload["display_name"] = profile_name
     if profile_picture_url:
         payload["profile_picture_url"] = profile_picture_url
-
     res = await supabase_execute(
         supabase.table("contacts").upsert(payload, on_conflict="whatsapp_number")
     )
@@ -789,7 +938,31 @@ async def _upsert_contact(
 async def _upsert_conversation(
     account_id: str, contact_id: str, client_number: str, timestamp_iso: str
 ):
-    # Vérifier si la conversation existe déjà pour préserver bot_enabled
+    if get_pool():
+        existing = await fetch_one(
+            "SELECT bot_enabled FROM conversations WHERE account_id = $1::uuid AND client_number = $2 LIMIT 1",
+            account_id,
+            client_number,
+        )
+        bot_enabled = existing.get("bot_enabled") if existing else None
+        row = await fetch_one(
+            """
+            INSERT INTO conversations (contact_id, client_number, account_id, status, updated_at, bot_enabled)
+            VALUES ($1::uuid, $2, $3::uuid, 'open', $4::timestamptz, $5)
+            ON CONFLICT (account_id, client_number) DO UPDATE SET
+                contact_id = EXCLUDED.contact_id,
+                status = 'open',
+                updated_at = EXCLUDED.updated_at,
+                bot_enabled = COALESCE(conversations.bot_enabled, EXCLUDED.bot_enabled)
+            RETURNING *
+            """,
+            contact_id,
+            client_number,
+            account_id,
+            _parse_timestamp_iso(timestamp_iso),
+            bot_enabled if bot_enabled is not None else False,
+        )
+        return dict(row) if row else None
     existing = await supabase_execute(
         supabase.table("conversations")
         .select("bot_enabled")
@@ -797,9 +970,7 @@ async def _upsert_conversation(
         .eq("client_number", client_number)
         .limit(1)
     )
-    
     bot_enabled = existing.data[0].get("bot_enabled") if existing.data else None
-    
     upsert_data = {
         "contact_id": contact_id,
         "client_number": client_number,
@@ -807,16 +978,10 @@ async def _upsert_conversation(
         "status": "open",
         "updated_at": timestamp_iso,
     }
-    
-    # Préserver bot_enabled si la conversation existe déjà
     if bot_enabled is not None:
         upsert_data["bot_enabled"] = bot_enabled
-    
     res = await supabase_execute(
-        supabase.table("conversations").upsert(
-            upsert_data,
-            on_conflict="account_id,client_number",
-        )
+        supabase.table("conversations").upsert(upsert_data, on_conflict="account_id,client_number")
     )
     return res.data[0]
 
@@ -892,13 +1057,29 @@ def _timestamp_to_iso(raw_ts: Optional[str]) -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_timestamp_iso(ts: Optional[str]) -> datetime:
+    """Parse ISO timestamp string to timezone-aware datetime for asyncpg (timestamptz)."""
+    if not ts:
+        return datetime.now(timezone.utc)
+    if isinstance(ts, datetime):
+        return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+    s = ts.replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 async def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Optional[str] = None):
-    await supabase_execute(
-        supabase.table("conversations")
-        .update({"updated_at": timestamp_iso or datetime.now(timezone.utc).isoformat()})
-        .eq("id", conversation_id)
-    )
-    # Invalider le cache pour garantir la cohérence
+    ts = timestamp_iso or datetime.now(timezone.utc).isoformat()
+    if get_pool():
+        await execute(
+            "UPDATE conversations SET updated_at = $2::timestamptz WHERE id = $1::uuid",
+            conversation_id,
+            _parse_timestamp_iso(ts),
+        )
+    else:
+        await supabase_execute(
+            supabase.table("conversations").update({"updated_at": ts}).eq("id", conversation_id)
+        )
     from app.core.cache import invalidate_cache_pattern
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
     # OPTIMISATION: Invalider aussi le cache de la fenêtre gratuite
@@ -911,18 +1092,30 @@ async def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Op
 async def _save_failed_message(conversation_id: str, content_text: str, timestamp_iso: str, error_message: str):
     """Stocke un message échoué dans la base de données"""
     try:
-        message_payload = {
-            "conversation_id": conversation_id,
-            "direction": "outbound",
-            "content_text": content_text,
-            "timestamp": timestamp_iso,
-            "message_type": "text",
-            "status": "failed",
-            "error_message": error_message,
-        }
-        await supabase_execute(
-            supabase.table("messages").insert(message_payload)
-        )
+        if get_pool():
+            await execute(
+                """
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, message_type, status, error_message)
+                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, 'text', 'failed', $4)
+                """,
+                conversation_id,
+                content_text,
+                _parse_timestamp_iso(timestamp_iso),
+                error_message,
+            )
+        else:
+            message_payload = {
+                "conversation_id": conversation_id,
+                "direction": "outbound",
+                "content_text": content_text,
+                "timestamp": timestamp_iso,
+                "message_type": "text",
+                "status": "failed",
+                "error_message": error_message,
+            }
+            await supabase_execute(
+                supabase.table("messages").insert(message_payload)
+            )
         await _update_conversation_timestamp(conversation_id, timestamp_iso)
     except Exception as e:
         logger.error("Error saving failed message to database: %s", e, exc_info=True)
@@ -931,13 +1124,19 @@ async def _save_failed_message(conversation_id: str, content_text: str, timestam
 async def _increment_unread_count(conversation: Dict[str, Any]):
     current = conversation.get("unread_count") or 0
     new_value = current + 1
-    await supabase_execute(
-        supabase.table("conversations").update({"unread_count": new_value}).eq(
-            "id", conversation["id"]
+    if get_pool():
+        await execute(
+            "UPDATE conversations SET unread_count = $2 WHERE id = $1::uuid",
+            conversation["id"],
+            new_value,
         )
-    )
+    else:
+        await supabase_execute(
+            supabase.table("conversations").update({"unread_count": new_value}).eq(
+                "id", conversation["id"]
+            )
+        )
     conversation["unread_count"] = new_value
-    # Invalider le cache pour garantir la cohérence
     from app.core.cache import invalidate_cache_pattern
     await invalidate_cache_pattern(f"conversation:{conversation['id']}")
 
@@ -1035,6 +1234,59 @@ async def get_messages(
     limit: int = 100,
     before: Optional[str] = None,
 ):
+    pool = get_pool()
+    if pool:
+        # PostgreSQL direct: 1 requête messages + 1 quoted + 1 reactions (ou 2 si pas de quoted)
+        sql = """
+            SELECT * FROM messages
+            WHERE conversation_id = $1::uuid
+        """
+        params: list = [conversation_id]
+        if before:
+            sql += " AND timestamp < $2::timestamptz"
+            params.append(_parse_timestamp_iso(before))
+        sql += " ORDER BY timestamp DESC LIMIT " + ("$3" if before else "$2")
+        params.append(limit)
+        rows_raw = await fetch_all(sql, *params)
+        rows = [dict(r) for r in rows_raw]
+        rows.reverse()
+
+        reply_to_ids = list({msg.get("reply_to_message_id") for msg in rows if msg.get("reply_to_message_id")})
+        message_ids = [msg["id"] for msg in rows]
+
+        async def fetch_quoted():
+            if not reply_to_ids:
+                return {}
+            quoted_rows = await fetch_all(
+                "SELECT * FROM messages WHERE id = ANY($1::uuid[])",
+                reply_to_ids,
+            )
+            return {str(r["id"]): dict(r) for r in quoted_rows}
+
+        async def fetch_reactions():
+            if not rows:
+                return {}
+            reactions_rows = await fetch_all(
+                "SELECT * FROM message_reactions WHERE message_id = ANY($1::uuid[])",
+                message_ids,
+            )
+            by_msg = {}
+            for r in reactions_rows:
+                mid = r["message_id"]
+                if mid not in by_msg:
+                    by_msg[mid] = []
+                by_msg[mid].append(dict(r))
+            return by_msg
+
+        quoted_messages, reactions_by_message = await asyncio.gather(fetch_quoted(), fetch_reactions())
+
+        for msg in rows:
+            rid = msg.get("reply_to_message_id")
+            msg["reply_to_message"] = quoted_messages.get(str(rid)) if rid else None
+            msg["reactions"] = reactions_by_message.get(msg["id"], [])
+        return rows
+
+    # Fallback Supabase API
     query = (
         supabase.table("messages")
         .select("*")
@@ -1047,46 +1299,40 @@ async def get_messages(
     res = await supabase_execute(query)
     rows = res.data or []
     rows.reverse()
-    
-    # Récupérer les messages référencés (quoted messages) pour les messages qui ont un reply_to_message_id
+
     reply_to_message_ids = [msg.get("reply_to_message_id") for msg in rows if msg.get("reply_to_message_id")]
     quoted_messages = {}
     if reply_to_message_ids:
-        quoted_res = await supabase_execute(
-            supabase.table("messages")
-            .select("*")
-            .in_("id", reply_to_message_ids)
-        )
-        if quoted_res.data:
-            for quoted_msg in quoted_res.data:
-                quoted_messages[quoted_msg["id"]] = quoted_msg
-    
-    # Ajouter les messages référencés à chaque message
+        for i in range(0, len(reply_to_message_ids), SUPABASE_IN_CLAUSE_CHUNK_SIZE):
+            chunk = reply_to_message_ids[i : i + SUPABASE_IN_CLAUSE_CHUNK_SIZE]
+            quoted_res = await supabase_execute(
+                supabase.table("messages").select("*").in_("id", chunk)
+            )
+            if quoted_res.data:
+                for quoted_msg in quoted_res.data:
+                    quoted_messages[quoted_msg["id"]] = quoted_msg
+
     for msg in rows:
         if msg.get("reply_to_message_id") and msg["reply_to_message_id"] in quoted_messages:
             msg["reply_to_message"] = quoted_messages[msg["reply_to_message_id"]]
         else:
             msg["reply_to_message"] = None
-    
-    # Récupérer les réactions pour chaque message
+
     if rows:
         message_ids = [msg["id"] for msg in rows]
-        reactions_res = await supabase_execute(
-            supabase.table("message_reactions")
-            .select("*")
-            .in_("message_id", message_ids)
-        )
         reactions_by_message = {}
-        for reaction in reactions_res.data or []:
-            msg_id = reaction["message_id"]
-            if msg_id not in reactions_by_message:
-                reactions_by_message[msg_id] = []
-            reactions_by_message[msg_id].append(reaction)
-        
-        # Ajouter les réactions à chaque message
+        for i in range(0, len(message_ids), SUPABASE_IN_CLAUSE_CHUNK_SIZE):
+            chunk = message_ids[i : i + SUPABASE_IN_CLAUSE_CHUNK_SIZE]
+            reactions_res = await supabase_execute(
+                supabase.table("message_reactions").select("*").in_("message_id", chunk)
+            )
+            for reaction in reactions_res.data or []:
+                msg_id = reaction["message_id"]
+                if msg_id not in reactions_by_message:
+                    reactions_by_message[msg_id] = []
+                reactions_by_message[msg_id].append(reaction)
         for msg in rows:
             msg["reactions"] = reactions_by_message.get(msg["id"], [])
-    
     return rows
 
 
@@ -1097,6 +1343,35 @@ async def update_message_content(
     Met à jour le contenu d'un message texte (édition locale uniquement).
     Conserve la première version dans edited_original_content et marque edited_at/edited_by.
     """
+    if get_pool():
+        msg = await fetch_one(
+            "SELECT id, content_text, message_type, direction, edited_original_content FROM messages WHERE id = $1::uuid LIMIT 1",
+            message_id,
+        )
+        if not msg:
+            return {"error": "message_not_found"}
+        msg = dict(msg)
+        if msg.get("message_type", "text") not in ("text", None, ""):
+            return {"error": "message_not_editable"}
+        if msg.get("direction") != "outbound":
+            return {"error": "cannot_edit_incoming_message"}
+        now_iso = datetime.now(timezone.utc).isoformat()
+        original = msg.get("edited_original_content") or msg.get("content_text")
+        await execute(
+            """
+            UPDATE messages SET content_text = $2, edited_at = $3::timestamptz, edited_by = $4::uuid, edited_original_content = $5
+            WHERE id = $1::uuid
+            """,
+            message_id,
+            new_content,
+            _parse_timestamp_iso(now_iso),
+            user_id,
+            original,
+        )
+        refreshed = await fetch_one("SELECT * FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
+        if not refreshed:
+            return {"error": "update_fetch_failed"}
+        return {"success": True, "message": dict(refreshed)}
     msg_res = await supabase_execute(
         supabase.table("messages")
         .select("id, content_text, conversation_id, message_type, direction, edited_original_content")
@@ -1105,18 +1380,13 @@ async def update_message_content(
     )
     if not msg_res.data:
         return {"error": "message_not_found"}
-
     msg = msg_res.data[0]
-
-    # Limiter l'édition aux messages texte émis par nous
     if msg.get("message_type", "text") not in ("text", None, ""):
         return {"error": "message_not_editable"}
     if msg.get("direction") != "outbound":
         return {"error": "cannot_edit_incoming_message"}
-
     now_iso = datetime.now(timezone.utc).isoformat()
     original = msg.get("edited_original_content") or msg.get("content_text")
-
     update_res = await supabase_execute(
         supabase.table("messages")
         .update(
@@ -1129,17 +1399,13 @@ async def update_message_content(
         )
         .eq("id", message_id)
     )
-
     if not update_res.data:
         return {"error": "update_failed"}
-
-    # Recharger le message mis à jour (l'update builder ne supporte pas select/returning)
     refreshed = await supabase_execute(
         supabase.table("messages").select("*").eq("id", message_id).range(0, 0)
     )
     if not refreshed.data:
         return {"error": "update_fetch_failed"}
-
     return {"success": True, "message": refreshed.data[0]}
 
 
@@ -1148,8 +1414,35 @@ async def delete_message_scope(
 ) -> Dict[str, Any]:
     """
     Supprime un message pour l'utilisateur courant (scope=me) ou pour tous (scope=all, local).
-    Note: la suppression côté WhatsApp Cloud API n'est pas disponible : marquage DB/UX uniquement.
     """
+    if get_pool():
+        msg = await fetch_one(
+            "SELECT id, conversation_id, direction, deleted_for_all_at, deleted_for_user_ids FROM messages WHERE id = $1::uuid LIMIT 1",
+            message_id,
+        )
+        if not msg:
+            return {"error": "message_not_found"}
+        msg = dict(msg)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if scope == "all":
+            await execute(
+                "UPDATE messages SET deleted_for_all_at = $2::timestamptz WHERE id = $1::uuid",
+                message_id,
+                _parse_timestamp_iso(now_iso),
+            )
+        else:
+            existing = msg.get("deleted_for_user_ids") or []
+            if user_id not in existing:
+                existing.append(user_id)
+            await execute(
+                "UPDATE messages SET deleted_for_user_ids = $2::jsonb WHERE id = $1::uuid",
+                message_id,
+                json.dumps(existing),
+            )
+        refreshed = await fetch_one("SELECT * FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
+        if not refreshed:
+            return {"error": "update_fetch_failed"}
+        return {"success": True, "message": dict(refreshed)}
     msg_res = await supabase_execute(
         supabase.table("messages")
         .select("id, conversation_id, direction, deleted_for_all_at, deleted_for_user_ids")
@@ -1158,10 +1451,8 @@ async def delete_message_scope(
     )
     if not msg_res.data:
         return {"error": "message_not_found"}
-
     msg = msg_res.data[0]
     now_iso = datetime.now(timezone.utc).isoformat()
-
     if scope == "all":
         update_payload = {"deleted_for_all_at": now_iso}
     else:
@@ -1169,89 +1460,75 @@ async def delete_message_scope(
         if user_id not in existing:
             existing.append(user_id)
         update_payload = {"deleted_for_user_ids": existing}
-
     update_res = await supabase_execute(
-        supabase.table("messages")
-        .update(update_payload)
-        .eq("id", message_id)
+        supabase.table("messages").update(update_payload).eq("id", message_id)
     )
-
     if not update_res.data:
         return {"error": "update_failed"}
-
     refreshed = await supabase_execute(
         supabase.table("messages").select("*").eq("id", message_id).range(0, 0)
     )
     if not refreshed.data:
         return {"error": "update_fetch_failed"}
-
     return {"success": True, "message": refreshed.data[0]}
 
 
 async def add_reaction(message_id: str, emoji: str, from_number: str) -> Dict[str, Any]:
-    """
-    Ajoute une réaction à un message.
-    
-    Args:
-        message_id: ID du message dans la base de données
-        emoji: Emoji de la réaction
-        from_number: Numéro WhatsApp de la personne qui réagit
-    
-    Returns:
-        Dict avec le résultat de l'opération
-    """
-    # Vérifier que le message existe
+    """Ajoute une réaction à un message."""
+    if get_pool():
+        msg = await fetch_one(
+            "SELECT id FROM messages WHERE id = $1::uuid LIMIT 1",
+            message_id,
+        )
+        if not msg:
+            return {"error": "message_not_found"}
+        row = await fetch_one(
+            """
+            INSERT INTO message_reactions (message_id, emoji, from_number)
+            VALUES ($1::uuid, $2, $3)
+            ON CONFLICT (message_id, from_number, emoji) DO UPDATE SET emoji = EXCLUDED.emoji
+            RETURNING *
+            """,
+            message_id,
+            emoji,
+            from_number,
+        )
+        return {"success": True, "reaction": dict(row) if row else None}
     message = await supabase_execute(
         supabase.table("messages")
         .select("id, wa_message_id, conversation_id")
         .eq("id", message_id)
         .limit(1)
     )
-    
     if not message.data:
         return {"error": "message_not_found"}
-    
-    msg = message.data[0]
-    
-    # Ajouter la réaction
     reaction = await supabase_execute(
         supabase.table("message_reactions").upsert(
-            {
-                "message_id": message_id,
-                "emoji": emoji,
-                "from_number": from_number,
-            },
+            {"message_id": message_id, "emoji": emoji, "from_number": from_number},
             on_conflict="message_id,from_number,emoji",
         )
     )
-    
     return {"success": True, "reaction": reaction.data[0] if reaction.data else None}
 
 
 async def remove_reaction(message_id: str, emoji: str, from_number: str) -> Dict[str, Any]:
-    """
-    Supprime une réaction d'un message.
-    
-    Args:
-        message_id: ID du message dans la base de données
-        emoji: Emoji de la réaction à supprimer
-        from_number: Numéro WhatsApp de la personne qui retire la réaction
-    
-    Returns:
-        Dict avec le résultat de l'opération
-    """
-    # Vérifier que le message existe
+    """Supprime une réaction d'un message."""
+    if get_pool():
+        msg = await fetch_one("SELECT id FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
+        if not msg:
+            return {"error": "message_not_found"}
+        await execute(
+            "DELETE FROM message_reactions WHERE message_id = $1::uuid AND emoji = $2 AND from_number = $3",
+            message_id,
+            emoji,
+            from_number,
+        )
+        return {"success": True}
     message = await supabase_execute(
-        supabase.table("messages")
-        .select("id")
-        .eq("id", message_id)
-        .limit(1)
+        supabase.table("messages").select("id").eq("id", message_id).limit(1)
     )
-    
     if not message.data:
         return {"error": "message_not_found"}
-    
-    # Supprimer la réaction
     await supabase_execute(
         supabase.table("message_reactions")
         .delete()
@@ -1259,7 +1536,6 @@ async def remove_reaction(message_id: str, emoji: str, from_number: str) -> Dict
         .eq("emoji", emoji)
         .eq("from_number", from_number)
     )
-    
     return {"success": True}
 
 
@@ -1537,19 +1813,33 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
     if reply_to_message_id:
         message_payload["reply_to_message_id"] = reply_to_message_id
 
-    # Exécuter l'insertion en base en arrière-plan (fire-and-forget)
     async def _save_message_async():
         try:
-            await asyncio.gather(
-                supabase_execute(
-                    supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
-                ),
-                _update_conversation_timestamp(conv_id, timestamp_iso)
-            )
+            if get_pool():
+                await execute(
+                    """
+                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, is_system, reply_to_message_id)
+                    VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'text', 'sent', $5, $6::uuid)
+                    ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, content_text = EXCLUDED.content_text
+                    """,
+                    conv_id,
+                    text,
+                    _parse_timestamp_iso(timestamp_iso),
+                    message_id,
+                    message_payload.get("is_system", False),
+                    message_payload.get("reply_to_message_id"),
+                )
+                await _update_conversation_timestamp(conv_id, timestamp_iso)
+            else:
+                await asyncio.gather(
+                    supabase_execute(
+                        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+                    ),
+                    _update_conversation_timestamp(conv_id, timestamp_iso)
+                )
         except Exception as e:
             logger.error("Error saving message to database in background: %s", e, exc_info=True)
     
-    # Lancer la sauvegarde en arrière-plan sans attendre
     asyncio.create_task(_save_message_async())
 
     # En mode production, le bot répond uniquement aux messages entrants via webhook
@@ -1859,12 +2149,26 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
         
         async def _save_message_async():
             try:
-                await asyncio.gather(
-                    supabase_execute(
-                        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
-                    ),
-                    _update_conversation_timestamp(conv_id, timestamp_iso)
-                )
+                if get_pool():
+                    await execute(
+                        """
+                        INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status)
+                        VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'template', 'sent')
+                        ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp
+                        """,
+                        conv_id,
+                        text,
+                        _parse_timestamp_iso(timestamp_iso),
+                        message_id,
+                    )
+                    await _update_conversation_timestamp(conv_id, timestamp_iso)
+                else:
+                    await asyncio.gather(
+                        supabase_execute(
+                            supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+                        ),
+                        _update_conversation_timestamp(conv_id, timestamp_iso)
+                    )
             except Exception as e:
                 logger.error("Error saving template message to database: %s", e, exc_info=True)
         
@@ -2033,29 +2337,44 @@ async def send_interactive_message_with_storage(
             preview_text = f"{body_text}\n[Liste interactive]"
 
         # Enregistrer le message dans la base
-        message_payload = {
-            "conversation_id": conversation_id,
-            "direction": "outbound",
-            "content_text": preview_text,
-            "timestamp": timestamp_iso,
-            "wa_message_id": message_id,
-            "message_type": "interactive",
-            "status": "sent",
-            "interactive_data": json.dumps({
-                "type": interactive_type,
-                "header": header_text,
-                "body": body_text,
-                "footer": footer_text,
-                "action": interactive_payload
-            })
-        }
-
-        await asyncio.gather(
-            supabase_execute(
-                supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
-            ),
-            _update_conversation_timestamp(conversation_id, timestamp_iso)
-        )
+        interactive_data_json = json.dumps({
+            "type": interactive_type,
+            "header": header_text,
+            "body": body_text,
+            "footer": footer_text,
+            "action": interactive_payload
+        })
+        if get_pool():
+            await execute(
+                """
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, interactive_data)
+                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'interactive', 'sent', $5::jsonb)
+                ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, interactive_data = EXCLUDED.interactive_data
+                """,
+                conversation_id,
+                preview_text,
+                _parse_timestamp_iso(timestamp_iso),
+                message_id,
+                interactive_data_json,
+            )
+            await _update_conversation_timestamp(conversation_id, timestamp_iso)
+        else:
+            message_payload = {
+                "conversation_id": conversation_id,
+                "direction": "outbound",
+                "content_text": preview_text,
+                "timestamp": timestamp_iso,
+                "wa_message_id": message_id,
+                "message_type": "interactive",
+                "status": "sent",
+                "interactive_data": interactive_data_json,
+            }
+            await asyncio.gather(
+                supabase_execute(
+                    supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+                ),
+                _update_conversation_timestamp(conversation_id, timestamp_iso)
+            )
 
         return {"status": "sent", "message_id": message_id}
     
@@ -2176,27 +2495,39 @@ async def _send_media_message_normal(
         "media_mime_type": None,  # Sera mis à jour si disponible
     }
 
-    # Faire l'upsert
-    await supabase_execute(
-        supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
-    )
-    
-    # Récupérer l'ID du message en cherchant par wa_message_id
-    message_db_id = None
-    if message_id:
-        existing_msg = await supabase_execute(
-            supabase.table("messages")
-            .select("id")
-            .eq("wa_message_id", message_id)
-            .limit(1)
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, media_id, media_mime_type)
+            VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, $5, 'sent', $6, $7)
+            ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, media_id = EXCLUDED.media_id
+            RETURNING id
+            """,
+            conversation_id,
+            message_payload.get("content_text") or "",
+            _parse_timestamp_iso(message_payload["timestamp"]),
+            message_payload["wa_message_id"],
+            message_payload["message_type"],
+            message_payload.get("media_id"),
+            message_payload.get("media_mime_type"),
         )
-        if existing_msg.data:
-            message_db_id = existing_msg.data[0].get("id")
-            logger.debug(f"✅ Outbound message ID retrieved: {message_db_id}")
-        else:
-            logger.warning(f"⚠️ Outbound message inserted but ID not found by wa_message_id: {message_id}")
+        message_db_id = row["id"] if row else None
     else:
-        logger.warning("⚠️ Outbound message has no wa_message_id, cannot retrieve database ID")
+        await supabase_execute(
+            supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+        )
+        message_db_id = None
+        if message_id:
+            existing_msg = await supabase_execute(
+                supabase.table("messages").select("id").eq("wa_message_id", message_id).limit(1)
+            )
+            if existing_msg.data:
+                message_db_id = existing_msg.data[0].get("id")
+                logger.debug(f"✅ Outbound message ID retrieved: {message_db_id}")
+            else:
+                logger.warning(f"⚠️ Outbound message inserted but ID not found by wa_message_id: {message_id}")
+        else:
+            logger.warning("⚠️ Outbound message has no wa_message_id, cannot retrieve database ID")
     
     # Télécharger et stocker le média dans Supabase Storage en arrière-plan
     if message_db_id and media_id and media_type in ("image", "video", "audio", "document", "sticker"):
@@ -2246,29 +2577,42 @@ async def _send_image_with_template_queue(
 
     # Créer le message en base avec status "pending"
     display_text = caption if caption else "(image)"
-    message_payload = {
-        "conversation_id": conversation_id,
-        "direction": "outbound",
-        "content_text": display_text,
-        "status": "pending",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "message_type": "image",
-        "media_id": media_id,  # Conserver le media_id pour référence
-    }
-    
-    # Insérer le message et récupérer l'ID
-    message_result = await supabase_execute(
-        supabase.table("messages").insert(message_payload)
-    )
-    
-    if not message_result.data or len(message_result.data) == 0:
-        logger.error("❌ Échec de la création du message en base")
-        return {"error": "failed_to_create_message"}
-    
-    message_id = message_result.data[0]["id"]
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO messages (conversation_id, direction, content_text, status, timestamp, message_type, media_id)
+            VALUES ($1::uuid, 'outbound', $2, 'pending', $3::timestamptz, 'image', $4)
+            RETURNING id
+            """,
+            conversation_id,
+            display_text,
+            _parse_timestamp_iso(timestamp_iso),
+            media_id,
+        )
+        if not row:
+            logger.error("❌ Échec de la création du message en base")
+            return {"error": "failed_to_create_message"}
+        message_id = row["id"]
+    else:
+        message_payload = {
+            "conversation_id": conversation_id,
+            "direction": "outbound",
+            "content_text": display_text,
+            "status": "pending",
+            "timestamp": timestamp_iso,
+            "message_type": "image",
+            "media_id": media_id,
+        }
+        message_result = await supabase_execute(
+            supabase.table("messages").insert(message_payload)
+        )
+        if not message_result.data or len(message_result.data) == 0:
+            logger.error("❌ Échec de la création du message en base")
+            return {"error": "failed_to_create_message"}
+        message_id = message_result.data[0]["id"]
     logger.info(f"✅ Message créé en base: message_id={message_id}")
     
-    # Créer le template avec HEADER IMAGE
     from app.services.pending_template_service import create_and_queue_image_template
     template_result = await create_and_queue_image_template(
         conversation_id=conversation_id,
@@ -2281,11 +2625,18 @@ async def _send_image_with_template_queue(
     if not template_result.get("success"):
         error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
         logger.error(f"❌ Erreur de création du template: {error_message}")
-        await supabase_execute(
-            supabase.table("messages")
-            .update({"status": "failed", "error_message": error_message})
-            .eq("id", message_id)
-        )
+        if get_pool():
+            await execute(
+                "UPDATE messages SET status = 'failed', error_message = $2 WHERE id = $1::uuid",
+                message_id,
+                error_message,
+            )
+        else:
+            await supabase_execute(
+                supabase.table("messages")
+                .update({"status": "failed", "error_message": error_message})
+                .eq("id", message_id)
+            )
         return {
             "error": "template_creation_failed",
             "message": error_message
@@ -2344,6 +2695,9 @@ def _extract_media_metadata(message: Dict[str, Any]) -> Dict[str, Optional[str]]
 
 
 async def get_message_by_id(message_id: str) -> Optional[Dict[str, Any]]:
+    if get_pool():
+        row = await fetch_one("SELECT * FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
+        return dict(row) if row else None
     res = await supabase_execute(
         supabase.table("messages").select("*").eq("id", message_id).limit(1)
     )
@@ -2697,25 +3051,25 @@ async def backfill_media_to_google_drive(account_id: str, limit: int = 100) -> D
         # La colonne n'existe pas encore
         logger.warning("⚠️ [GOOGLE DRIVE BACKFILL] Column google_drive_file_id does not exist yet. Will process all media files. Please apply migration 029_add_google_drive_file_id_to_messages.sql")
     
-    # Construire la requête
-    query = (
-        supabase.table("messages")
-        .select("id, storage_url, media_filename, media_mime_type, conversation_id")
-        .not_.is_("storage_url", "null")
-        .in_("conversation_id", conversation_ids)
-        .in_("message_type", ["image", "video", "audio", "document", "sticker"])
-    )
+    # Requêtes par chunks pour éviter URL trop longue (Cloudflare 400)
+    result_data = []
+    for i in range(0, len(conversation_ids), SUPABASE_IN_CLAUSE_CHUNK_SIZE):
+        chunk = conversation_ids[i : i + SUPABASE_IN_CLAUSE_CHUNK_SIZE]
+        query = (
+            supabase.table("messages")
+            .select("id, storage_url, media_filename, media_mime_type, conversation_id")
+            .not_.is_("storage_url", "null")
+            .in_("conversation_id", chunk)
+            .in_("message_type", ["image", "video", "audio", "document", "sticker"])
+        )
+        if column_exists:
+            query = query.is_("google_drive_file_id", "null")
+        query = query.limit(limit)
+        result = await supabase_execute(query)
+        result_data.extend(result.data or [])
+    result_data = result_data[:limit]
     
-    # Ajouter le filtre seulement si la colonne existe
-    if column_exists:
-        query = query.is_("google_drive_file_id", "null")
-        logger.info("✅ [GOOGLE DRIVE BACKFILL] Filtering out already uploaded files")
-    
-    query = query.limit(limit)
-    
-    result = await supabase_execute(query)
-    
-    if not result.data:
+    if not result_data:
         logger.info(f"✅ [GOOGLE DRIVE BACKFILL] No media to upload for account_id={account_id}")
         return {
             "status": "completed",
@@ -2724,12 +3078,12 @@ async def backfill_media_to_google_drive(account_id: str, limit: int = 100) -> D
             "failed": 0
         }
     
-    logger.info(f"📋 [GOOGLE DRIVE BACKFILL] Found {len(result.data)} media files to upload for account_id={account_id}")
+    logger.info(f"📋 [GOOGLE DRIVE BACKFILL] Found {len(result_data)} media files to upload for account_id={account_id}")
     
     uploaded = 0
     failed = 0
     
-    for msg in result.data:
+    for msg in result_data:
         message_id = msg["id"]
         storage_url = msg["storage_url"]
         conversation_id = msg["conversation_id"]

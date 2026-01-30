@@ -5,6 +5,7 @@ import logging
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser
 from app.core.db import supabase, supabase_execute
+from app.core.pg import execute as pg_execute, fetch_one, get_pool
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +57,24 @@ async def update_profile(
     if not update_data:
         raise HTTPException(status_code=400, detail="no_fields_to_update")
     
-    # Construire la requête avec select avant update
+    if get_pool():
+        set_parts = []
+        args = []
+        for i, (k, v) in enumerate(update_data.items(), 1):
+            set_parts.append(f"{k} = ${i}")
+            args.append(v)
+        args.append(current_user.id)
+        row = await fetch_one(
+            "UPDATE app_users SET " + ", ".join(set_parts) + f" WHERE user_id = ${len(args)}::uuid RETURNING *",
+            *args,
+        )
+        if not row:
+            raise HTTPException(status_code=500, detail="profile_update_failed")
+        return row
     query = supabase.table("app_users").update(update_data).eq("user_id", current_user.id)
     result = await supabase_execute(query.select())
-    
     if not result.data:
         raise HTTPException(status_code=500, detail="profile_update_failed")
-    
     return result.data[0]
 
 
@@ -106,12 +118,18 @@ async def upload_profile_picture(
         public_url = f"{settings.SUPABASE_URL}/storage/v1/object/public/profile-pictures/{file_path}"
         
         # Mettre à jour le profil
+        if get_pool():
+            row = await fetch_one(
+                "UPDATE app_users SET profile_picture_url = $2 WHERE user_id = $1::uuid RETURNING *",
+                current_user.id, public_url,
+            )
+            if not row:
+                raise HTTPException(status_code=500, detail="profile_update_failed")
+            return {"profile_picture_url": public_url, "user": row}
         query = supabase.table("app_users").update({"profile_picture_url": public_url}).eq("user_id", current_user.id)
         result = await supabase_execute(query.select())
-        
         if not result.data:
             raise HTTPException(status_code=500, detail="profile_update_failed")
-        
         return {
             "profile_picture_url": public_url,
             "user": result.data[0]

@@ -10,6 +10,9 @@ logger = logging.getLogger(__name__)
 
 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
+# Taille max des listes dans .in_() pour éviter des URLs trop longues (limite Cloudflare ~8KB)
+SUPABASE_IN_CLAUSE_CHUNK_SIZE = 40
+
 async def supabase_execute(query_builder, timeout: float = 30.0, retries: int = 2):
     """
     Exécute une requête Supabase de manière asynchrone avec timeout et retry

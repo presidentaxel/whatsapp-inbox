@@ -712,6 +712,33 @@ async def update_business_profile(
 # 5. TEMPLATES DE MESSAGES
 # ============================================================================
 
+async def get_message_template_by_id(
+    template_id: str,
+    access_token: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Récupère un template spécifique par son ID
+    GET /{template_id}?fields=name,status,category,language,components
+    
+    Retourne None si le template n'existe pas ou n'est pas encore synchronisé.
+    """
+    client = await get_http_client()
+    
+    try:
+        response = await client.get(
+            f"{GRAPH_API_BASE}/{template_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"fields": "name,status,category,language,components"}
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            logger.debug(f"Template {template_id} not found (404) - may not be synchronized yet")
+            return None
+        raise
+
+
 async def list_message_templates(
     waba_id: str,
     access_token: str,

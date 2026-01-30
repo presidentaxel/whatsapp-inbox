@@ -19,7 +19,8 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.propagate = True
 from app.core.permissions import CurrentUser, PermissionCodes
-from app.core.db import supabase, supabase_execute
+from app.core.db import supabase, supabase_execute, SUPABASE_IN_CLAUSE_CHUNK_SIZE
+from app.core.pg import fetch_all, get_pool
 from app.services.account_service import get_account_by_id
 from app.services.conversation_service import get_conversation_by_id
 from app.services.message_service import (
@@ -189,7 +190,11 @@ async def send_with_auto_template(
     # Vérifier si on est dans la fenêtre gratuite
     logger.info(f"🔍 [SEND-AUTO-TEMPLATE] Vérification de la fenêtre gratuite...")
     is_free, last_interaction_time = await is_within_free_window(conversation_id)
-    logger.info(f"📊 [SEND-AUTO-TEMPLATE] Fenêtre gratuite: is_free={is_free}, last_interaction={last_interaction_time}")
+    # Rappel: la fenêtre gratuite = 24h après le DERNIER MESSAGE ENTRANT (client), pas après notre dernier envoi
+    logger.info(
+        f"📊 [SEND-AUTO-TEMPLATE] Fenêtre gratuite: is_free={is_free}, "
+        f"dernier_message_client={last_interaction_time} (seuls les messages entrants comptent)"
+    )
     
     if is_free:
         # Envoi normal - utiliser l'endpoint existant
@@ -1394,39 +1399,49 @@ async def get_conversation_media_gallery(
     
     types_to_fetch = media_types.get(media_type.lower(), media_types["image"])
     
-    # Récupérer les messages avec média et storage_url
-    # Exclure les images de templates (bucket template-media)
-    query = (
-        supabase.table("messages")
-        .select("id, message_type, storage_url, timestamp, content_text, direction")
-        .eq("conversation_id", conversation_id)
-        .in_("message_type", types_to_fetch)
-        .not_.is_("storage_url", "null")
-        .not_.ilike("storage_url", "%template-media%")  # Exclure les images de templates
-        .order("timestamp", desc=True)
-        .limit(limit)
-    )
+    if get_pool():
+        rows = await fetch_all(
+            """
+            SELECT id, message_type, storage_url, timestamp, content_text, direction
+            FROM messages
+            WHERE conversation_id = $1::uuid
+              AND message_type = ANY($2::text[])
+              AND storage_url IS NOT NULL
+              AND storage_url NOT ILIKE '%template-media%'
+            ORDER BY timestamp DESC
+            LIMIT $3
+            """,
+            conversation_id,
+            types_to_fetch,
+            limit,
+        )
+        messages = rows
+    else:
+        query = (
+            supabase.table("messages")
+            .select("id, message_type, storage_url, timestamp, content_text, direction")
+            .eq("conversation_id", conversation_id)
+            .in_("message_type", types_to_fetch)
+            .not_.is_("storage_url", "null")
+            .not_.ilike("storage_url", "%template-media%")
+            .order("timestamp", desc=True)
+            .limit(limit)
+        )
+        result = await supabase_execute(query)
+        messages = result.data or []
     
-    result = await supabase_execute(query)
-    messages = result.data or []
-    
-    # Formater les résultats pour la galerie
-    # Filtrer les messages de templates (bucket template-media ou message_type template)
     gallery_items = []
     for msg in messages:
         storage_url = msg.get("storage_url", "")
         message_type = msg.get("message_type", "").lower()
-        
-        # Exclure les templates : soit storage_url contient template-media, soit message_type est "template"
         if "template-media" in storage_url or message_type == "template":
             continue
-        
         gallery_items.append({
             "id": msg.get("id"),
             "message_id": msg.get("id"),
             "type": msg.get("message_type"),
-            "url": storage_url,  # URL complète pour téléchargement
-            "thumbnail_url": storage_url,  # Pour l'instant, même URL (on pourra optimiser plus tard)
+            "url": storage_url,
+            "thumbnail_url": storage_url,
             "timestamp": msg.get("timestamp"),
             "caption": msg.get("content_text"),
             "direction": msg.get("direction")
@@ -1465,38 +1480,58 @@ async def get_account_media_gallery(
     
     types_to_fetch = media_types.get(media_type.lower(), media_types["image"])
     
-    # Récupérer toutes les conversations du compte
-    conversations_result = await supabase_execute(
-        supabase.table("conversations")
-        .select("id")
-        .eq("account_id", account_id)
-    )
-    
-    conversation_ids = [conv["id"] for conv in (conversations_result.data or [])]
-    
-    if not conversation_ids:
-        return {
-            "account_id": account_id,
-            "media_type": media_type,
-            "count": 0,
-            "items": []
-        }
-    
-    # Récupérer les messages avec média et storage_url de toutes les conversations du compte
-    # Exclure les images de templates (bucket template-media)
-    query = (
-        supabase.table("messages")
-        .select("id, message_type, storage_url, timestamp, content_text, direction, conversation_id")
-        .in_("conversation_id", conversation_ids)
-        .in_("message_type", types_to_fetch)
-        .not_.is_("storage_url", "null")
-        .not_.ilike("storage_url", "%template-media%")  # Exclure les images de templates
-        .order("timestamp", desc=True)
-        .limit(limit)
-    )
-    
-    result = await supabase_execute(query)
-    messages = result.data or []
+    if get_pool():
+        # PostgreSQL direct: une seule requête (conversations + messages)
+        rows = await fetch_all(
+            """
+            SELECT m.id, m.message_type, m.storage_url, m.timestamp, m.content_text, m.direction, m.conversation_id
+            FROM messages m
+            WHERE m.conversation_id IN (SELECT id FROM conversations WHERE account_id = $1::uuid)
+              AND m.message_type = ANY($2::text[])
+              AND m.storage_url IS NOT NULL
+              AND m.storage_url NOT ILIKE '%template-media%'
+            ORDER BY m.timestamp DESC
+            LIMIT $3
+            """,
+            account_id,
+            types_to_fetch,
+            limit,
+        )
+        messages = rows
+    else:
+        # Fallback Supabase API
+        conversations_result = await supabase_execute(
+            supabase.table("conversations")
+            .select("id")
+            .eq("account_id", account_id)
+        )
+        conversation_ids = [conv["id"] for conv in (conversations_result.data or [])]
+        if not conversation_ids:
+            return {
+                "account_id": account_id,
+                "media_type": media_type,
+                "count": 0,
+                "items": []
+            }
+        messages = []
+        for i in range(0, len(conversation_ids), SUPABASE_IN_CLAUSE_CHUNK_SIZE):
+            chunk = conversation_ids[i : i + SUPABASE_IN_CLAUSE_CHUNK_SIZE]
+            query = (
+                supabase.table("messages")
+                .select("id, message_type, storage_url, timestamp, content_text, direction, conversation_id")
+                .in_("conversation_id", chunk)
+                .in_("message_type", types_to_fetch)
+                .not_.is_("storage_url", "null")
+                .not_.ilike("storage_url", "%template-media%")
+                .order("timestamp", desc=True)
+                .limit(limit)
+            )
+            result = await supabase_execute(query)
+            chunk_data = result.data or []
+            messages.extend(chunk_data)
+        # Trier par timestamp décroissant et garder au plus `limit` résultats
+        messages.sort(key=lambda m: m.get("timestamp") or "", reverse=True)
+        messages = messages[:limit]
     
     # Formater les résultats pour la galerie
     # Filtrer les messages de templates (bucket template-media ou message_type template)

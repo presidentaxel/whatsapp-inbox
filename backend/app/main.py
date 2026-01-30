@@ -34,9 +34,11 @@ from app.api.routes_whatsapp_utils import router as whatsapp_utils_router
 
 from app.core.config import settings
 from app.core.http_client import close_http_client
+from app.core.pg import init_pool, close_pool
 from app.services.profile_picture_service import periodic_profile_picture_update
 from app.services.media_background_service import periodic_media_backfill
 from app.services.pinned_notification_service import periodic_pin_notification_check
+from app.services.pending_template_service import resume_pending_templates_on_startup, periodic_template_check
 
 app = FastAPI(
     title="WhatsApp Inbox API",
@@ -103,6 +105,15 @@ _periodic_tasks = []
 async def startup_event():
     """Démarrage de l'application - lance les tâches périodiques."""
     import asyncio
+    # Pool PostgreSQL direct (si DATABASE_URL est défini)
+    await init_pool()
+    
+    # Reprendre les templates en attente (APPROVED ou PENDING) au démarrage
+    try:
+        await resume_pending_templates_on_startup()
+    except Exception as e:
+        logger.error(f"❌ Erreur lors de la reprise des templates au démarrage: {e}", exc_info=True)
+    
     # Démarrer la tâche périodique de mise à jour des images de profil
     task1 = asyncio.create_task(periodic_profile_picture_update())
     _periodic_tasks.append(task1)
@@ -117,6 +128,11 @@ async def startup_event():
     task3 = asyncio.create_task(periodic_pin_notification_check())
     _periodic_tasks.append(task3)
     logger.info("✅ Pin notification periodic check task started")
+    
+    # Démarrer la tâche périodique de vérification des templates en attente
+    task4 = asyncio.create_task(periodic_template_check())
+    _periodic_tasks.append(task4)
+    logger.info("✅ Pending templates periodic check task started")
 
 
 @app.on_event("shutdown")
@@ -134,8 +150,9 @@ async def shutdown_event():
             except asyncio.CancelledError:
                 pass  # C'est normal lors du shutdown
     
-    # Fermer le client HTTP
+    # Fermer le client HTTP et le pool PostgreSQL
     await close_http_client()
+    await close_pool()
     logger.info("✅ Shutdown complete")
 
 

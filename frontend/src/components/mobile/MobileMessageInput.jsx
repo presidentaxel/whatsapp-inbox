@@ -1,20 +1,30 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { FiSend, FiSmile, FiPlus, FiImage, FiFileText, FiClock } from "react-icons/fi";
-import EmojiPicker from "emoji-picker-react";
+import { IoSend } from "react-icons/io5";
+import { FiPaperclip, FiCamera, FiImage, FiFileText, FiClock, FiGrid, FiLink, FiPhone } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
-import { sendMediaMessage, sendMessageWithAutoTemplate, sendMessage, getMessagePrice, getAvailableTemplates } from "../../api/messagesApi";
+import { sendMediaMessage, sendMessageWithAutoTemplate, sendMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage } from "../../api/messagesApi";
 import { useTheme } from "../../hooks/useTheme";
+import TemplateVariablesModal from "../chat/TemplateVariablesModal";
+import { hasTemplateVariables } from "../../utils/templateVariables";
 
 export default function MobileMessageInput({ conversationId, accountId, onSend, onMediaSent, disabled, messages = [] }) {
   const [text, setText] = useState("");
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [isOutsideFreeWindow, setIsOutsideFreeWindow] = useState(false);
   const [templateSent, setTemplateSent] = useState(false);
   const [lastInboundMessageId, setLastInboundMessageId] = useState(null);
   const [useAutoTemplate, setUseAutoTemplate] = useState(true); // Mode auto-template par défaut
+  const [mobileTemplates, setMobileTemplates] = useState([]);
+  const [loadingMobileTemplates, setLoadingMobileTemplates] = useState(false);
+  const [mobilePreviewTemplate, setMobilePreviewTemplate] = useState(null);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [freeWindowDetail, setFreeWindowDetail] = useState(null); // { lastInboundTime, hoursElapsed } pour expliquer "hors fenêtre"
+  const [sending, setSending] = useState(false); // évite double envoi (clic rapide / Enter + clic)
   const textareaRef = useRef(null);
+  const cameraInputRef = useRef(null);
   const discussionPrefs = useTheme();
   const previousIsOutsideFreeWindowRef = useRef(false);
   const lastCheckedOutboundMessageIdRef = useRef(null);
@@ -116,8 +126,13 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         getMessagePrice(conversationId)
           .then(response => {
             const isFree = response.data?.is_free ?? true;
+            const lastInbound = response.data?.last_inbound_time ?? null;
             setIsOutsideFreeWindow(!isFree);
             previousIsOutsideFreeWindowRef.current = !isFree;
+            setFreeWindowDetail(lastInbound ? {
+              lastInboundTime: lastInbound,
+              hoursElapsed: lastInbound ? Math.round((Date.now() - new Date(lastInbound).getTime()) / 3600000) : null
+            } : null);
           })
           .catch(error => {
             console.error("Error checking free window after new message:", error);
@@ -134,12 +149,14 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       setIsOutsideFreeWindow(false);
       setTemplateSent(false);
       setLastInboundMessageId(null);
+      setFreeWindowDetail(null);
       lastCheckedOutboundMessageIdRef.current = null;
       previousIsOutsideFreeWindowRef.current = false;
       return;
     }
     
     setLastInboundMessageId(null);
+    setFreeWindowDetail(null);
     lastCheckedOutboundMessageIdRef.current = null;
     previousIsOutsideFreeWindowRef.current = false;
   }, [conversationId]);
@@ -156,11 +173,16 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       try {
         const response = await getMessagePrice(conversationId);
         const isFree = response.data?.is_free ?? true;
+        const lastInbound = response.data?.last_inbound_time ?? null;
         const wasOutsideFreeWindow = previousIsOutsideFreeWindowRef.current;
         const isNowOutsideFreeWindow = !isFree;
         
         setIsOutsideFreeWindow(isNowOutsideFreeWindow);
         previousIsOutsideFreeWindowRef.current = isNowOutsideFreeWindow;
+        setFreeWindowDetail(lastInbound ? {
+          lastInboundTime: lastInbound,
+          hoursElapsed: lastInbound ? Math.round((Date.now() - new Date(lastInbound).getTime()) / 3600000) : null
+        } : null);
         
         if (isFree) {
           // Si on passe de "hors fenêtre" à "dans la fenêtre", réinitialiser templateSent
@@ -199,31 +221,30 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
   };
 
   const handleSendClick = async () => {
-    if (!text.trim() || disabled || !conversationId) return;
-    
+    if (!text.trim() || disabled || !conversationId || sending) return;
+    setSending(true);
+
     const messageText = text.trim();
-    
-    // Créer un ID temporaire unique avec timestamp et contenu hash pour faciliter le matching
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Créer le message optimiste
     const optimisticMessage = {
       id: tempId,
-      client_temp_id: tempId, // ID unique pour faciliter le remplacement
       conversation_id: conversationId,
       direction: "outbound",
       content_text: messageText,
       status: "pending",
       timestamp: new Date().toISOString(),
       message_type: "text",
-      _isOptimistic: true, // Flag pour identifier facilement les messages optimistes
-      _optimisticContent: messageText, // Contenu pour matching
-      _optimisticTime: Date.now() // Timestamp pour matching
+      _isOptimistic: true,
+      _optimisticContent: messageText,
+      _optimisticTime: Date.now()
     };
     
-    // Ajouter le message optimiste IMMÉDIATEMENT
     if (onSend) {
       onSend(messageText, false, optimisticMessage);
     }
-    
+
     // Vider le champ de texte immédiatement
     setText("");
     
@@ -238,41 +259,45 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         content: messageText
       };
       
-      // Utiliser l'API appropriée selon l'état de la fenêtre gratuite
-      // Si dans la fenêtre gratuite : utiliser sendMessage (gratuit)
-      // Si hors fenêtre : utiliser sendMessageWithAutoTemplate (gère les templates automatiquement)
+      // Envoyer et récupérer le wa_message_id retourné
+      let result;
       if (!isOutsideFreeWindow) {
-        // Dans la fenêtre gratuite : envoi normal gratuit
-        console.log("✅ [MOBILE] Envoi dans la fenêtre gratuite - message gratuit");
-        await sendMessage(payload);
+        result = await sendMessage(payload);
       } else {
-        // Hors fenêtre gratuite : utiliser auto-template
-        console.log("💰 [MOBILE] Envoi hors fenêtre gratuite - utilisation auto-template");
-        await sendMessageWithAutoTemplate(payload);
+        result = await sendMessageWithAutoTemplate(payload);
       }
-      
-      // Le message optimiste sera remplacé automatiquement par le message réel
-      // via le webhook Supabase ou le refreshMessages
+
+      const waMessageId = result?.data?.message_id;
+
+      // Signaler que l'envoi est terminé avec le wa_message_id pour matcher
+      if (onSend) {
+        onSend(null, false, { tempId, waMessageId });
+      }
       
       // Vérifier si on est toujours hors fenêtre gratuite après l'envoi
       getMessagePrice(conversationId)
         .then(response => {
           const isFree = response.data?.is_free ?? true;
+          const lastInbound = response.data?.last_inbound_time ?? null;
           setIsOutsideFreeWindow(!isFree);
           previousIsOutsideFreeWindowRef.current = !isFree;
+          setFreeWindowDetail(lastInbound ? {
+            lastInboundTime: lastInbound,
+            hoursElapsed: lastInbound ? Math.round((Date.now() - new Date(lastInbound).getTime()) / 3600000) : null
+          } : null);
         })
         .catch(error => {
           console.error("Error checking free window after send:", error);
         });
     } catch (error) {
       console.error("❌ [MOBILE] Erreur lors de l'envoi:", error);
-      
-      // En cas d'erreur, supprimer le message optimiste spécifique
+
+      // En cas d'erreur, supprimer les messages optimistes
       if (onSend) {
-        onSend("", true, tempId); // Passer l'ID du message optimiste à supprimer
+        onSend(null, true, null);
       }
       setText(messageText);
-      
+
       // Afficher les erreurs
       const errorData = error.response?.data;
       if (errorData?.detail?.errors) {
@@ -284,6 +309,8 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       } else {
         alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
       }
+    } finally {
+      setSending(false);
     }
   };
 
@@ -301,29 +328,151 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
     }
   };
 
-  const onEmojiClick = (emojiData) => {
-    setText(prev => prev + emojiData.emoji);
-    setShowEmojiPicker(false);
+  // Charger les templates quand on ouvre le sheet templates
+  useEffect(() => {
+    if (showTemplates && conversationId) {
+      setLoadingMobileTemplates(true);
+      getAvailableTemplates(conversationId)
+        .then((res) => {
+          const list = res.data?.templates || [];
+          setMobileTemplates(list);
+          if (list.length > 0 && !mobilePreviewTemplate) setMobilePreviewTemplate(list[0]);
+        })
+        .catch(() => setMobileTemplates([]))
+        .finally(() => setLoadingMobileTemplates(false));
+    } else {
+      setMobilePreviewTemplate(null);
+    }
+  }, [showTemplates, conversationId]);
+
+  const handleSendTemplate = async (template, components = null) => {
+    if (disabled || !conversationId) return;
+    const hasVariables = hasTemplateVariables(template);
+    if (hasVariables && !components) {
+      setSelectedTemplate(template);
+      setShowTemplateModal(true);
+      return;
+    }
+    const bodyComponent = template.components?.find(c => c.type === "BODY");
+    const headerComponent = template.components?.find(c => c.type === "HEADER");
+    const footerComponent = template.components?.find(c => c.type === "FOOTER");
+    const buttonsComponent = template.components?.find(c => c.type === "BUTTONS");
+    const replaceVariablesInText = (text, comps) => {
+      if (!text || !comps) return text;
+      let result = text;
+      comps.forEach(comp => {
+        if (comp.parameters) {
+          comp.parameters.forEach((param, idx) => {
+            if (param.type === "text" && param.text) {
+              result = result.replace(new RegExp(`\\{\\{${idx + 1}\\}\\}`, 'g'), param.text);
+            }
+          });
+        }
+      });
+      return result;
+    };
+    let templateText = "";
+    if (headerComponent?.text && headerComponent.format !== "IMAGE" && headerComponent.format !== "VIDEO" && headerComponent.format !== "DOCUMENT") {
+      const headerText = replaceVariablesInText(headerComponent.text, components);
+      if (headerText) templateText = headerText + "\n\n";
+    }
+    if (bodyComponent?.text) {
+      templateText += replaceVariablesInText(bodyComponent.text, components);
+    } else {
+      templateText += template.name;
+    }
+    if (footerComponent?.text) {
+      const footerText = replaceVariablesInText(footerComponent.text, components);
+      if (footerText) templateText = templateText ? `${templateText}\n\n${footerText}` : footerText;
+    }
+    const tempId = `temp-template-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const headerImageUrl = template.header_media_url ||
+      (headerComponent?.example?.header_handle?.[0]) ||
+      (headerComponent?.format === "IMAGE" && headerComponent?.example?.header_handle?.[0]);
+    const optimisticMessage = {
+      id: tempId,
+      client_temp_id: tempId,
+      conversation_id: conversationId,
+      direction: "outbound",
+      content_text: templateText,
+      status: "pending",
+      timestamp: new Date().toISOString(),
+      message_type: headerImageUrl ? "image" : "template",
+      template_name: template.name,
+      template_language: template.language || "fr",
+      storage_url: headerImageUrl || null,
+      _isOptimistic: true,
+      _optimisticContent: templateText,
+      _optimisticTime: Date.now(),
+    };
+    if (buttonsComponent?.buttons) {
+      optimisticMessage.interactive_data = JSON.stringify({
+        type: "button",
+        buttons: buttonsComponent.buttons.slice(0, 5).map(btn => ({
+          type: btn.type || "QUICK_REPLY",
+          text: btn.text || "",
+          url: btn.url || "",
+          phone_number: btn.phone_number || ""
+        }))
+      });
+    }
+    if (components) {
+      const variables = {};
+      components.forEach(comp => {
+        if (comp.parameters) {
+          comp.parameters.forEach((param, idx) => {
+            if (param.type === "text" && param.text) variables[String(idx + 1)] = param.text;
+          });
+        }
+      });
+      if (Object.keys(variables).length > 0) optimisticMessage.template_variables = JSON.stringify(variables);
+    }
+    if (onSend) onSend(templateText, false, optimisticMessage);
+    setShowTemplates(false);
+    setMobilePreviewTemplate(null);
+    setUploading(true);
+    try {
+      const payload = { template_name: template.name, language_code: template.language || "fr" };
+      if (components && components.length > 0) payload.components = components;
+      await sendTemplateMessage(conversationId, payload);
+      getMessagePrice(conversationId).then(r => {
+        const isFree = r.data?.is_free ?? true;
+        const lastInbound = r.data?.last_inbound_time ?? null;
+        setIsOutsideFreeWindow(!isFree);
+        setFreeWindowDetail(lastInbound ? {
+          lastInboundTime: lastInbound,
+          hoursElapsed: Math.round((Date.now() - new Date(lastInbound).getTime()) / 3600000)
+        } : null);
+      }).catch(() => {});
+    } catch (err) {
+      alert(`Erreur lors de l'envoi du template: ${err.response?.data?.detail || err.message}`);
+      if (onSend) onSend("", true, optimisticMessage.id);
+    } finally {
+      setUploading(false);
+    }
   };
 
-  const handleFileSelect = async (type) => {
-    setShowMenu(false);
-    
-    // Créer un input file temporaire
-    const input = document.createElement('input');
-    input.type = 'file';
-    
-    if (type === 'image') {
-      input.accept = 'image/*,video/*';
-    } else if (type === 'document') {
-      input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.txt';
-    }
-    
-    input.onchange = async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
+  const handleTemplateModalClose = () => {
+    setShowTemplateModal(false);
+    setSelectedTemplate(null);
+  };
 
-      setUploading(true);
+  const handleTemplateModalSend = (components) => {
+    if (selectedTemplate) {
+      handleSendTemplate(selectedTemplate, components);
+      setShowTemplateModal(false);
+      setSelectedTemplate(null);
+    }
+  };
+
+  const handleCameraClick = () => {
+    setShowMenu(false);
+    cameraInputRef.current?.click();
+  };
+
+  const processSelectedFile = async (file, type) => {
+    if (!file) return;
+    setUploading(true);
       try {
         if (!accountId) {
           throw new Error("Compte non trouvé (account_id manquant)");
@@ -355,39 +504,27 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         
         console.log("📨 Envoi message média:", { mediaType, mediaId });
         
-        // Créer un aperçu local du fichier pour affichage immédiat
+        const caption = text.trim() || undefined;
         const fileUrl = URL.createObjectURL(file);
         
-        // Créer un ID temporaire unique pour le message optimiste
-        const tempId = `temp-media-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        const caption = text.trim() || undefined;
-        
-        // Message optimiste pour le média avec flags pour faciliter le matching
-        const tempMediaMessage = {
-          id: tempId,
-          client_temp_id: tempId,
+        // Message optimiste avec preview locale
+        const optimisticMessage = {
+          id: `temp-media-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
           conversation_id: conversationId,
           direction: "outbound",
           content_text: caption || `[${mediaType}]`,
           message_type: mediaType,
           status: "pending",
           timestamp: new Date().toISOString(),
-          // Stocker l'URL locale temporaire
           _localPreview: fileUrl,
-          media_id: mediaId,
-          // Flags pour faciliter le matching avec le message réel
           _isOptimistic: true,
-          _optimisticMediaId: mediaId, // ID du média pour matching
-          _optimisticMediaType: mediaType, // Type de média pour matching
-          _optimisticCaption: caption, // Caption pour matching
-          _optimisticTime: Date.now() // Timestamp pour matching
+          _optimisticMediaType: mediaType,
+          _optimisticTime: Date.now()
         };
         
-        console.log("🎨 Affichage aperçu optimiste");
-        
-        // Appeler le callback pour ajouter le message optimiste
+        // Afficher le message optimiste IMMÉDIATEMENT
         if (onMediaSent) {
-          onMediaSent(tempMediaMessage);
+          onMediaSent(optimisticMessage);
         }
         
         // Envoyer le message média
@@ -400,10 +537,13 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         
         console.log("✅ Message média envoyé");
         
+        // Signaler que l'envoi est terminé -> supprime les optimistes et refresh
+        if (onMediaSent) {
+          onMediaSent(null);
+        }
+        
         // Nettoyer l'URL locale après un délai
-        setTimeout(() => {
-          URL.revokeObjectURL(fileUrl);
-        }, 5000);
+        setTimeout(() => URL.revokeObjectURL(fileUrl), 5000);
         
         setText("");
       } catch (error) {
@@ -412,206 +552,237 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       } finally {
         setUploading(false);
       }
+  };
+
+  const handleFileSelect = (type, fileFromCamera = null) => {
+    setShowMenu(false);
+    if (fileFromCamera) {
+      processSelectedFile(fileFromCamera, type);
+      return;
+    }
+    const input = document.createElement('input');
+    input.type = 'file';
+    if (type === 'image') input.accept = 'image/*,video/*';
+    else if (type === 'document') input.accept = '.pdf,.doc,.docx,.xls,.xlsx,.txt';
+    input.onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (file) processSelectedFile(file, type);
     };
-    
     input.click();
   };
 
+  const renderInputBar = () => (
+    <>
+      <div className="mobile-input-pill">
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={handleTextChange}
+          onKeyDown={handleKeyDown}
+          spellCheck={discussionPrefs?.spellCheck ?? true}
+          lang="fr"
+          placeholder={
+            discussionPrefs?.enterToSend
+              ? "Message"
+              : "Message (Ctrl+Entrée pour envoyer)"
+          }
+          disabled={disabled || uploading || sending}
+          rows={1}
+          className="mobile-input-textarea"
+        />
+
+        <button
+          type="button"
+          className="mobile-input-btn"
+          onClick={() => setShowMenu(!showMenu)}
+          disabled={disabled}
+          title="Joindre"
+          aria-label="Joindre un fichier"
+        >
+          <FiPaperclip />
+        </button>
+        <input
+          ref={cameraInputRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="mobile-input-camera-hidden"
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) handleFileSelect('image', file);
+          }}
+        />
+      </div>
+
+      <button
+        type="button"
+        className="mobile-input-send"
+        onClick={handleSendClick}
+          disabled={disabled || !text.trim() || uploading || sending}
+        title="Envoyer"
+        aria-label="Envoyer"
+      >
+        <IoSend />
+      </button>
+    </>
+  );
+
   return (
     <div className="mobile-simple-input">
-      {/* Emoji picker */}
-      {showEmojiPicker && (
-        <div className="mobile-emoji-overlay" onClick={() => setShowEmojiPicker(false)}>
-          <div className="mobile-emoji-picker" onClick={(e) => e.stopPropagation()}>
-            <EmojiPicker 
-              onEmojiClick={onEmojiClick}
-              width="100%"
-              height="350px"
-            />
+      {/* Sheet Templates (style WhatsApp) */}
+      {showTemplates && (
+        <div className="mobile-template-overlay" onClick={() => setShowTemplates(false)}>
+          <div className="mobile-template-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-template-sheet__header">
+              <span className="mobile-template-sheet__title">Templates</span>
+              <button type="button" className="mobile-template-sheet__close" onClick={() => setShowTemplates(false)} aria-label="Fermer">×</button>
+            </div>
+            {loadingMobileTemplates ? (
+              <div className="mobile-template-sheet__loading">Chargement des templates...</div>
+            ) : mobileTemplates.length === 0 ? (
+              <div className="mobile-template-sheet__empty">Aucun template disponible. Créez-en un dans Meta Business Manager.</div>
+            ) : (
+              <div className="mobile-template-sheet__body">
+                <div className="mobile-template-sheet__list">
+                  {mobileTemplates.map((t, i) => {
+                    const bodyComp = t.components?.find(c => c.type === "BODY");
+                    const previewText = bodyComp?.text || t.name;
+                    const isSelected = mobilePreviewTemplate?.name === t.name;
+                    return (
+                      <button
+                        type="button"
+                        key={i}
+                        className={`mobile-template-sheet__item ${isSelected ? "mobile-template-sheet__item--selected" : ""}`}
+                        onClick={() => setMobilePreviewTemplate(t)}
+                      >
+                        <span className="mobile-template-sheet__item-name">{t.name}</span>
+                        <span className="mobile-template-sheet__item-preview">{previewText}</span>
+                        {hasTemplateVariables(t) && <span className="mobile-template-sheet__item-badge">Variables</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+                {mobilePreviewTemplate && (
+                  <div className="mobile-template-sheet__preview">
+                    <div className="mobile-template-sheet__preview-bubble">
+                      {(() => {
+                        const headerComp = mobilePreviewTemplate.components?.find(c => c.type === "HEADER");
+                        const bodyComp = mobilePreviewTemplate.components?.find(c => c.type === "BODY");
+                        const footerComp = mobilePreviewTemplate.components?.find(c => c.type === "FOOTER");
+                        const buttonsComp = mobilePreviewTemplate.components?.find(c => c.type === "BUTTONS");
+                        const headerImg = mobilePreviewTemplate.header_media_url || headerComp?.example?.header_handle?.[0];
+                        return (
+                          <>
+                            {headerImg && <img src={headerImg} alt="" className="mobile-template-sheet__preview-img" />}
+                            {headerComp?.text && <div className="mobile-template-sheet__preview-header">{headerComp.text}</div>}
+                            <div className="mobile-template-sheet__preview-body">{bodyComp?.text || mobilePreviewTemplate.name}</div>
+                            {footerComp?.text && <div className="mobile-template-sheet__preview-footer">{footerComp.text}</div>}
+                            {buttonsComp?.buttons?.length > 0 && (
+                              <div className="mobile-template-sheet__preview-buttons">
+                                {buttonsComp.buttons.map((btn, bi) => (
+                                  <span key={bi} className="mobile-template-sheet__preview-btn">
+                                    {btn.type === "URL" && <FiLink />}
+                                    {btn.type === "PHONE_NUMBER" && <FiPhone />}
+                                    {btn.text || btn.url || btn.phone_number}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </div>
+                    <button
+                      type="button"
+                      className="mobile-template-sheet__send"
+                      onClick={() => handleSendTemplate(mobilePreviewTemplate)}
+                      disabled={disabled || uploading}
+                    >
+                      <IoSend /> Envoyer
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Menu */}
+      {/* Menu pièce jointe — au-dessus de l'input, pas par-dessus */}
       {showMenu && (
-        <div className="mobile-menu-overlay" onClick={() => setShowMenu(false)}>
-          <div className="mobile-menu-sheet" onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => handleFileSelect('document')}>
-              <FiFileText />
-              <span>Document</span>
-            </button>
-            <button onClick={() => handleFileSelect('image')}>
-              <FiImage />
-              <span>Photos et vidéos</span>
-            </button>
+        <>
+          <div className="mobile-attach-overlay" onClick={() => setShowMenu(false)} aria-hidden />
+          <div className="mobile-attach-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-attach-grid">
+              <button type="button" className="mobile-attach-item mobile-attach-item--gallery" onClick={() => { setShowMenu(false); handleFileSelect('image'); }}>
+                <span className="mobile-attach-icon"><FiImage /></span>
+                <span>Galerie</span>
+              </button>
+              <button type="button" className="mobile-attach-item mobile-attach-item--camera" onClick={() => { setShowMenu(false); handleCameraClick(); }}>
+                <span className="mobile-attach-icon"><FiCamera /></span>
+                <span>Caméra</span>
+              </button>
+              <button type="button" className="mobile-attach-item mobile-attach-item--template" onClick={() => { setShowMenu(false); setShowTemplates(true); }}>
+                <span className="mobile-attach-icon"><FiGrid /></span>
+                <span>Template</span>
+              </button>
+              <button type="button" className="mobile-attach-item mobile-attach-item--document" onClick={() => { setShowMenu(false); handleFileSelect('document'); }}>
+                <span className="mobile-attach-icon"><FiFileText /></span>
+                <span>Document</span>
+              </button>
+            </div>
           </div>
-        </div>
+        </>
       )}
+
+      <TemplateVariablesModal
+        template={selectedTemplate}
+        isOpen={showTemplateModal}
+        onClose={handleTemplateModalClose}
+        onSend={handleTemplateModalSend}
+      />
 
       {/* Affichage conditionnel selon l'état de la fenêtre gratuite */}
-      {(() => {
-        // Si on est dans la fenêtre gratuite : toujours afficher l'input
-        if (!isOutsideFreeWindow) {
-          return (
-            <div className="mobile-input-bar">
-              <button
-                className="mobile-input-btn"
-                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                disabled={disabled}
-              >
-                <FiSmile />
-              </button>
-
-              <button
-                className="mobile-input-btn"
-                onClick={() => setShowMenu(!showMenu)}
-                disabled={disabled}
-              >
-                <FiPlus />
-              </button>
-
-              <textarea
-                ref={textareaRef}
-                value={text}
-                onChange={handleTextChange}
-                onKeyDown={handleKeyDown}
-                spellCheck={discussionPrefs?.spellCheck ?? true}
-                lang="fr"
-                placeholder={
-                  discussionPrefs?.enterToSend
-                    ? "Message"
-                    : "Message (Ctrl+Entrée pour envoyer)"
-                }
-                disabled={disabled || uploading}
-                rows={1}
-                className="mobile-input-textarea"
-              />
-
-              <button
-                className="mobile-input-send"
-                onClick={handleSendClick}
-                disabled={disabled || !text.trim() || uploading}
-              >
-                <FiSend />
-              </button>
-            </div>
-          );
-        }
-        
-        // Si on est hors fenêtre gratuite ET mode auto-template : afficher l'input
-        if (isOutsideFreeWindow && useAutoTemplate) {
-          return (
-            <div className="mobile-input-bar">
-              <button
-                className="mobile-input-btn"
-                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                disabled={disabled}
-              >
-                <FiSmile />
-              </button>
-
-              <button
-                className="mobile-input-btn"
-                onClick={() => setShowMenu(!showMenu)}
-                disabled={disabled}
-              >
-                <FiPlus />
-              </button>
-
-              <textarea
-                ref={textareaRef}
-                value={text}
-                onChange={handleTextChange}
-                onKeyDown={handleKeyDown}
-                spellCheck={discussionPrefs?.spellCheck ?? true}
-                lang="fr"
-                placeholder="Message"
-                disabled={disabled || uploading}
-                rows={1}
-                className="mobile-input-textarea"
-              />
-
-              <button
-                className="mobile-input-send"
-                onClick={handleSendClick}
-                disabled={disabled || !text.trim() || uploading}
-              >
-                <FiSend />
-              </button>
-            </div>
-          );
-        }
-        
-        // Si on est hors fenêtre gratuite ET mode manuel ET template récent : afficher message d'attente
-        if (isOutsideFreeWindow && !useAutoTemplate && hasRecentTemplate) {
-          return (
-            <div className="mobile-input-bar mobile-input-bar--waiting">
-              <div className="mobile-input-waiting">
-                <FiClock style={{ marginRight: '8px' }} />
-                <span>En attente d'une réponse client</span>
-                <button
-                  className="mobile-input-waiting-btn"
-                  onClick={() => setUseAutoTemplate(true)}
-                  style={{
-                    marginLeft: '12px',
-                    padding: '4px 12px',
-                    background: 'rgba(37, 211, 102, 0.1)',
-                    border: '1px solid rgba(37, 211, 102, 0.3)',
-                    borderRadius: '4px',
-                    color: '#25d366',
-                    fontSize: '12px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Activer l'auto-template
-                </button>
-              </div>
-            </div>
-          );
-        }
-        
-        // Sinon (hors fenêtre + mode manuel + pas de template récent) : afficher l'input normal
-        return (
-          <div className="mobile-input-bar">
+      {isOutsideFreeWindow && !useAutoTemplate && hasRecentTemplate ? (
+        <div className="mobile-input-bar mobile-input-bar--waiting">
+          <div className="mobile-input-waiting">
+            <FiClock style={{ marginRight: '8px' }} />
+            <span>En attente d'une réponse client</span>
+            {freeWindowDetail?.hoursElapsed != null && (
+              <span className="mobile-input-waiting-hint" title="La fenêtre gratuite WhatsApp = 24h après le dernier message reçu du client (pas après votre dernier envoi).">
+                — Dernier message client il y a {freeWindowDetail.hoursElapsed}h
+              </span>
+            )}
             <button
-              className="mobile-input-btn"
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              disabled={disabled}
+              type="button"
+              className="mobile-input-waiting-btn"
+              onClick={() => setUseAutoTemplate(true)}
+              style={{
+                marginLeft: '12px',
+                padding: '4px 12px',
+                background: 'rgba(37, 211, 102, 0.1)',
+                border: '1px solid rgba(37, 211, 102, 0.3)',
+                borderRadius: '4px',
+                color: '#25d366',
+                fontSize: '12px',
+                cursor: 'pointer'
+              }}
             >
-              <FiSmile />
-            </button>
-
-            <button
-              className="mobile-input-btn"
-              onClick={() => setShowMenu(!showMenu)}
-              disabled={disabled}
-            >
-              <FiPlus />
-            </button>
-
-            <textarea
-              ref={textareaRef}
-              value={text}
-              onChange={handleTextChange}
-              onKeyDown={handleKeyDown}
-              spellCheck={discussionPrefs?.spellCheck ?? true}
-              lang="fr"
-              placeholder="Message"
-              disabled={disabled || uploading}
-              rows={1}
-              className="mobile-input-textarea"
-            />
-
-            <button
-              className="mobile-input-send"
-              onClick={handleSendClick}
-              disabled={disabled || !text.trim() || uploading}
-            >
-              <FiSend />
+              Activer l'auto-template
             </button>
           </div>
-        );
-      })()}
+        </div>
+      ) : (
+        <div className="mobile-input-bar">
+          {isOutsideFreeWindow && freeWindowDetail?.hoursElapsed != null && (
+            <div className="mobile-input-free-window-hint" title="La fenêtre gratuite = 24h après le dernier message reçu du client.">
+              Envoi en template — dernier message client il y a {freeWindowDetail.hoursElapsed}h
+            </div>
+          )}
+          {renderInputBar()}
+        </div>
+      )}
     </div>
   );
 }

@@ -944,10 +944,8 @@
 }
 
 .mobile-chat__input {
-  background: #1f2c34;
   padding: 0.375rem 0.5rem;
   padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
-  border-top: 1px solid #2a3942;
 }
 
 /* ============================================================================

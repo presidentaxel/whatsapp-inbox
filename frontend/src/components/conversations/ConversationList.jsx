@@ -124,7 +124,14 @@ export default function ConversationList({
               </div>
             </div>
             <div className="conversation-meta">
-              <span>{formatPhoneNumber(c.client_number)}</span>
+              <div className="conversation-meta__text">
+                <span className="conversation-meta__phone" title={formatPhoneNumber(c.client_number)}>
+                  {formatPhoneNumber(c.client_number)}
+                </span>
+                <span className="conversation-meta__preview" title={c.last_message || ""}>
+                  {c.last_message || "—"}
+                </span>
+              </div>
               {c.unread_count > 0 && <span className="badge">{c.unread_count}</span>}
             </div>
           </div>

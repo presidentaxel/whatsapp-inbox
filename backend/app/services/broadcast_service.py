@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.db import supabase, supabase_execute
+from app.core.pg import execute as pg_execute, fetch_all, fetch_one, get_pool
 from app.services.account_service import get_account_by_id
 from app.services.conversation_service import find_or_create_conversation as _find_or_create_conversation
 from app.services.message_service import (
@@ -24,6 +25,18 @@ async def create_broadcast_group(
     created_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Crée un nouveau groupe de diffusion"""
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO broadcast_groups (account_id, name, description, created_by)
+            VALUES ($1::uuid, $2, $3, $4::uuid)
+            RETURNING *
+            """,
+            account_id, name, description, created_by,
+        )
+        if not row:
+            raise ValueError("Failed to create broadcast group")
+        return row
     result = await supabase_execute(
         supabase.table("broadcast_groups")
         .insert({
@@ -33,26 +46,29 @@ async def create_broadcast_group(
             "created_by": created_by,
         })
     )
-    
     if not result.data or len(result.data) == 0:
         raise ValueError("Failed to create broadcast group")
-    
     return result.data[0]
 
 
 async def get_broadcast_group(group_id: str) -> Optional[Dict[str, Any]]:
     """Récupère un groupe par son ID"""
+    if get_pool():
+        return await fetch_one("SELECT * FROM broadcast_groups WHERE id = $1::uuid LIMIT 1", group_id)
     result = await supabase_execute(
-        supabase.table("broadcast_groups")
-        .select("*")
-        .eq("id", group_id)
-        .limit(1)
+        supabase.table("broadcast_groups").select("*").eq("id", group_id).limit(1)
     )
     return result.data[0] if result.data and len(result.data) > 0 else None
 
 
 async def get_broadcast_groups(account_id: str) -> List[Dict[str, Any]]:
     """Récupère tous les groupes d'un compte"""
+    if get_pool():
+        rows = await fetch_all(
+            "SELECT * FROM broadcast_groups WHERE account_id = $1::uuid ORDER BY created_at DESC",
+            account_id,
+        )
+        return rows
     result = await supabase_execute(
         supabase.table("broadcast_groups")
         .select("*")
@@ -68,36 +84,51 @@ async def update_broadcast_group(
     description: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Met à jour un groupe"""
+    if get_pool():
+        now = datetime.now(timezone.utc)
+        if name is not None and description is not None:
+            await pg_execute(
+                "UPDATE broadcast_groups SET name = $2, description = $3, updated_at = $4::timestamptz WHERE id = $1::uuid",
+                group_id, name, description, now,
+            )
+        elif name is not None:
+            await pg_execute(
+                "UPDATE broadcast_groups SET name = $2, updated_at = $3::timestamptz WHERE id = $1::uuid",
+                group_id, name, now,
+            )
+        elif description is not None:
+            await pg_execute(
+                "UPDATE broadcast_groups SET description = $2, updated_at = $3::timestamptz WHERE id = $1::uuid",
+                group_id, description, now,
+            )
+        else:
+            await pg_execute(
+                "UPDATE broadcast_groups SET updated_at = $2::timestamptz WHERE id = $1::uuid",
+                group_id, now,
+            )
+        return await fetch_one("SELECT * FROM broadcast_groups WHERE id = $1::uuid LIMIT 1", group_id)
     update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if name is not None:
         update_data["name"] = name
     if description is not None:
         update_data["description"] = description
-    
     await supabase_execute(
-        supabase.table("broadcast_groups")
-        .update(update_data)
-        .eq("id", group_id)
+        supabase.table("broadcast_groups").update(update_data).eq("id", group_id)
     )
-    
-    # Récupérer le groupe mis à jour
     updated = await supabase_execute(
-        supabase.table("broadcast_groups")
-        .select("*")
-        .eq("id", group_id)
-        .limit(1)
+        supabase.table("broadcast_groups").select("*").eq("id", group_id).limit(1)
     )
-    
     return updated.data[0] if updated.data and len(updated.data) > 0 else None
 
 
 async def delete_broadcast_group(group_id: str) -> bool:
     """Supprime un groupe (cascade sur recipients et campaigns)"""
-    result = await supabase_execute(
-        supabase.table("broadcast_groups")
-        .delete()
-        .eq("id", group_id)
-    )
+    if get_pool():
+        await pg_execute("DELETE FROM broadcast_groups WHERE id = $1::uuid", group_id)
+    else:
+        await supabase_execute(
+            supabase.table("broadcast_groups").delete().eq("id", group_id)
+        )
     return True
 
 
@@ -110,6 +141,18 @@ async def add_recipient_to_group(
     display_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Ajoute un destinataire à un groupe"""
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO broadcast_group_recipients (group_id, contact_id, phone_number, display_name)
+            VALUES ($1::uuid, $2::uuid, $3, $4)
+            RETURNING *
+            """,
+            group_id, contact_id, phone_number, display_name,
+        )
+        if not row:
+            raise ValueError("Failed to add recipient to group")
+        return row
     result = await supabase_execute(
         supabase.table("broadcast_group_recipients")
         .insert({
@@ -119,15 +162,41 @@ async def add_recipient_to_group(
             "display_name": display_name,
         })
     )
-    
     if not result.data or len(result.data) == 0:
         raise ValueError("Failed to add recipient to group")
-    
     return result.data[0]
 
 
 async def get_group_recipients(group_id: str) -> List[Dict[str, Any]]:
     """Récupère tous les destinataires d'un groupe"""
+    if get_pool():
+        rows = await fetch_all(
+            """
+            SELECT r.*, c.display_name AS contact_display_name, c.whatsapp_number AS contact_whatsapp_number, c.profile_picture_url AS contact_profile_picture_url
+            FROM broadcast_group_recipients r
+            LEFT JOIN contacts c ON c.id = r.contact_id
+            WHERE r.group_id = $1::uuid
+            ORDER BY r.created_at ASC
+            """,
+            group_id,
+        )
+        # Normaliser pour ressembler au format Supabase (contacts: { display_name, whatsapp_number, profile_picture_url })
+        out = []
+        for r in rows:
+            row = dict(r)
+            if row.get("contact_display_name") is not None or row.get("contact_whatsapp_number") is not None or row.get("contact_profile_picture_url") is not None:
+                row["contacts"] = {
+                    "display_name": row.pop("contact_display_name", None),
+                    "whatsapp_number": row.pop("contact_whatsapp_number", None),
+                    "profile_picture_url": row.pop("contact_profile_picture_url", None),
+                }
+            else:
+                for k in list(row.keys()):
+                    if k.startswith("contact_"):
+                        row.pop(k, None)
+                row["contacts"] = None
+            out.append(row)
+        return out
     result = await supabase_execute(
         supabase.table("broadcast_group_recipients")
         .select("*, contacts(display_name, whatsapp_number, profile_picture_url)")
@@ -139,11 +208,12 @@ async def get_group_recipients(group_id: str) -> List[Dict[str, Any]]:
 
 async def remove_recipient_from_group(recipient_id: str) -> bool:
     """Retire un destinataire d'un groupe"""
-    await supabase_execute(
-        supabase.table("broadcast_group_recipients")
-        .delete()
-        .eq("id", recipient_id)
-    )
+    if get_pool():
+        await pg_execute("DELETE FROM broadcast_group_recipients WHERE id = $1::uuid", recipient_id)
+    else:
+        await supabase_execute(
+            supabase.table("broadcast_group_recipients").delete().eq("id", recipient_id)
+        )
     return True
 
 
@@ -162,6 +232,18 @@ async def create_broadcast_campaign(
     recipients = await get_group_recipients(group_id)
     total_recipients = len(recipients)
     
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO broadcast_campaigns (group_id, account_id, content_text, message_type, media_url, sent_by, total_recipients)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7)
+            RETURNING *
+            """,
+            group_id, account_id, content_text, message_type, media_url, sent_by, total_recipients,
+        )
+        if not row:
+            raise ValueError("Failed to create broadcast campaign")
+        return row
     result = await supabase_execute(
         supabase.table("broadcast_campaigns")
         .insert({
@@ -174,35 +256,46 @@ async def create_broadcast_campaign(
             "total_recipients": total_recipients,
         })
     )
-    
     if not result.data or len(result.data) == 0:
         raise ValueError("Failed to create broadcast campaign")
-    
     return result.data[0]
 
 
 async def get_broadcast_campaign(campaign_id: str) -> Optional[Dict[str, Any]]:
     """Récupère une campagne par son ID"""
+    if get_pool():
+        return await fetch_one("SELECT * FROM broadcast_campaigns WHERE id = $1::uuid LIMIT 1", campaign_id)
     result = await supabase_execute(
-        supabase.table("broadcast_campaigns")
-        .select("*")
-        .eq("id", campaign_id)
-        .limit(1)
+        supabase.table("broadcast_campaigns").select("*").eq("id", campaign_id).limit(1)
     )
     return result.data[0] if result.data and len(result.data) > 0 else None
 
 
 async def get_broadcast_campaigns(group_id: Optional[str] = None, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Récupère les campagnes (optionnellement filtrées par groupe ou compte)"""
+    if get_pool():
+        if group_id and account_id:
+            return await fetch_all(
+                "SELECT * FROM broadcast_campaigns WHERE group_id = $1::uuid AND account_id = $2::uuid ORDER BY sent_at DESC NULLS LAST",
+                group_id, account_id,
+            )
+        if group_id:
+            return await fetch_all(
+                "SELECT * FROM broadcast_campaigns WHERE group_id = $1::uuid ORDER BY sent_at DESC NULLS LAST",
+                group_id,
+            )
+        if account_id:
+            return await fetch_all(
+                "SELECT * FROM broadcast_campaigns WHERE account_id = $1::uuid ORDER BY sent_at DESC NULLS LAST",
+                account_id,
+            )
+        return await fetch_all("SELECT * FROM broadcast_campaigns ORDER BY sent_at DESC NULLS LAST")
     query = supabase.table("broadcast_campaigns").select("*")
-    
     if group_id:
         query = query.eq("group_id", group_id)
     if account_id:
         query = query.eq("account_id", account_id)
-    
     query = query.order("sent_at", desc=True)
-    
     result = await supabase_execute(query)
     return result.data or []
 
@@ -306,14 +399,19 @@ async def send_broadcast_campaign(
                     wa_message_id = message_result.get("message_id")
                     message_db = None
                     if wa_message_id:
-                        message_db_result = await supabase_execute(
-                            supabase.table("messages")
-                            .select("id")
-                            .eq("wa_message_id", wa_message_id)
-                            .limit(1)
-                        )
-                        if message_db_result.data and len(message_db_result.data) > 0:
-                            message_db = message_db_result.data[0]["id"]
+                        if get_pool():
+                            row = await fetch_one("SELECT id FROM messages WHERE wa_message_id = $1 LIMIT 1", wa_message_id)
+                            if row:
+                                message_db = row["id"]
+                        else:
+                            message_db_result = await supabase_execute(
+                                supabase.table("messages")
+                                .select("id")
+                                .eq("wa_message_id", wa_message_id)
+                                .limit(1)
+                            )
+                            if message_db_result.data and len(message_db_result.data) > 0:
+                                message_db = message_db_result.data[0]["id"]
                     
                     await create_recipient_stat(
                         campaign_id=campaign["id"],
@@ -338,23 +436,35 @@ async def send_broadcast_campaign(
         first_recipient, first_conversation = paid_recipients[0]
         
         timestamp_iso = datetime.now(timezone.utc).isoformat()
-        fake_message_payload = {
-            "conversation_id": first_conversation["id"],
-            "direction": "outbound",
-            "content_text": content_text,
-            "timestamp": timestamp_iso,
-            "message_type": "text",
-            "status": "sent",
-        }
-        
-        fake_message_result = await supabase_execute(
-            supabase.table("messages").insert(fake_message_payload)
-        )
-        
-        if not fake_message_result.data:
-            raise ValueError("Failed to create fake message for template")
-        
-        fake_message_id = fake_message_result.data[0]["id"]
+        timestamp_dt = datetime.now(timezone.utc)
+        fake_message_id = None
+        if get_pool():
+            row = await fetch_one(
+                """
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, message_type, status)
+                VALUES ($1::uuid, $2, $3, $4::timestamptz, $5, $6)
+                RETURNING id
+                """,
+                first_conversation["id"], "outbound", content_text, timestamp_dt, "text", "sent",
+            )
+            if not row:
+                raise ValueError("Failed to create fake message for template")
+            fake_message_id = row["id"]
+        else:
+            fake_message_payload = {
+                "conversation_id": first_conversation["id"],
+                "direction": "outbound",
+                "content_text": content_text,
+                "timestamp": timestamp_iso,
+                "message_type": "text",
+                "status": "sent",
+            }
+            fake_message_result = await supabase_execute(
+                supabase.table("messages").insert(fake_message_payload)
+            )
+            if not fake_message_result.data:
+                raise ValueError("Failed to create fake message for template")
+            fake_message_id = fake_message_result.data[0]["id"]
         
         # Créer le template pour la campagne
         template_result = await find_or_create_template(
@@ -368,19 +478,31 @@ async def send_broadcast_campaign(
         if not template_result.get("success"):
             error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
             logger.error(f"❌ Failed to create template for broadcast: {error_message}")
-            await supabase_execute(
-                supabase.table("broadcast_campaigns")
-                .update({"failed_count": len(paid_recipients)})
-                .eq("id", campaign["id"])
-            )
+            if get_pool():
+                await pg_execute(
+                    "UPDATE broadcast_campaigns SET failed_count = $2 WHERE id = $1::uuid",
+                    campaign["id"], len(paid_recipients),
+                )
+            else:
+                await supabase_execute(
+                    supabase.table("broadcast_campaigns")
+                    .update({"failed_count": len(paid_recipients)})
+                    .eq("id", campaign["id"])
+                )
             raise ValueError(f"Template creation failed: {error_message}")
         
         # Lier le template à la campagne
-        await supabase_execute(
-            supabase.table("pending_template_messages")
-            .update({"campaign_id": campaign["id"]})
-            .eq("message_id", fake_message_id)
-        )
+        if get_pool():
+            await pg_execute(
+                "UPDATE pending_template_messages SET campaign_id = $2::uuid WHERE message_id = $1::uuid",
+                fake_message_id, campaign["id"],
+            )
+        else:
+            await supabase_execute(
+                supabase.table("pending_template_messages")
+                .update({"campaign_id": campaign["id"]})
+                .eq("message_id", fake_message_id)
+            )
         
         logger.info(f"✅ Template '{template_result.get('template_name')}' created and queued for campaign {campaign['id']}")
         
@@ -388,22 +510,32 @@ async def send_broadcast_campaign(
         for recipient, conversation in paid_recipients:
             phone_number = recipient["phone_number"]
             
-            recipient_fake_message = {
-                "conversation_id": conversation["id"],
-                "direction": "outbound",
-                "content_text": content_text,
-                "timestamp": timestamp_iso,
-                "message_type": "text",
-                "status": "sent",
-            }
-            
-            recipient_message_result = await supabase_execute(
-                supabase.table("messages").insert(recipient_fake_message)
-            )
-            
             message_db_id = None
-            if recipient_message_result.data:
-                message_db_id = recipient_message_result.data[0]["id"]
+            if get_pool():
+                row = await fetch_one(
+                    """
+                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, message_type, status)
+                    VALUES ($1::uuid, $2, $3, $4::timestamptz, $5, $6)
+                    RETURNING id
+                    """,
+                    conversation["id"], "outbound", content_text, timestamp_iso, "text", "sent",
+                )
+                if row:
+                    message_db_id = row["id"]
+            else:
+                recipient_fake_message = {
+                    "conversation_id": conversation["id"],
+                    "direction": "outbound",
+                    "content_text": content_text,
+                    "timestamp": timestamp_iso,
+                    "message_type": "text",
+                    "status": "sent",
+                }
+                recipient_message_result = await supabase_execute(
+                    supabase.table("messages").insert(recipient_fake_message)
+                )
+                if recipient_message_result.data:
+                    message_db_id = recipient_message_result.data[0]["id"]
             
             await create_recipient_stat(
                 campaign_id=campaign["id"],
@@ -449,14 +581,19 @@ async def send_broadcast_campaign(
                 wa_message_id = message_result.get("message_id")
                 message_db = None
                 if wa_message_id:
-                    message_db_result = await supabase_execute(
-                        supabase.table("messages")
-                        .select("id")
-                        .eq("wa_message_id", wa_message_id)
-                        .limit(1)
-                    )
-                    if message_db_result.data and len(message_db_result.data) > 0:
-                        message_db = message_db_result.data[0]["id"]
+                    if get_pool():
+                        row = await fetch_one("SELECT id FROM messages WHERE wa_message_id = $1 LIMIT 1", wa_message_id)
+                        if row:
+                            message_db = row["id"]
+                    else:
+                        message_db_result = await supabase_execute(
+                            supabase.table("messages")
+                            .select("id")
+                            .eq("wa_message_id", wa_message_id)
+                            .limit(1)
+                        )
+                        if message_db_result.data and len(message_db_result.data) > 0:
+                            message_db = message_db_result.data[0]["id"]
                 
                 await create_recipient_stat(
                     campaign_id=campaign["id"],
@@ -476,35 +613,56 @@ async def send_broadcast_campaign(
     first_paid_recipient, first_paid_conversation = paid_recipients[0]
     
     timestamp_iso = datetime.now(timezone.utc).isoformat()
-    fake_message_payload = {
-        "conversation_id": first_paid_conversation["id"],
-        "direction": "outbound",
-        "content_text": content_text,
-        "timestamp": timestamp_iso,
-        "message_type": "text",
-        "status": "sent",
-    }
-    
-    fake_message_result = await supabase_execute(
-        supabase.table("messages").insert(fake_message_payload)
-    )
-    
-    if not fake_message_result.data:
-        logger.error("❌ Failed to create fake message for template (mix case)")
-        # Marquer les payants comme échoués
-        for recipient, _ in paid_recipients:
-            await create_recipient_stat(
-                campaign_id=campaign["id"],
-                recipient_id=recipient["id"],
-                phone_number=recipient["phone_number"],
-                message_id=None,
-                failed_at=datetime.now(timezone.utc).isoformat(),
-                error_message="Failed to create template",
-            )
-        await update_campaign_counters(campaign["id"])
-        return campaign
-    
-    fake_message_id = fake_message_result.data[0]["id"]
+    fake_message_id = None
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO messages (conversation_id, direction, content_text, timestamp, message_type, status)
+            VALUES ($1::uuid, $2, $3, $4::timestamptz, $5, $6)
+            RETURNING id
+            """,
+            first_paid_conversation["id"], "outbound", content_text, timestamp_iso, "text", "sent",
+        )
+        if not row:
+            logger.error("❌ Failed to create fake message for template (mix case)")
+            for recipient, _ in paid_recipients:
+                await create_recipient_stat(
+                    campaign_id=campaign["id"],
+                    recipient_id=recipient["id"],
+                    phone_number=recipient["phone_number"],
+                    message_id=None,
+                    failed_at=datetime.now(timezone.utc).isoformat(),
+                    error_message="Failed to create template",
+                )
+            await update_campaign_counters(campaign["id"])
+            return campaign
+        fake_message_id = row["id"]
+    else:
+        fake_message_payload = {
+            "conversation_id": first_paid_conversation["id"],
+            "direction": "outbound",
+            "content_text": content_text,
+            "timestamp": timestamp_iso,
+            "message_type": "text",
+            "status": "sent",
+        }
+        fake_message_result = await supabase_execute(
+            supabase.table("messages").insert(fake_message_payload)
+        )
+        if not fake_message_result.data:
+            logger.error("❌ Failed to create fake message for template (mix case)")
+            for recipient, _ in paid_recipients:
+                await create_recipient_stat(
+                    campaign_id=campaign["id"],
+                    recipient_id=recipient["id"],
+                    phone_number=recipient["phone_number"],
+                    message_id=None,
+                    failed_at=datetime.now(timezone.utc).isoformat(),
+                    error_message="Failed to create template",
+                )
+            await update_campaign_counters(campaign["id"])
+            return campaign
+        fake_message_id = fake_message_result.data[0]["id"]
     
     # Créer le template pour la campagne
     template_result = await find_or_create_template(
@@ -518,7 +676,6 @@ async def send_broadcast_campaign(
     if not template_result.get("success"):
         error_message = "; ".join(template_result.get("errors", ["Erreur inconnue"]))
         logger.error(f"❌ Failed to create template for broadcast (mix case): {error_message}")
-        # Marquer les payants comme échoués
         for recipient, _ in paid_recipients:
             await create_recipient_stat(
                 campaign_id=campaign["id"],
@@ -532,34 +689,49 @@ async def send_broadcast_campaign(
         return campaign
     
     # Lier le template à la campagne
-    await supabase_execute(
-        supabase.table("pending_template_messages")
-        .update({"campaign_id": campaign["id"]})
-        .eq("message_id", fake_message_id)
-    )
+    if get_pool():
+        await pg_execute(
+            "UPDATE pending_template_messages SET campaign_id = $2::uuid WHERE message_id = $1::uuid",
+            fake_message_id, campaign["id"],
+        )
+    else:
+        await supabase_execute(
+            supabase.table("pending_template_messages")
+            .update({"campaign_id": campaign["id"]})
+            .eq("message_id", fake_message_id)
+        )
     
     logger.info(f"✅ Template '{template_result.get('template_name')}' created and queued for campaign {campaign['id']} (mix case)")
     
     # Créer des messages "fake" pour tous les destinataires payants
     for recipient, conversation in paid_recipients:
         phone_number = recipient["phone_number"]
-        
-        recipient_fake_message = {
-            "conversation_id": conversation["id"],
-            "direction": "outbound",
-            "content_text": content_text,
-            "timestamp": timestamp_iso,
-            "message_type": "text",
-            "status": "sent",
-        }
-        
-        recipient_message_result = await supabase_execute(
-            supabase.table("messages").insert(recipient_fake_message)
-        )
-        
         message_db_id = None
-        if recipient_message_result.data:
-            message_db_id = recipient_message_result.data[0]["id"]
+        if get_pool():
+            row = await fetch_one(
+                """
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, message_type, status)
+                VALUES ($1::uuid, $2, $3, $4::timestamptz, $5, $6)
+                RETURNING id
+                """,
+                conversation["id"], "outbound", content_text, timestamp_iso, "text", "sent",
+            )
+            if row:
+                message_db_id = row["id"]
+        else:
+            recipient_fake_message = {
+                "conversation_id": conversation["id"],
+                "direction": "outbound",
+                "content_text": content_text,
+                "timestamp": timestamp_iso,
+                "message_type": "text",
+                "status": "sent",
+            }
+            recipient_message_result = await supabase_execute(
+                supabase.table("messages").insert(recipient_fake_message)
+            )
+            if recipient_message_result.data:
+                message_db_id = recipient_message_result.data[0]["id"]
         
         await create_recipient_stat(
             campaign_id=campaign["id"],
@@ -586,36 +758,46 @@ async def create_recipient_stat(
     error_message: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Crée une entrée de statistique pour un destinataire"""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    sent_at_val = sent_at if sent_at else (None if failed_at else now_iso)
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO broadcast_recipient_stats (campaign_id, recipient_id, phone_number, message_id, sent_at, failed_at, error_message)
+            VALUES ($1::uuid, $2::uuid, $3, $4::uuid, $5::timestamptz, $6::timestamptz, $7)
+            RETURNING *
+            """,
+            campaign_id, recipient_id, phone_number, message_id, sent_at_val, failed_at, error_message,
+        )
+        if not row:
+            raise ValueError("Failed to create recipient stat")
+        return row
     stat_data = {
         "campaign_id": campaign_id,
         "recipient_id": recipient_id,
         "phone_number": phone_number,
         "message_id": message_id,
     }
-    
-    if sent_at:
-        stat_data["sent_at"] = sent_at
-    elif not failed_at:
-        # Si pas de sent_at ni failed_at, utiliser maintenant
-        stat_data["sent_at"] = datetime.now(timezone.utc).isoformat()
-    
+    if sent_at_val:
+        stat_data["sent_at"] = sent_at_val
     if failed_at:
         stat_data["failed_at"] = failed_at
         stat_data["error_message"] = error_message
-    
     result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .insert(stat_data)
+        supabase.table("broadcast_recipient_stats").insert(stat_data)
     )
-    
     if not result.data or len(result.data) == 0:
         raise ValueError("Failed to create recipient stat")
-    
     return result.data[0]
 
 
 async def get_recipient_stat_by_message_id(message_id: str) -> Optional[Dict[str, Any]]:
     """Trouve une stat par l'ID du message"""
+    if get_pool():
+        return await fetch_one(
+            "SELECT * FROM broadcast_recipient_stats WHERE message_id = $1::uuid LIMIT 1",
+            message_id,
+        )
     result = await supabase_execute(
         supabase.table("broadcast_recipient_stats")
         .select("*")
@@ -630,42 +812,68 @@ async def update_recipient_stat(
     update_data: Dict[str, Any],
 ) -> Optional[Dict[str, Any]]:
     """Met à jour une stat"""
-    # Calculer time_to_read si read_at est défini
+    from datetime import datetime as dt
+    if get_pool():
+        if "read_at" in update_data and update_data["read_at"]:
+            row = await fetch_one(
+                "SELECT sent_at FROM broadcast_recipient_stats WHERE id = $1::uuid LIMIT 1", stat_id
+            )
+            if row and row.get("sent_at"):
+                sent_time = dt.fromisoformat(str(row["sent_at"]).replace("Z", "+00:00"))
+                read_time = dt.fromisoformat(str(update_data["read_at"]).replace("Z", "+00:00"))
+                update_data = {**update_data, "time_to_read": str(read_time - sent_time)}
+        if "replied_at" in update_data and update_data["replied_at"]:
+            row = await fetch_one(
+                "SELECT sent_at FROM broadcast_recipient_stats WHERE id = $1::uuid LIMIT 1", stat_id
+            )
+            if row and row.get("sent_at"):
+                sent_time = dt.fromisoformat(str(row["sent_at"]).replace("Z", "+00:00"))
+                reply_time = dt.fromisoformat(str(update_data["replied_at"]).replace("Z", "+00:00"))
+                update_data = {**update_data, "time_to_reply": str(reply_time - sent_time)}
+        # Construire SET dynamiquement (on ne peut pas faire UPDATE avec dict facilement en paramètres)
+        set_parts = []
+        args = []
+        i = 1
+        for k, v in update_data.items():
+            if k in ("sent_at", "delivered_at", "read_at", "failed_at", "replied_at"):
+                set_parts.append(f"{k} = ${i}::timestamptz")
+            elif k in ("time_to_read", "time_to_reply"):
+                set_parts.append(f"{k} = ${i}::interval")
+            elif k == "error_message":
+                set_parts.append(f"{k} = ${i}")
+            elif k == "message_id":
+                set_parts.append(f"{k} = ${i}::uuid")
+            elif k == "reply_message_id":
+                set_parts.append(f"{k} = ${i}::uuid")
+            else:
+                set_parts.append(f"{k} = ${i}")
+            args.append(v)
+            i += 1
+        if not set_parts:
+            return await fetch_one("SELECT * FROM broadcast_recipient_stats WHERE id = $1::uuid LIMIT 1", stat_id)
+        args.append(stat_id)
+        q = "UPDATE broadcast_recipient_stats SET " + ", ".join(set_parts) + f" WHERE id = ${i}::uuid RETURNING *"
+        row = await fetch_one(q, *args)
+        return row
     if "read_at" in update_data and update_data["read_at"]:
-        # Récupérer sent_at pour calculer le délai
         stat = await supabase_execute(
-            supabase.table("broadcast_recipient_stats")
-            .select("sent_at")
-            .eq("id", stat_id)
-            .limit(1)
+            supabase.table("broadcast_recipient_stats").select("sent_at").eq("id", stat_id).limit(1)
         )
         if stat.data and len(stat.data) > 0 and stat.data[0].get("sent_at"):
-            from datetime import datetime as dt
-            sent_time = dt.fromisoformat(stat.data[0]["sent_at"].replace('Z', '+00:00'))
-            read_time = dt.fromisoformat(update_data["read_at"].replace('Z', '+00:00'))
+            sent_time = dt.fromisoformat(stat.data[0]["sent_at"].replace("Z", "+00:00"))
+            read_time = dt.fromisoformat(update_data["read_at"].replace("Z", "+00:00"))
             update_data["time_to_read"] = str(read_time - sent_time)
-    
-    # Calculer time_to_reply si replied_at est défini
     if "replied_at" in update_data and update_data["replied_at"]:
         stat = await supabase_execute(
-            supabase.table("broadcast_recipient_stats")
-            .select("sent_at")
-            .eq("id", stat_id)
-            .limit(1)
+            supabase.table("broadcast_recipient_stats").select("sent_at").eq("id", stat_id).limit(1)
         )
         if stat.data and len(stat.data) > 0 and stat.data[0].get("sent_at"):
-            from datetime import datetime as dt
-            sent_time = dt.fromisoformat(stat.data[0]["sent_at"].replace('Z', '+00:00'))
-            reply_time = dt.fromisoformat(update_data["replied_at"].replace('Z', '+00:00'))
+            sent_time = dt.fromisoformat(stat.data[0]["sent_at"].replace("Z", "+00:00"))
+            reply_time = dt.fromisoformat(update_data["replied_at"].replace("Z", "+00:00"))
             update_data["time_to_reply"] = str(reply_time - sent_time)
-    
     result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .update(update_data)
-        .eq("id", stat_id)
-        .select()
+        supabase.table("broadcast_recipient_stats").update(update_data).eq("id", stat_id).select()
     )
-    
     return result.data[0] if result.data else None
 
 
@@ -678,33 +886,41 @@ async def update_recipient_stat_from_webhook(
     """
     Met à jour les stats quand on reçoit un webhook de statut WhatsApp
     """
-    # Trouver le message par wa_message_id
-    message_result = await supabase_execute(
-        supabase.table("messages")
-        .select("id")
-        .eq("wa_message_id", wa_message_id)
-        .limit(1)
-    )
+    message_id = None
+    if get_pool():
+        row = await fetch_one("SELECT id FROM messages WHERE wa_message_id = $1 LIMIT 1", wa_message_id)
+        if not row:
+            logger.debug(f"No message found with wa_message_id: {wa_message_id}")
+            return False
+        message_id = row["id"]
+    else:
+        message_result = await supabase_execute(
+            supabase.table("messages").select("id").eq("wa_message_id", wa_message_id).limit(1)
+        )
+        if not message_result.data or len(message_result.data) == 0:
+            logger.debug(f"No message found with wa_message_id: {wa_message_id}")
+            return False
+        message_id = message_result.data[0]["id"]
     
-    if not message_result.data or len(message_result.data) == 0:
-        logger.debug(f"No message found with wa_message_id: {wa_message_id}")
+    stat_data = None
+    if get_pool():
+        stat_data = await fetch_one(
+            "SELECT id, campaign_id FROM broadcast_recipient_stats WHERE message_id = $1::uuid LIMIT 1",
+            message_id,
+        )
+    else:
+        stat_result = await supabase_execute(
+            supabase.table("broadcast_recipient_stats")
+            .select("id, campaign_id")
+            .eq("message_id", message_id)
+            .limit(1)
+        )
+        if stat_result.data and len(stat_result.data) > 0:
+            stat_data = stat_result.data[0]
+    
+    if not stat_data:
         return False
     
-    message_id = message_result.data[0]["id"]
-    
-    # Trouver la stat associée
-    stat_result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .select("id, campaign_id")
-        .eq("message_id", message_id)
-        .limit(1)
-    )
-    
-    if not stat_result.data or len(stat_result.data) == 0:
-        return False
-    
-    # Gérer le cas où plusieurs stats pourraient correspondre (ne devrait pas arriver)
-    stat_data = stat_result.data[0] if isinstance(stat_result.data, list) else stat_result.data
     stat_id = stat_data["id"]
     
     # Mettre à jour selon le statut
@@ -734,36 +950,53 @@ async def track_reply(conversation_id: str, message_id: str) -> bool:
     """
     Marque qu'un destinataire a répondu à une campagne
     """
-    # Trouver la conversation pour obtenir le numéro
-    conv_result = await supabase_execute(
-        supabase.table("conversations")
-        .select("client_number, account_id")
-        .eq("id", conversation_id)
-        .limit(1)
-    )
-    
-    if not conv_result.data or len(conv_result.data) == 0:
+    conv = None
+    if get_pool():
+        conv = await fetch_one(
+            "SELECT client_number, account_id FROM conversations WHERE id = $1::uuid LIMIT 1",
+            conversation_id,
+        )
+    else:
+        conv_result = await supabase_execute(
+            supabase.table("conversations")
+            .select("client_number, account_id")
+            .eq("id", conversation_id)
+            .limit(1)
+        )
+        if conv_result.data and len(conv_result.data) > 0:
+            conv = conv_result.data[0]
+    if not conv:
         return False
     
-    phone_number = conv_result.data[0]["client_number"]
-    account_id = conv_result.data[0]["account_id"]
+    phone_number = conv["client_number"]
+    account_id = conv["account_id"]
     
-    # Trouver la campagne active la plus récente pour ce numéro
-    # (on prend la dernière campagne où le message a été envoyé mais pas encore répondu)
-    stats_result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .select("id, campaign_id, sent_at")
-        .eq("phone_number", phone_number)
-        .is_("replied_at", "null")
-        .not_.is_("sent_at", "null")
-        .order("sent_at", desc=True)
-        .limit(1)
-    )
+    stat = None
+    if get_pool():
+        stat = await fetch_one(
+            """
+            SELECT id, campaign_id, sent_at FROM broadcast_recipient_stats
+            WHERE phone_number = $1 AND replied_at IS NULL AND sent_at IS NOT NULL
+            ORDER BY sent_at DESC
+            LIMIT 1
+            """,
+            phone_number,
+        )
+    else:
+        stats_result = await supabase_execute(
+            supabase.table("broadcast_recipient_stats")
+            .select("id, campaign_id, sent_at")
+            .eq("phone_number", phone_number)
+            .is_("replied_at", "null")
+            .not_.is_("sent_at", "null")
+            .order("sent_at", desc=True)
+            .limit(1)
+        )
+        if stats_result.data and len(stats_result.data) > 0:
+            stat = stats_result.data[0]
     
-    if not stats_result.data or len(stats_result.data) == 0:
+    if not stat:
         return False
-    
-    stat = stats_result.data[0]
     
     # Mettre à jour la stat
     await update_recipient_stat(stat["id"], {
@@ -779,25 +1012,39 @@ async def track_reply(conversation_id: str, message_id: str) -> bool:
 
 async def update_campaign_counters(campaign_id: str) -> bool:
     """Met à jour les compteurs agrégés d'une campagne"""
-    # Compter les stats
+    if get_pool():
+        stats = await fetch_all(
+            "SELECT sent_at, delivered_at, read_at, replied_at, failed_at FROM broadcast_recipient_stats WHERE campaign_id = $1::uuid",
+            campaign_id,
+        )
+        if not stats:
+            return False
+        sent_count = sum(1 for s in stats if s.get("sent_at"))
+        delivered_count = sum(1 for s in stats if s.get("delivered_at"))
+        read_count = sum(1 for s in stats if s.get("read_at"))
+        replied_count = sum(1 for s in stats if s.get("replied_at"))
+        failed_count = sum(1 for s in stats if s.get("failed_at"))
+        await pg_execute(
+            """
+            UPDATE broadcast_campaigns SET sent_count = $2, delivered_count = $3, read_count = $4, replied_count = $5, failed_count = $6
+            WHERE id = $1::uuid
+            """,
+            campaign_id, sent_count, delivered_count, read_count, replied_count, failed_count,
+        )
+        return True
     stats_result = await supabase_execute(
         supabase.table("broadcast_recipient_stats")
         .select("sent_at, delivered_at, read_at, replied_at, failed_at")
         .eq("campaign_id", campaign_id)
     )
-    
     if not stats_result.data:
         return False
-    
     stats = stats_result.data
-    
     sent_count = sum(1 for s in stats if s.get("sent_at"))
     delivered_count = sum(1 for s in stats if s.get("delivered_at"))
     read_count = sum(1 for s in stats if s.get("read_at"))
     replied_count = sum(1 for s in stats if s.get("replied_at"))
     failed_count = sum(1 for s in stats if s.get("failed_at"))
-    
-    # Mettre à jour la campagne
     await supabase_execute(
         supabase.table("broadcast_campaigns")
         .update({
@@ -809,7 +1056,6 @@ async def update_campaign_counters(campaign_id: str) -> bool:
         })
         .eq("id", campaign_id)
     )
-    
     return True
 
 
@@ -819,15 +1065,42 @@ async def get_campaign_stats(campaign_id: str) -> Dict[str, Any]:
     if not campaign:
         raise ValueError("Campaign not found")
     
-    # Récupérer toutes les stats des destinataires
-    stats_result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .select("*, broadcast_group_recipients(display_name, phone_number, contacts(display_name, whatsapp_number))")
-        .eq("campaign_id", campaign_id)
-        .order("created_at", desc=False)
-    )
-    
-    recipients = stats_result.data or []
+    if get_pool():
+        rows = await fetch_all(
+            """
+            SELECT s.*, r.display_name AS recipient_display_name, r.phone_number AS recipient_phone_number,
+                   c.display_name AS contact_display_name, c.whatsapp_number AS contact_whatsapp_number
+            FROM broadcast_recipient_stats s
+            LEFT JOIN broadcast_group_recipients r ON r.id = s.recipient_id
+            LEFT JOIN contacts c ON c.id = r.contact_id
+            WHERE s.campaign_id = $1::uuid
+            ORDER BY s.created_at ASC
+            """,
+            campaign_id,
+        )
+        recipients = []
+        for r in rows:
+            row = dict(r)
+            row["broadcast_group_recipients"] = {
+                "display_name": row.pop("recipient_display_name", None),
+                "phone_number": row.pop("recipient_phone_number", None),
+                "contacts": {
+                    "display_name": row.pop("contact_display_name", None),
+                    "whatsapp_number": row.pop("contact_whatsapp_number", None),
+                } if row.get("contact_display_name") is not None or row.get("contact_whatsapp_number") is not None else None,
+            }
+            for k in list(row.keys()):
+                if k.startswith("recipient_") or k.startswith("contact_"):
+                    row.pop(k, None)
+            recipients.append(row)
+    else:
+        stats_result = await supabase_execute(
+            supabase.table("broadcast_recipient_stats")
+            .select("*, broadcast_group_recipients(display_name, phone_number, contacts(display_name, whatsapp_number))")
+            .eq("campaign_id", campaign_id)
+            .order("created_at", desc=False)
+        )
+        recipients = stats_result.data or []
     
     # Calculer les taux
     total = campaign.get("total_recipients", 0)
@@ -857,14 +1130,18 @@ async def get_campaign_stats(campaign_id: str) -> Dict[str, Any]:
 
 async def get_campaign_heatmap(campaign_id: str) -> Dict[str, Any]:
     """Récupère les données pour la heat map (heures/jours)"""
-    # Récupérer les stats avec read_at et replied_at
-    stats_result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .select("read_at, replied_at")
-        .eq("campaign_id", campaign_id)
-    )
-    
-    stats = stats_result.data or []
+    if get_pool():
+        stats = await fetch_all(
+            "SELECT read_at, replied_at FROM broadcast_recipient_stats WHERE campaign_id = $1::uuid",
+            campaign_id,
+        )
+    else:
+        stats_result = await supabase_execute(
+            supabase.table("broadcast_recipient_stats")
+            .select("read_at, replied_at")
+            .eq("campaign_id", campaign_id)
+        )
+        stats = stats_result.data or []
     
     # Grouper par heure (0-23)
     read_by_hour = [0] * 24
@@ -920,15 +1197,19 @@ async def get_campaign_timeline(campaign_id: str) -> List[Dict[str, Any]]:
     from datetime import datetime as dt
     start_time = dt.fromisoformat(sent_at.replace('Z', '+00:00'))
     
-    # Récupérer toutes les stats avec timestamps
-    stats_result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats")
-        .select("read_at, replied_at")
-        .eq("campaign_id", campaign_id)
-        .order("read_at", desc=False)
-    )
-    
-    stats = stats_result.data or []
+    if get_pool():
+        stats = await fetch_all(
+            "SELECT read_at, replied_at FROM broadcast_recipient_stats WHERE campaign_id = $1::uuid ORDER BY read_at ASC NULLS LAST",
+            campaign_id,
+        )
+    else:
+        stats_result = await supabase_execute(
+            supabase.table("broadcast_recipient_stats")
+            .select("read_at, replied_at")
+            .eq("campaign_id", campaign_id)
+            .order("read_at", desc=False)
+        )
+        stats = stats_result.data or []
     
     # Créer des points de timeline (cumulatif)
     timeline = []

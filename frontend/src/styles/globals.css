@@ -1616,6 +1616,35 @@ body {
   font-size: 0.85rem;
   color: var(--text-secondary);
   align-items: center;
+  gap: 8px;
+}
+
+.conversation-meta__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.conversation-meta__phone {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-meta__preview {
+  display: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 768px) {
+  .conversation-meta__phone {
+    display: none;
+  }
+  .conversation-meta__preview {
+    display: block;
+  }
 }
 
 .badge {

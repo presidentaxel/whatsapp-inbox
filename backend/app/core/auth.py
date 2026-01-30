@@ -1,16 +1,18 @@
 from types import SimpleNamespace
+import asyncio
 import hashlib
+import logging
 
 import httpx
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from starlette.concurrency import run_in_threadpool
 
 from app.core.cache import get_cached_or_fetch
 from app.core.config import settings
 from app.core.http_client import get_http_client
-from app.core.permissions import CurrentUser, load_current_user
+from app.core.permissions import CurrentUser, load_current_user_async
 
+logger = logging.getLogger(__name__)
 http_bearer = HTTPBearer(auto_error=False)
 
 
@@ -89,7 +91,7 @@ async def get_current_user(
     
     async def fetch_and_load_user():
         supabase_user = await _fetch_supabase_user(token)
-        return await run_in_threadpool(load_current_user, supabase_user)
+        return await load_current_user_async(supabase_user)
     
     return await get_cached_or_fetch(
         key=cache_key,

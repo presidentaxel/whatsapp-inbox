@@ -22,6 +22,10 @@ class Settings:
     # Supabase
     SUPABASE_URL: str | None = os.getenv("SUPABASE_URL")
     SUPABASE_KEY: str | None = os.getenv("SUPABASE_KEY")
+
+    # PostgreSQL direct (optionnel). Si défini, le backend utilise asyncpg au lieu de l'API Supabase pour les requêtes DB.
+    # Format: postgresql://user:password@host:port/dbname (ex: Supabase Database → Connection string, mode Session ou Transaction)
+    DATABASE_URL: str | None = os.getenv("DATABASE_URL")
     
     # WhatsApp (configuration de base)
     WHATSAPP_TOKEN: str | None = os.getenv("WHATSAPP_TOKEN")

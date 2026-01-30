@@ -4,10 +4,36 @@ from typing import Optional
 from fastapi import HTTPException
 
 from app.core.cache import cached, invalidate_cache_pattern
-from app.core.db import supabase, supabase_execute
+from app.core.db import supabase, supabase_execute, SUPABASE_IN_CLAUSE_CHUNK_SIZE
+from app.core.pg import fetch_all, fetch_one, execute, get_pool
 from app.services.account_service import get_account_by_id
 
 logger = logging.getLogger(__name__)
+
+
+def _format_last_message(last_message_type: Optional[str], last_content_text: Optional[str]) -> str:
+    """Formate le dernier message pour l'affichage liste."""
+    if not last_message_type:
+        return ""
+    if last_message_type == "text":
+        content = (last_content_text or "")[:60]
+        return content + "..." if len(last_content_text or "") > 60 else content
+    if last_message_type == "image":
+        return "[image]"
+    if last_message_type == "video":
+        return "[video]"
+    if last_message_type == "audio":
+        return "[audio]"
+    if last_message_type == "document":
+        return "[document]"
+    if last_message_type == "location":
+        return "[location]"
+    if last_message_type == "contacts":
+        return "[contact]"
+    if last_message_type == "interactive":
+        return "[interactive]"
+    content = (last_content_text or "")[:60]
+    return content + "..." if len(last_content_text or "") > 60 else content
 
 
 async def get_all_conversations(
@@ -19,6 +45,64 @@ async def get_all_conversations(
     if not account:
         return None
 
+    pool = get_pool()
+    if pool:
+        # PostgreSQL direct: une seule requête avec LATERAL pour le dernier message
+        sql = """
+            SELECT c.id, c.contact_id, c.account_id, c.client_number, c.is_group, c.is_favorite,
+                   c.unread_count, c.status, c.updated_at, c.bot_enabled,
+                   co.display_name AS contact_display_name,
+                   co.whatsapp_number AS contact_whatsapp_number,
+                   co.profile_picture_url AS contact_profile_picture_url,
+                   lm.content_text AS last_content_text,
+                   lm.message_type AS last_message_type
+            FROM conversations c
+            LEFT JOIN contacts co ON co.id = c.contact_id
+            LEFT JOIN LATERAL (
+                SELECT m.content_text, m.message_type
+                FROM messages m
+                WHERE m.conversation_id = c.id AND m.message_type != 'reaction'
+                ORDER BY m.timestamp DESC
+                LIMIT 1
+            ) lm ON true
+            WHERE c.account_id = $1
+        """
+        params: list = [account_id]
+        if cursor:
+            sql += " AND c.updated_at < $2"
+            params.append(cursor)
+            params.append(limit)
+            sql += " ORDER BY c.updated_at DESC LIMIT $3"
+        else:
+            params.append(limit)
+            sql += " ORDER BY c.updated_at DESC LIMIT $2"
+        rows = await fetch_all(sql, *params)
+        conversations = []
+        for r in rows:
+            conv = {
+                "id": r["id"],
+                "contact_id": r["contact_id"],
+                "account_id": r["account_id"],
+                "client_number": r["client_number"],
+                "is_group": r.get("is_group", False),
+                "is_favorite": r.get("is_favorite", False),
+                "unread_count": r.get("unread_count", 0),
+                "status": r.get("status", "open"),
+                "updated_at": r["updated_at"],
+                "bot_enabled": r.get("bot_enabled", False),
+                "contacts": {
+                    "display_name": r.get("contact_display_name"),
+                    "whatsapp_number": r.get("contact_whatsapp_number"),
+                    "profile_picture_url": r.get("contact_profile_picture_url"),
+                },
+                "last_message": _format_last_message(
+                    r.get("last_message_type"), r.get("last_content_text")
+                ),
+            }
+            conversations.append(conv)
+        return conversations
+
+    # Fallback Supabase API
     query = (
         supabase.table("conversations")
         .select("*, contacts(display_name, whatsapp_number, profile_picture_url)")
@@ -34,23 +118,22 @@ async def get_all_conversations(
     if not conversations:
         return []
     
-    # Récupérer le dernier message de chaque conversation
     conversation_ids = [c["id"] for c in conversations]
+    all_messages = []
+    for i in range(0, len(conversation_ids), SUPABASE_IN_CLAUSE_CHUNK_SIZE):
+        chunk = conversation_ids[i : i + SUPABASE_IN_CLAUSE_CHUNK_SIZE]
+        messages_query = (
+            supabase.table("messages")
+            .select("conversation_id, content_text, message_type, timestamp")
+            .in_("conversation_id", chunk)
+            .neq("message_type", "reaction")
+            .order("timestamp", desc=True)
+            .limit(1000)
+        )
+        messages_res = await supabase_execute(messages_query)
+        chunk_data = messages_res.data if messages_res.data else []
+        all_messages.extend(chunk_data)
     
-    # Récupérer tous les messages récents (en excluant les réactions) et filtrer en Python
-    # On récupère plus de messages que nécessaire pour s'assurer d'avoir le dernier de chaque conversation
-    messages_query = (
-        supabase.table("messages")
-        .select("conversation_id, content_text, message_type, timestamp")
-        .in_("conversation_id", conversation_ids)
-        .neq("message_type", "reaction")
-        .order("timestamp", desc=True)
-        .limit(1000)  # Limite généreuse pour couvrir toutes les conversations
-    )
-    messages_res = await supabase_execute(messages_query)
-    all_messages = messages_res.data if messages_res.data else []
-    
-    # Grouper par conversation_id et prendre le premier (le plus récent)
     last_messages_map = {}
     seen_conversations = set()
     for msg in all_messages:
@@ -59,33 +142,12 @@ async def get_all_conversations(
             last_messages_map[conv_id] = msg
             seen_conversations.add(conv_id)
     
-    # Fusionner les derniers messages avec les conversations
     for conv in conversations:
         last_msg = last_messages_map.get(conv["id"])
         if last_msg:
-            # Formater le texte du dernier message selon le type
-            if last_msg.get("message_type") == "text":
-                content = last_msg.get("content_text", "") or ""
-                # Tronquer à 60 caractères pour l'affichage mobile
-                conv["last_message"] = content[:60] + "..." if len(content) > 60 else content
-            elif last_msg.get("message_type") == "image":
-                conv["last_message"] = "[image]"
-            elif last_msg.get("message_type") == "video":
-                conv["last_message"] = "[video]"
-            elif last_msg.get("message_type") == "audio":
-                conv["last_message"] = "[audio]"
-            elif last_msg.get("message_type") == "document":
-                conv["last_message"] = "[document]"
-            elif last_msg.get("message_type") == "location":
-                conv["last_message"] = "[location]"
-            elif last_msg.get("message_type") == "contacts":
-                conv["last_message"] = "[contact]"
-            elif last_msg.get("message_type") == "interactive":
-                conv["last_message"] = "[interactive]"
-            else:
-                content = last_msg.get("content_text", "") or ""
-                # Tronquer à 60 caractères pour l'affichage mobile
-                conv["last_message"] = content[:60] + "..." if len(content) > 60 else content
+            conv["last_message"] = _format_last_message(
+                last_msg.get("message_type"), last_msg.get("content_text")
+            )
         else:
             conv["last_message"] = ""
     
@@ -98,10 +160,15 @@ async def mark_conversation_read(conversation_id: str) -> bool:
     Gère les erreurs gracieusement pour éviter les ECONNRESET.
     """
     try:
-        await supabase_execute(
-            supabase.table("conversations").update({"unread_count": 0}).eq("id", conversation_id)
-        )
-        # Invalider le cache pour forcer le rechargement (ne pas faire échouer si ça échoue)
+        if get_pool():
+            await execute(
+                "UPDATE conversations SET unread_count = 0 WHERE id = $1::uuid",
+                conversation_id,
+            )
+        else:
+            await supabase_execute(
+                supabase.table("conversations").update({"unread_count": 0}).eq("id", conversation_id)
+            )
         try:
             await invalidate_cache_pattern(f"conversation:{conversation_id}")
         except Exception as cache_error:
@@ -109,21 +176,24 @@ async def mark_conversation_read(conversation_id: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Error marking conversation {conversation_id} as read: {e}", exc_info=True)
-        # Ne pas lever l'exception pour éviter ECONNRESET, mais retourner False
         return False
 
 
 async def mark_conversation_unread(conversation_id: str) -> bool:
     """
     Marque une conversation comme non lue en mettant unread_count à 1.
-    Permet à l'utilisateur de marquer manuellement une conversation pour y revenir plus tard.
     Gère les erreurs gracieusement pour éviter les ECONNRESET.
     """
     try:
-        await supabase_execute(
-            supabase.table("conversations").update({"unread_count": 1}).eq("id", conversation_id)
-        )
-        # Invalider le cache pour forcer le rechargement (ne pas faire échouer si ça échoue)
+        if get_pool():
+            await execute(
+                "UPDATE conversations SET unread_count = 1 WHERE id = $1::uuid",
+                conversation_id,
+            )
+        else:
+            await supabase_execute(
+                supabase.table("conversations").update({"unread_count": 1}).eq("id", conversation_id)
+            )
         try:
             await invalidate_cache_pattern(f"conversation:{conversation_id}")
         except Exception as cache_error:
@@ -131,25 +201,67 @@ async def mark_conversation_unread(conversation_id: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"Error marking conversation {conversation_id} as unread: {e}", exc_info=True)
-        # Ne pas lever l'exception pour éviter ECONNRESET, mais retourner False
         return False
 
 
 async def set_conversation_favorite(conversation_id: str, favorite: bool) -> bool:
-    await supabase_execute(
-        supabase.table("conversations").update({"is_favorite": favorite}).eq("id", conversation_id)
-    )
-    # Invalider le cache pour forcer le rechargement
+    if get_pool():
+        await execute(
+            "UPDATE conversations SET is_favorite = $2 WHERE id = $1::uuid",
+            conversation_id,
+            favorite,
+        )
+    else:
+        await supabase_execute(
+            supabase.table("conversations").update({"is_favorite": favorite}).eq("id", conversation_id)
+        )
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
     return True
+
+
+def _row_to_conversation(r: dict) -> dict:
+    """Construit un dict conversation depuis une ligne PG (avec ou sans contact)."""
+    conv = {
+        "id": r["id"],
+        "contact_id": r.get("contact_id"),
+        "account_id": r["account_id"],
+        "client_number": r["client_number"],
+        "is_group": r.get("is_group", False),
+        "is_favorite": r.get("is_favorite", False),
+        "unread_count": r.get("unread_count", 0),
+        "status": r.get("status", "open"),
+        "updated_at": r.get("updated_at"),
+        "bot_enabled": r.get("bot_enabled", False),
+    }
+    if "contact_display_name" in r or "contact_whatsapp_number" in r:
+        conv["contacts"] = {
+            "display_name": r.get("contact_display_name"),
+            "whatsapp_number": r.get("contact_whatsapp_number"),
+            "profile_picture_url": r.get("contact_profile_picture_url"),
+        }
+    return conv
 
 
 @cached(ttl_seconds=60, key_prefix="conversation")
 async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
     """
     Récupère une conversation avec cache (1 min TTL).
-    Les conversations changent peu fréquemment.
     """
+    if get_pool():
+        row = await fetch_one(
+            """
+            SELECT c.id, c.contact_id, c.account_id, c.client_number, c.is_group, c.is_favorite,
+                   c.unread_count, c.status, c.updated_at, c.bot_enabled,
+                   co.display_name AS contact_display_name,
+                   co.whatsapp_number AS contact_whatsapp_number,
+                   co.profile_picture_url AS contact_profile_picture_url
+            FROM conversations c
+            LEFT JOIN contacts co ON co.id = c.contact_id
+            WHERE c.id = $1::uuid
+            """,
+            conversation_id,
+        )
+        return _row_to_conversation(row) if row else None
     res = await supabase_execute(
         supabase.table("conversations").select("*").eq("id", conversation_id).limit(1)
     )
@@ -159,12 +271,33 @@ async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
 
 
 async def set_conversation_bot_mode(conversation_id: str, enabled: bool) -> Optional[dict]:
-    await supabase_execute(
-        supabase.table("conversations").update({"bot_enabled": enabled}).eq("id", conversation_id)
-    )
-    # CRUCIAL: Invalider le cache immédiatement pour que les webhooks voient le changement
+    if get_pool():
+        await execute(
+            "UPDATE conversations SET bot_enabled = $2 WHERE id = $1::uuid",
+            conversation_id,
+            enabled,
+        )
+    else:
+        await supabase_execute(
+            supabase.table("conversations").update({"bot_enabled": enabled}).eq("id", conversation_id)
+        )
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
     
+    if get_pool():
+        row = await fetch_one(
+            """
+            SELECT c.id, c.contact_id, c.account_id, c.client_number, c.is_group, c.is_favorite,
+                   c.unread_count, c.status, c.updated_at, c.bot_enabled,
+                   co.display_name AS contact_display_name,
+                   co.whatsapp_number AS contact_whatsapp_number,
+                   co.profile_picture_url AS contact_profile_picture_url
+            FROM conversations c
+            LEFT JOIN contacts co ON co.id = c.contact_id
+            WHERE c.id = $1::uuid
+            """,
+            conversation_id,
+        )
+        return _row_to_conversation(row) if row else None
     updated = await supabase_execute(
         supabase.table("conversations").select("*").eq("id", conversation_id).limit(1)
     )

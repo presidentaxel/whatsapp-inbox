@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Sequence
 
 from app.core.config import settings
 from app.core.db import supabase, supabase_execute
+from app.core.pg import execute as pg_execute, fetch_all, fetch_one, get_pool
 
 DEFAULT_ACCOUNT_SLUG = "default-env-account"
 _CACHE_TTL_SECONDS = 60
@@ -65,6 +66,31 @@ def invalidate_account_cache(account_id: str):
 
 async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Sequence[Dict[str, Any]]:
     await ensure_default_account()
+    if get_pool():
+        if account_ids is not None and not account_ids:
+            return []
+        if account_ids is not None:
+            rows = await fetch_all(
+                """
+                SELECT id, name, slug, phone_number, phone_number_id, is_active, google_drive_enabled,
+                       google_drive_folder_id, google_drive_access_token, google_drive_refresh_token, google_drive_token_expiry
+                FROM whatsapp_accounts
+                WHERE is_active = true AND id = ANY($1::uuid[])
+                ORDER BY name
+                """,
+                list(account_ids),
+            )
+        else:
+            rows = await fetch_all(
+                """
+                SELECT id, name, slug, phone_number, phone_number_id, is_active, google_drive_enabled,
+                       google_drive_folder_id, google_drive_access_token, google_drive_refresh_token, google_drive_token_expiry
+                FROM whatsapp_accounts
+                WHERE is_active = true
+                ORDER BY name
+                """
+            )
+        return rows
     query = (
         supabase.table("whatsapp_accounts")
         .select("id,name,slug,phone_number,phone_number_id,is_active,google_drive_enabled,google_drive_folder_id,google_drive_access_token,google_drive_refresh_token,google_drive_token_expiry")
@@ -76,7 +102,7 @@ async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Seque
             return []
         query = query.in_("id", list(account_ids))
     res = await supabase_execute(query)
-    return res.data
+    return res.data or []
 
 
 async def get_account_by_id(account_id: str) -> Optional[Dict[str, Any]]:
@@ -86,6 +112,22 @@ async def get_account_by_id(account_id: str) -> Optional[Dict[str, Any]]:
     cached = _cache_get(_account_cache, account_id)
     if cached:
         return cached
+
+    if get_pool():
+        row = await fetch_one(
+            "SELECT * FROM whatsapp_accounts WHERE id = $1::uuid LIMIT 1",
+            account_id,
+        )
+        if row:
+            record = dict(row)
+            _cache_set(_account_cache, account_id, record)
+            if record.get("phone_number_id"):
+                _cache_set(_phone_cache, record["phone_number_id"], record)
+            if record.get("verify_token"):
+                _cache_set(_verify_cache, record["verify_token"], record)
+            return record
+        _cache_pop(_account_cache, account_id)
+        return None
 
     res = await supabase_execute(
         supabase.table("whatsapp_accounts").select("*").eq("id", account_id).limit(1)
@@ -112,6 +154,17 @@ async def get_account_by_verify_token(token: str | None) -> Optional[Dict[str, A
         return cached
 
     await ensure_default_account()
+    if get_pool():
+        row = await fetch_one(
+            "SELECT * FROM whatsapp_accounts WHERE verify_token = $1 LIMIT 1",
+            token,
+        )
+        if row:
+            record = dict(row)
+            _cache_set(_verify_cache, token, record)
+            return record
+        _cache_pop(_verify_cache, token)
+        return None
     res = await supabase_execute(
         supabase.table("whatsapp_accounts").select("*").eq("verify_token", token).limit(1)
     )
@@ -132,6 +185,18 @@ async def get_account_by_phone_number_id(phone_number_id: str | None) -> Optiona
         return cached
 
     await ensure_default_account()
+    if get_pool():
+        row = await fetch_one(
+            "SELECT * FROM whatsapp_accounts WHERE phone_number_id = $1 LIMIT 1",
+            phone_number_id,
+        )
+        if row:
+            record = dict(row)
+            _cache_set(_phone_cache, phone_number_id, record)
+            _cache_set(_account_cache, record["id"], record)
+            return record
+        _cache_pop(_phone_cache, phone_number_id)
+        return None
     res = await supabase_execute(
         supabase.table("whatsapp_accounts")
         .select("*")
@@ -164,12 +229,22 @@ async def ensure_default_account() -> Optional[Dict[str, Any]]:
     if _default_account_synced and _default_account_record:
         return _default_account_record
 
-    existing = await supabase_execute(
-        supabase.table("whatsapp_accounts").select("*").eq("slug", DEFAULT_ACCOUNT_SLUG).limit(1)
-    )
+    record = None
+    if get_pool():
+        record = await fetch_one(
+            "SELECT * FROM whatsapp_accounts WHERE slug = $1 LIMIT 1",
+            DEFAULT_ACCOUNT_SLUG,
+        )
+        if record:
+            record = dict(record)
+    else:
+        existing = await supabase_execute(
+            supabase.table("whatsapp_accounts").select("*").eq("slug", DEFAULT_ACCOUNT_SLUG).limit(1)
+        )
+        if existing.data:
+            record = existing.data[0]
 
-    if existing.data:
-        record = existing.data[0]
+    if record:
         updates: Dict[str, Any] = {}
         if record.get("phone_number_id") != settings.WHATSAPP_PHONE_ID:
             updates["phone_number_id"] = settings.WHATSAPP_PHONE_ID
@@ -183,7 +258,18 @@ async def ensure_default_account() -> Optional[Dict[str, Any]]:
         ):
             updates["phone_number"] = settings.WHATSAPP_PHONE_NUMBER
 
-        if updates:
+        if updates and get_pool():
+            # Build dynamic UPDATE
+            set_parts = []
+            args = []
+            for i, (k, v) in enumerate(updates.items(), 1):
+                set_parts.append(f"{k} = ${i}")
+                args.append(v)
+            args.append(record["id"])
+            q = "UPDATE whatsapp_accounts SET " + ", ".join(set_parts) + f" WHERE id = ${len(args)}::uuid"
+            await pg_execute(q, *args)
+            record.update(updates)
+        elif updates:
             await supabase_execute(
                 supabase.table("whatsapp_accounts").update(updates).eq("id", record["id"])
             )
@@ -197,6 +283,31 @@ async def ensure_default_account() -> Optional[Dict[str, Any]]:
             _cache_set(_verify_cache, record["verify_token"], record)
         return record
 
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO whatsapp_accounts (name, slug, phone_number, phone_number_id, access_token, verify_token, is_active)
+            VALUES ($1, $2, $3, $4, $5, $6, true)
+            RETURNING *
+            """,
+            "Compte par défaut",
+            DEFAULT_ACCOUNT_SLUG,
+            settings.WHATSAPP_PHONE_NUMBER,
+            settings.WHATSAPP_PHONE_ID,
+            settings.WHATSAPP_TOKEN,
+            settings.WHATSAPP_VERIFY_TOKEN,
+        )
+        if row:
+            record = dict(row)
+            _default_account_synced = True
+            _default_account_record = record
+            _cache_set(_account_cache, record["id"], record)
+            if record.get("phone_number_id"):
+                _cache_set(_phone_cache, record["phone_number_id"], record)
+            if record.get("verify_token"):
+                _cache_set(_verify_cache, record["verify_token"], record)
+            return record
+        return None
     payload = {
         "name": "Compte par défaut",
         "slug": DEFAULT_ACCOUNT_SLUG,
@@ -235,8 +346,23 @@ async def expose_accounts_limited(account_ids: Optional[Sequence[str]]) -> Seque
 
 async def create_account(payload: Dict[str, Any]) -> Dict[str, Any]:
     await ensure_default_account()
-    result = await supabase_execute(supabase.table("whatsapp_accounts").insert(payload))
-    record = result.data[0]
+    if get_pool():
+        if not payload:
+            raise ValueError("Empty payload")
+        cols = list(payload.keys())
+        vals = [payload[k] for k in cols]
+        placeholders = ", ".join(f"${i+1}" for i in range(len(cols)))
+        col_list = ", ".join(cols)
+        row = await fetch_one(
+            f"INSERT INTO whatsapp_accounts ({col_list}) VALUES ({placeholders}) RETURNING *",
+            *vals,
+        )
+        if not row:
+            raise ValueError("Failed to create account")
+        record = dict(row)
+    else:
+        result = await supabase_execute(supabase.table("whatsapp_accounts").insert(payload))
+        record = result.data[0]
     _cache_set(_account_cache, record["id"], record)
     if record.get("phone_number_id"):
         _cache_set(_phone_cache, record["phone_number_id"], record)
@@ -247,26 +373,35 @@ async def create_account(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 async def update_account(account_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Met à jour un compte WhatsApp"""
-    await supabase_execute(
-        supabase.table("whatsapp_accounts")
-        .update(updates)
-        .eq("id", account_id)
-    )
-    # Invalider le cache
+    if get_pool() and updates:
+        set_parts = []
+        args = []
+        for i, (k, v) in enumerate(updates.items(), 1):
+            set_parts.append(f"{k} = ${i}")
+            args.append(v)
+        args.append(account_id)
+        await pg_execute(
+            "UPDATE whatsapp_accounts SET " + ", ".join(set_parts) + f" WHERE id = ${len(args)}::uuid",
+            *args,
+        )
+    elif not get_pool():
+        await supabase_execute(
+            supabase.table("whatsapp_accounts").update(updates).eq("id", account_id)
+        )
     _cache_pop(_account_cache, account_id)
-    # Clear from derived caches
     for cache in (_phone_cache, _verify_cache):
         keys_to_purge = [key for key, (_, record) in cache.items() if record.get("id") == account_id]
         for key in keys_to_purge:
             cache.pop(key, None)
-    # Récupérer le compte mis à jour
     return await get_account_by_id(account_id)
 
 
 async def delete_account(account_id: str) -> bool:
-    await supabase_execute(supabase.table("whatsapp_accounts").delete().eq("id", account_id))
+    if get_pool():
+        await pg_execute("DELETE FROM whatsapp_accounts WHERE id = $1::uuid", account_id)
+    else:
+        await supabase_execute(supabase.table("whatsapp_accounts").delete().eq("id", account_id))
     _cache_pop(_account_cache, account_id)
-    # Clear from derived caches in case key equals id
     for cache in (_phone_cache, _verify_cache):
         keys_to_purge = [key for key, (_, record) in cache.items() if record.get("id") == account_id]
         for key in keys_to_purge:
