@@ -26,7 +26,8 @@ async def create_and_queue_template(
     header_text: Optional[str] = None,
     body_text: Optional[str] = None,
     footer_text: Optional[str] = None,
-    buttons: Optional[list] = None
+    buttons: Optional[list] = None,
+    created_by_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Crée un template Meta et le met en file d'attente
     
@@ -40,6 +41,7 @@ async def create_and_queue_template(
         body_text: Texte du body (optionnel, utilise text_content si non fourni)
         footer_text: Texte du footer (optionnel)
         buttons: Liste de boutons [{"id": "...", "title": "..."}] (optionnel)
+        created_by_user_id: Utilisateur ayant demandé l'envoi (optionnel)
     """
     
     logger.info("=" * 80)
@@ -252,11 +254,11 @@ async def create_and_queue_template(
             await pg_execute(
                 """
                 INSERT INTO pending_template_messages
-                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, template_hash, campaign_id)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9)
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, template_hash, campaign_id, created_by_user_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10::uuid)
                 """,
                 message_id, conversation_id, account_id, template_name, text_content,
-                meta_template_id, "PENDING", template_hash, campaign_id,
+                meta_template_id, "PENDING", template_hash, campaign_id, created_by_user_id,
             )
         else:
             pending_template_payload = {
@@ -271,6 +273,8 @@ async def create_and_queue_template(
             }
             if campaign_id:
                 pending_template_payload["campaign_id"] = campaign_id
+            if created_by_user_id is not None:
+                pending_template_payload["created_by_user_id"] = created_by_user_id
             await supabase_execute(
                 supabase.table("pending_template_messages").insert(pending_template_payload)
             )
@@ -342,7 +346,8 @@ async def create_and_queue_image_template(
     account_id: str,
     message_id: str,
     media_id: str,
-    body_text: str = "(image)"
+    body_text: str = "(image)",
+    created_by_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Crée un template Meta avec HEADER IMAGE et le met en file d'attente
     
@@ -352,6 +357,7 @@ async def create_and_queue_image_template(
         message_id: ID du message
         media_id: ID du média WhatsApp (image)
         body_text: Texte du body (par défaut "(image)")
+        created_by_user_id: Utilisateur ayant demandé l'envoi (optionnel)
     """
     
     logger.info("=" * 80)
@@ -626,11 +632,11 @@ async def create_and_queue_image_template(
             await pg_execute(
                 """
                 INSERT INTO pending_template_messages
-                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, template_hash, header_media_id)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9)
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, template_hash, header_media_id, created_by_user_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10::uuid)
                 """,
                 message_id, conversation_id, account_id, template_name, body_text,
-                meta_template_id, "PENDING", template_hash, uploaded_media_id,
+                meta_template_id, "PENDING", template_hash, uploaded_media_id, created_by_user_id,
             )
         else:
             pending_template_payload = {
@@ -644,6 +650,8 @@ async def create_and_queue_image_template(
                 "template_hash": template_hash,
                 "header_media_id": uploaded_media_id,
             }
+            if created_by_user_id is not None:
+                pending_template_payload["created_by_user_id"] = created_by_user_id
             await supabase_execute(
                 supabase.table("pending_template_messages").insert(pending_template_payload)
             )
@@ -1100,7 +1108,7 @@ async def send_pending_template(message_id: str):
         row = await fetch_one(
             """
             SELECT p.id, p.message_id, p.conversation_id, p.account_id, p.template_name, p.text_content,
-                   p.meta_template_id, p.template_status, p.header_media_id, p.campaign_id,
+                   p.meta_template_id, p.template_status, p.header_media_id, p.campaign_id, p.created_by_user_id,
                    c.client_number, w.phone_number_id, w.access_token
             FROM pending_template_messages p
             INNER JOIN conversations c ON c.id = p.conversation_id
@@ -1164,6 +1172,31 @@ async def send_pending_template(message_id: str):
         return
     
     # Sinon, envoi normal pour un message individuel
+    conversation_id = pending.get("conversation_id")
+    text_content = (pending.get("text_content") or "").strip()
+    if not text_content:
+        logger.warning(f"⚠️ [SEND-TEMPLATE] Pas de text_content pour le message {message_id}, envoi template")
+    else:
+        # Fallback: si la fenêtre est redevenue gratuite pendant l'attente, envoyer en gratuit et annuler le template
+        from app.services.message_service import is_within_free_window, send_message
+        is_free, _ = await is_within_free_window(conversation_id, skip_cache=True)
+        if is_free:
+            logger.info(f"✅ [SEND-TEMPLATE] Fenêtre gratuite rouverte pour {conversation_id} - envoi en gratuit et annulation du template")
+            print(f"✅ [SEND-TEMPLATE] Fenêtre gratuite - envoi en mode gratuit, annulation template pour message {message_id}")
+            payload = {
+                "conversation_id": conversation_id,
+                "content": text_content,
+                "existing_message_id": message_id,
+            }
+            if pending.get("created_by_user_id"):
+                payload["sent_by_user_id"] = pending["created_by_user_id"]
+            result = await send_message(payload, skip_bot_trigger=True)
+            if result.get("error"):
+                logger.warning(f"⚠️ [SEND-TEMPLATE] Envoi gratuit échoué: {result.get('error')}, on tente le template")
+            else:
+                await delete_auto_template_for_message(message_id)
+                return
+
     logger.info(f"📋 [SEND-TEMPLATE] Template à envoyer: {template_name} pour le message {message_id}")
     print(f"📋 [SEND-TEMPLATE] Template à envoyer: {template_name} pour le message {message_id}")
     

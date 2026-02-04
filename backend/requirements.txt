@@ -12,3 +12,4 @@ pydantic[email]
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
+locust>=2.20.0

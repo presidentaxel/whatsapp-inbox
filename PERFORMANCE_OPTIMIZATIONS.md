@@ -219,3 +219,28 @@ Après implémentation, surveiller :
 - Implémenter progressivement (pas tout en même temps)
 - Documenter les changements dans le code
 
+---
+
+## 🧪 Tests de performance (Locust)
+
+Un fichier `backend/locustfile.py` permet d'exécuter des tests de charge.
+
+```bash
+cd backend
+pip install locust
+
+# Tests health only (sans auth)
+locust -f locustfile.py --host=http://localhost:8000
+
+# Tests avec auth (endpoints protégés)
+$env:LOCUST_AUTH_TOKEN = "eyJ..."   # Windows
+$env:LOCUST_ACCOUNT_ID = "uuid"
+$env:LOCUST_CONVERSATION_ID = "uuid"
+locust -f locustfile.py --host=http://localhost:8000
+
+# Mode headless (10 users, 2/s, 60 secondes)
+locust -f locustfile.py --host=http://localhost:8000 --headless -u 10 -r 2 -t 60s
+```
+
+Ouvrir http://localhost:8089 pour l'interface Locust.
+

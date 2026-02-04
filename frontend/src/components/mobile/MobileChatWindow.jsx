@@ -185,10 +185,10 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
   useEffect(() => {
     if (!conversation?.id) return;
 
-    // Polling toutes les 5 secondes (évite d'écraser trop vite les messages optimistes)
+    // Polling toutes les 15 secondes (aligné avec ChatWindow, réduit charge)
     const pollInterval = setInterval(() => {
       refreshMessages();
-    }, 5000);
+    }, 15000);
 
     return () => {
       clearInterval(pollInterval);

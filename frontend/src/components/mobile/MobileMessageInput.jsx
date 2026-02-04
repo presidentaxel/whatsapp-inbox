@@ -124,7 +124,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         setTemplateSent(false);
         
         // Vérifier IMMÉDIATEMENT si on est toujours hors fenêtre gratuite
-        getMessagePrice(conversationId)
+        getMessagePrice(conversationId, true)
           .then(response => {
             const isFree = response.data?.is_free ?? true;
             const lastInbound = response.data?.last_inbound_time ?? null;
@@ -170,9 +170,9 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       return;
     }
 
-    const checkFreeWindow = async () => {
+    const checkFreeWindow = async (useFresh = false) => {
       try {
-        const response = await getMessagePrice(conversationId);
+        const response = await getMessagePrice(conversationId, useFresh);
         const isFree = response.data?.is_free ?? true;
         const lastInbound = response.data?.last_inbound_time ?? null;
         const wasOutsideFreeWindow = previousIsOutsideFreeWindowRef.current;
@@ -199,8 +199,31 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       }
     };
 
-    checkFreeWindow();
+    checkFreeWindow(true); // fresh au chargement pour éviter d'afficher "payant" à tort
   }, [conversationId, templateSent]);
+
+  // Polling: quand on est hors fenêtre gratuite, revérifier toutes les 45s avec fresh pour mettre à jour vite
+  useEffect(() => {
+    if (!conversationId || !isOutsideFreeWindow) return;
+    const intervalMs = 45000;
+    const timer = setInterval(async () => {
+      try {
+        const response = await getMessagePrice(conversationId, true);
+        const isFree = response.data?.is_free ?? true;
+        if (isFree) {
+          const lastInbound = response.data?.last_inbound_time ?? null;
+          setIsOutsideFreeWindow(false);
+          previousIsOutsideFreeWindowRef.current = false;
+          setFreeWindowDetail(lastInbound ? {
+            lastInboundTime: lastInbound,
+            hoursElapsed: lastInbound ? Math.round((Date.now() - new Date(lastInbound).getTime()) / 3600000) : null
+          } : null);
+          setTemplateSent((prev) => (prev ? false : prev));
+        }
+      } catch (_) {}
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [conversationId, isOutsideFreeWindow]);
 
   // Auto-resize du textarea
   const handleTextChange = (e) => {
@@ -276,7 +299,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       }
       
       // Vérifier si on est toujours hors fenêtre gratuite après l'envoi
-      getMessagePrice(conversationId)
+      getMessagePrice(conversationId, true)
         .then(response => {
           const isFree = response.data?.is_free ?? true;
           const lastInbound = response.data?.last_inbound_time ?? null;
@@ -444,7 +467,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       if (onSend && tempId && waMessageId) {
         onSend(null, false, { tempId, waMessageId });
       }
-      getMessagePrice(conversationId).then(r => {
+      getMessagePrice(conversationId, true).then(r => {
         const isFree = r.data?.is_free ?? true;
         const lastInbound = r.data?.last_inbound_time ?? null;
         setIsOutsideFreeWindow(!isFree);

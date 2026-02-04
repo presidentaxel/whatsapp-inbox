@@ -242,7 +242,8 @@ async def find_or_create_template(
     header_text: Optional[str] = None,
     body_text: Optional[str] = None,
     footer_text: Optional[str] = None,
-    buttons: Optional[list] = None
+    buttons: Optional[list] = None,
+    created_by_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Cherche un template existant ou crée un nouveau si nécessaire
     
@@ -307,12 +308,12 @@ async def find_or_create_template(
             await pg_execute(
                 """
                 INSERT INTO pending_template_messages
-                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, reused_from_template, template_hash, campaign_id)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::uuid, $9, $10::uuid)
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, reused_from_template, template_hash, campaign_id, created_by_user_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::uuid, $9, $10::uuid, $11::uuid)
                 """,
                 message_id, conversation_id, account_id, template_name, text_content,
                 existing_template.get("meta_template_id"), "APPROVED",
-                existing_template.get("template_id"), template_hash, campaign_id,
+                existing_template.get("template_id"), template_hash, campaign_id, created_by_user_id,
             )
         else:
             from app.core.db import supabase
@@ -329,6 +330,8 @@ async def find_or_create_template(
             }
             if campaign_id:
                 pending_template_payload["campaign_id"] = campaign_id
+            if created_by_user_id is not None:
+                pending_template_payload["created_by_user_id"] = created_by_user_id
             await supabase_execute(
                 supabase.table("pending_template_messages").insert(pending_template_payload)
             )
@@ -370,12 +373,12 @@ async def find_or_create_template(
             await pg_execute(
                 """
                 INSERT INTO pending_template_messages
-                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, reused_from_template, template_hash, campaign_id)
-                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::uuid, $9, $10::uuid)
+                (message_id, conversation_id, account_id, template_name, text_content, meta_template_id, template_status, reused_from_template, template_hash, campaign_id, created_by_user_id)
+                VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::uuid, $9, $10::uuid, $11::uuid)
                 """,
                 message_id, conversation_id, account_id, template_name, text_content,
                 existing_template.get("meta_template_id"), "PENDING",
-                existing_template.get("template_id"), template_hash, campaign_id,
+                existing_template.get("template_id"), template_hash, campaign_id, created_by_user_id,
             )
         else:
             from app.core.db import supabase
@@ -392,6 +395,8 @@ async def find_or_create_template(
             }
             if campaign_id:
                 pending_template_payload["campaign_id"] = campaign_id
+            if created_by_user_id is not None:
+                pending_template_payload["created_by_user_id"] = created_by_user_id
             await supabase_execute(
                 supabase.table("pending_template_messages").insert(pending_template_payload)
             )
@@ -444,7 +449,8 @@ async def find_or_create_template(
             header_text=header_text,
             body_text=body_text,
             footer_text=footer_text,
-            buttons=buttons
+            buttons=buttons,
+            created_by_user_id=created_by_user_id,
         )
         
         logger.info(f"🆕 [FIND-OR-CREATE] Résultat de create_and_queue_template: {result.get('success')}")

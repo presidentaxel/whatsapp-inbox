@@ -15,8 +15,10 @@ export const removeReaction = (data) => api.post("/messages/reactions/remove", d
 export const editMessage = (id, data) => api.patch(`/messages/${id}`, data);
 export const deleteMessageApi = (id, data) => api.post(`/messages/${id}/delete`, data);
 export const permanentlyDeleteMessage = (id) => api.delete(`/messages/${id}`);
-export const getMessagePrice = (conversationId) => api.get(`/messages/price/${conversationId}`);
-export const checkFreeWindow = (conversationId) => api.get(`/messages/free-window/${conversationId}`);
+export const getMessagePrice = (conversationId, fresh = false) =>
+  api.get(`/messages/price/${conversationId}`, { params: fresh ? { fresh: "1" } : {} });
+export const checkFreeWindow = (conversationId, fresh = false) =>
+  api.get(`/messages/free-window/${conversationId}`, { params: fresh ? { fresh: "1" } : {} });
 export const getAvailableTemplates = (conversationId) => api.get(`/messages/templates/${conversationId}`);
 export const sendTemplateMessage = (conversationId, data) => api.post(`/messages/send-template/${conversationId}`, data);
 export const sendMessageWithAutoTemplate = (data) => api.post("/messages/send-with-auto-template", data);

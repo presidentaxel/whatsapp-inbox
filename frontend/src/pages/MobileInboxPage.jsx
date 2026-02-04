@@ -114,12 +114,9 @@ export default function MobileInboxPage({ onLogout }) {
   useEffect(() => {
     if (activeAccount) {
       refreshConversations(activeAccount);
-      
-      // Polling toutes les 5 secondes
       const interval = setInterval(() => {
         refreshConversations(activeAccount);
-      }, 5000);
-      
+      }, 15000);
       return () => clearInterval(interval);
     }
   }, [activeAccount, refreshConversations]);
@@ -129,11 +126,18 @@ export default function MobileInboxPage({ onLogout }) {
   // Peu importe le compte, la plateforme, etc.
   useGlobalNotifications(selectedConversation?.id);
 
+  const optimisticallyMarkRead = useCallback((conversationIds) => {
+    const ids = new Set(Array.isArray(conversationIds) ? conversationIds : [conversationIds]);
+    setConversations((prev) =>
+      prev.map((c) => (ids.has(c.id) && c.unread_count > 0 ? { ...c, unread_count: 0 } : c))
+    );
+  }, []);
+
   const handleSelectConversation = async (conv) => {
     setSelectedConversation(conv);
     if (conv?.unread_count) {
-      await markConversationRead(conv.id);
-      refreshConversations(activeAccount);
+      optimisticallyMarkRead(conv.id);
+      markConversationRead(conv.id).catch(() => refreshConversations(activeAccount));
     }
   };
 
@@ -160,21 +164,18 @@ export default function MobileInboxPage({ onLogout }) {
 
   const handleMarkAllRead = async () => {
     try {
-      // Marquer toutes les conversations non lues comme lues pour le compte actif uniquement
-      // Les conversations sont déjà filtrées par compte dans le backend, mais on double-vérifie
       const unreadConversations = conversations.filter(
-        c => c.unread_count > 0 && (!c.account_id || c.account_id === activeAccount)
+        (c) => c.unread_count > 0 && (!c.account_id || c.account_id === activeAccount)
       );
-      if (unreadConversations.length === 0) {
-        return;
-      }
-      await Promise.all(
-        unreadConversations.map(conv => markConversationRead(conv.id))
+      if (unreadConversations.length === 0) return;
+      const ids = unreadConversations.map((c) => c.id);
+      optimisticallyMarkRead(ids);
+      Promise.all(ids.map((id) => markConversationRead(id))).catch(() =>
+        refreshConversations(activeAccount)
       );
-      // Rafraîchir les conversations
-      await refreshConversations(activeAccount);
     } catch (error) {
       console.error("Erreur lors du marquage de toutes les conversations comme lues:", error);
+      refreshConversations(activeAccount);
     }
   };
 

@@ -1,3 +1,4 @@
+import uuid as uuid_module
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
@@ -72,6 +73,7 @@ async def update_contact(
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """Met à jour un contact"""
+    _validate_contact_id(contact_id)
     current_user.require(PermissionCodes.CONTACTS_VIEW)
     
     # Vérifier que le contact existe
@@ -126,6 +128,7 @@ async def delete_contact(
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """Supprime un contact"""
+    _validate_contact_id(contact_id)
     current_user.require(PermissionCodes.CONTACTS_VIEW)
     
     # Vérifier que le contact existe
@@ -163,6 +166,7 @@ async def update_contact_profile_picture(
         contact_id: ID du contact
         account_id: ID du compte WhatsApp à utiliser pour récupérer l'image
     """
+    _validate_contact_id(contact_id)
     current_user.require(PermissionCodes.MESSAGES_VIEW, account_id)
     
     # Récupérer le contact
@@ -228,6 +232,16 @@ async def update_all_profile_pictures(
     }
 
 
+def _validate_contact_id(contact_id: str) -> None:
+    """Lève HTTPException 400 si contact_id n'est pas un UUID valide."""
+    if not contact_id or contact_id.strip() in ("undefined", "null", ""):
+        raise HTTPException(status_code=400, detail="contact_id is required and must be a valid UUID")
+    try:
+        uuid_module.UUID(contact_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="contact_id must be a valid UUID")
+
+
 @router.get("/{contact_id}/whatsapp-info")
 async def get_contact_whatsapp_info(
     contact_id: str,
@@ -242,6 +256,7 @@ async def get_contact_whatsapp_info(
         contact_id: ID du contact
         account_id: ID du compte WhatsApp à utiliser
     """
+    _validate_contact_id(contact_id)
     current_user.require(PermissionCodes.MESSAGES_VIEW, account_id)
     
     # Récupérer le contact

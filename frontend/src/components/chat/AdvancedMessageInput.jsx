@@ -213,7 +213,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         
         // Vérifier IMMÉDIATEMENT si on est toujours hors fenêtre gratuite
         // Cela permet une transition plus rapide vers la barre de saisie normale
-        getMessagePrice(conversation.id)
+        getMessagePrice(conversation.id, true)
           .then(response => {
             const isFree = response.data?.is_free ?? true;
             setIsOutsideFreeWindow(!isFree);
@@ -272,9 +272,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       return;
     }
 
-    const checkFreeWindow = async () => {
+    const checkFreeWindow = async (useFresh = false) => {
       try {
-        const response = await getMessagePrice(conversation.id);
+        const response = await getMessagePrice(conversation.id, useFresh);
         const isFree = response.data?.is_free ?? true;
         const wasOutsideFreeWindow = previousIsOutsideFreeWindowRef.current;
         const isNowOutsideFreeWindow = !isFree;
@@ -326,8 +326,27 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       }
     };
 
-    checkFreeWindow();
+    checkFreeWindow(true); // fresh au chargement pour éviter d'afficher "payant" à tort
   }, [conversation?.id]);
+
+  // Polling: quand on est hors fenêtre gratuite, revérifier toutes les 45s avec fresh pour mettre à jour vite
+  useEffect(() => {
+    if (!conversation?.id || !isOutsideFreeWindow) return;
+    const intervalMs = 45000;
+    const timer = setInterval(async () => {
+      try {
+        const response = await getMessagePrice(conversation.id, true);
+        const isFree = response.data?.is_free ?? true;
+        if (isFree) {
+          setIsOutsideFreeWindow(false);
+          previousIsOutsideFreeWindowRef.current = false;
+          setTemplates([]);
+          setTemplateSent((prev) => (prev ? false : prev));
+        }
+      } catch (_) {}
+    }, intervalMs);
+    return () => clearInterval(timer);
+  }, [conversation?.id, isOutsideFreeWindow]);
 
   // Charger le prix du message quand le texte change
   useEffect(() => {
@@ -644,7 +663,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       // Vérifier si on est toujours hors fenêtre gratuite
       // Après l'envoi du premier template, on devrait pouvoir envoyer des messages normaux
       // Faire cette vérification en parallèle pour ne pas bloquer
-      getMessagePrice(conversation.id)
+      getMessagePrice(conversation.id, true)
         .then(response => {
           const isFree = response.data?.is_free ?? true;
           setIsOutsideFreeWindow(!isFree);

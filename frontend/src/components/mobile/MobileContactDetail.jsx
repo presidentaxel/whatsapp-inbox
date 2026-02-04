@@ -19,9 +19,9 @@ export default function MobileContactDetail({ contact, activeAccount, onBack, on
     }
   }, [contact]);
 
-  // Récupérer les informations WhatsApp
+  // Récupérer les informations WhatsApp (uniquement si contact.id est défini)
   useEffect(() => {
-    if (contact && activeAccount && !isEditing) {
+    if (contact?.id && activeAccount && !isEditing) {
       setLoadingWhatsAppInfo(true);
       getContactWhatsAppInfo(contact.id, activeAccount)
         .then((res) => {

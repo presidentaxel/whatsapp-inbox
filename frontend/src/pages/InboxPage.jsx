@@ -137,42 +137,46 @@ export default function InboxPage() {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
+  // Update optimiste : mettre à jour unread_count localement sans refetch complet
+  const optimisticallyMarkRead = useCallback((conversationIds) => {
+    const ids = new Set(Array.isArray(conversationIds) ? conversationIds : [conversationIds]);
+    setConversations((prev) =>
+      prev.map((c) => (ids.has(c.id) && c.unread_count > 0 ? { ...c, unread_count: 0 } : c))
+    );
+  }, []);
+
   // Écouter les événements du Service Worker pour les notifications
   useEffect(() => {
     const handleMarkConversationRead = (event) => {
       const { conversationId } = event.detail;
       if (conversationId) {
-        markConversationRead(conversationId).then(() => {
-          refreshConversations();
-          clearConversationNotification(conversationId);
-        });
+        optimisticallyMarkRead(conversationId);
+        clearConversationNotification(conversationId);
+        markConversationRead(conversationId).catch(() => refreshConversations());
       }
     };
 
     const handleMarkAllRead = (event) => {
       const { conversationIds } = event.detail;
       if (conversationIds && conversationIds.length > 0) {
-        Promise.all(conversationIds.map(id => markConversationRead(id)))
-          .then(() => {
-            refreshConversations();
-            // Nettoyer toutes les conversations du stockage
-            conversationIds.forEach(id => clearConversationNotification(id));
-          });
+        optimisticallyMarkRead(conversationIds);
+        conversationIds.forEach((id) => clearConversationNotification(id));
+        Promise.all(conversationIds.map((id) => markConversationRead(id))).catch(() =>
+          refreshConversations()
+        );
       }
     };
 
     const handleOpenConversation = (event) => {
       const { conversationId } = event.detail;
       if (conversationId) {
-        // Trouver la conversation et la sélectionner
-        const conv = conversations.find(c => c.id === conversationId);
+        const conv = conversations.find((c) => c.id === conversationId);
         if (conv) {
           setSelectedConversation(conv);
           if (conv?.unread_count) {
-            markConversationRead(conv.id).then(() => {
-              refreshConversations();
-              clearConversationNotification(conv.id);
-            });
+            optimisticallyMarkRead(conv.id);
+            clearConversationNotification(conv.id);
+            markConversationRead(conv.id).catch(() => refreshConversations());
           }
         }
       }
@@ -187,7 +191,7 @@ export default function InboxPage() {
       window.removeEventListener('markAllConversationsRead', handleMarkAllRead);
       window.removeEventListener('openConversation', handleOpenConversation);
     };
-  }, [conversations, refreshConversations]);
+  }, [conversations, refreshConversations, optimisticallyMarkRead]);
 
   // Écouter TOUS les nouveaux messages pour afficher des notifications
   // Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
@@ -372,11 +376,9 @@ export default function InboxPage() {
   const handleSelectConversation = (conv) => {
     setSelectedConversation(conv);
     if (conv?.unread_count) {
-      markConversationRead(conv.id).then(() => {
-        refreshConversations();
-        // Nettoyer la notification pour cette conversation
-        clearConversationNotification(conv.id);
-      });
+      optimisticallyMarkRead(conv.id);
+      clearConversationNotification(conv.id);
+      markConversationRead(conv.id).catch(() => refreshConversations());
     }
   };
 
@@ -389,7 +391,7 @@ export default function InboxPage() {
     const poll = async () => {
       await refreshConversations(activeAccount);
       if (!cancelled) {
-        timeoutId = setTimeout(poll, 7000);
+        timeoutId = setTimeout(poll, 15000);
       }
     };
     poll();
@@ -684,6 +686,7 @@ export default function InboxPage() {
                 conversation={selectedConversation}
                 onFavoriteToggle={handleFavoriteToggle}
                 onBotModeChange={handleBotModeChange}
+                onMarkRead={optimisticallyMarkRead}
                 isWindowActive={isWindowActive && navMode === "chat"}
                 canSend={canSendMessage}
               />

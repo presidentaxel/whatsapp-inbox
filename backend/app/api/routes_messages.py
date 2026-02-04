@@ -41,6 +41,7 @@ from app.services.message_service import (
     update_message_content,
     delete_message_scope,
 )
+from app.core.cache import get_cache
 from app.services.media_background_service import process_unsaved_media_for_conversation
 from app.services import whatsapp_api_service
 from app.services.whatsapp_api_service import check_phone_number_has_whatsapp
@@ -134,6 +135,8 @@ async def send_api_message(payload: dict, current_user: CurrentUser = Depends(ge
     
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     
+    payload.setdefault("sent_by_user_id", str(current_user.id))
+    payload.setdefault("sent_via", "ui")
     # Envoyer le message normalement (force_send=True pour toujours envoyer, même hors fenêtre)
     # WhatsApp facturera automatiquement si hors fenêtre
     result = await send_message(payload, force_send=True)
@@ -199,6 +202,8 @@ async def send_with_auto_template(
     if is_free:
         # Envoi normal - utiliser l'endpoint existant
         logger.info("✅ [SEND-AUTO-TEMPLATE] Dans la fenêtre gratuite - envoi normal")
+        payload.setdefault("sent_by_user_id", str(current_user.id))
+        payload.setdefault("sent_via", "ui")
         result = await send_message(payload, force_send=True)
         if result.get("error"):
             logger.error(f"❌ [SEND-AUTO-TEMPLATE] Erreur lors de l'envoi: {result.get('error')}")
@@ -226,7 +231,9 @@ async def send_with_auto_template(
         "content_text": content,
         "status": "pending",
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "message_type": "text"
+        "message_type": "text",
+        "sent_by_user_id": str(current_user.id),
+        "sent_via": "ui",
     }
     
     # Insérer le message et récupérer l'ID
@@ -248,7 +255,8 @@ async def send_with_auto_template(
         conversation_id=conversation_id,
         account_id=conversation["account_id"],
         message_id=message_id,
-        text_content=content
+        text_content=content,
+        created_by_user_id=str(current_user.id),
     )
     
     logger.info(f"📋 [SEND-AUTO-TEMPLATE] Résultat de la création du template: success={template_result.get('success')}")
@@ -313,6 +321,8 @@ async def send_free_api_message(payload: dict, current_user: CurrentUser = Depen
     
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     
+    payload.setdefault("sent_by_user_id", str(current_user.id))
+    payload.setdefault("sent_via", "ui")
     result = await send_free_message(payload)
     
     # Si erreur de fenêtre expirée, retourner 400 avec détails
@@ -337,7 +347,8 @@ async def send_free_api_message(payload: dict, current_user: CurrentUser = Depen
 @router.get("/free-window/{conversation_id}")
 async def check_free_window(
     conversation_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user),
+    fresh: bool = Query(False, description="Si true, ignore le cache pour une vérification à jour"),
 ):
     """
     Vérifie si on est dans la fenêtre gratuite de 24h pour une conversation.
@@ -356,7 +367,7 @@ async def check_free_window(
     
     current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
     
-    is_free, last_inbound_time = await is_within_free_window(conversation_id)
+    is_free, last_inbound_time = await is_within_free_window(conversation_id, skip_cache=fresh)
     
     result = {
         "is_free": is_free,
@@ -379,7 +390,8 @@ async def check_free_window(
 @router.get("/price/{conversation_id}")
 async def get_message_price(
     conversation_id: str,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user),
+    fresh: bool = Query(False, description="Si true, ignore le cache pour une vérification à jour"),
 ):
     """
     Calcule le prix d'un message pour une conversation.
@@ -403,7 +415,7 @@ async def get_message_price(
     current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
     
     # Calculer le prix avec message conversationnel (pas de template)
-    price_info = await calculate_message_price(conversation_id, use_conversational=True)
+    price_info = await calculate_message_price(conversation_id, use_conversational=True, skip_cache=fresh)
     return price_info
 
 
@@ -1297,7 +1309,9 @@ async def send_media_api_message(payload: dict, current_user: CurrentUser = Depe
         conversation_id=conversation_id,
         media_type=media_type,
         media_id=media_id,
-        caption=caption
+        caption=caption,
+        sent_by_user_id=str(current_user.id),
+        sent_via="ui",
     )
 
 
@@ -1347,6 +1361,9 @@ async def test_storage_for_message(
     return {"status": "processing", "message": "Media download and storage started in background"}
 
 
+CHECK_MEDIA_CACHE_TTL = 300  # 5 minutes
+
+
 @router.post("/check-media/{conversation_id}")
 async def check_and_download_conversation_media(
     conversation_id: str,
@@ -1356,6 +1373,7 @@ async def check_and_download_conversation_media(
     Vérifie et télécharge automatiquement les médias manquants d'une conversation.
     Appelé de manière asynchrone quand une conversation est ouverte.
     Ne bloque pas l'interface utilisateur.
+    Cache 5 min pour éviter les relances inutiles (~75% réduction requêtes).
     """
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
@@ -1363,7 +1381,16 @@ async def check_and_download_conversation_media(
     
     current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
     
-    # Lancer le traitement en arrière-plan (ne pas attendre)
+    cache = await get_cache()
+    cache_key = f"check_media:{conversation_id}"
+    if await cache.get(cache_key):
+        return {
+            "status": "skipped",
+            "message": "Media check already in progress or recently completed (5 min cooldown)"
+        }
+    
+    await cache.set(cache_key, {"started_at": datetime.now(timezone.utc).isoformat()}, CHECK_MEDIA_CACHE_TTL)
+    
     import asyncio
     asyncio.create_task(process_unsaved_media_for_conversation(conversation_id, limit=50))
     
@@ -1699,7 +1726,9 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
             "status": "pending",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "message_type": "interactive",  # Garder le type interactive pour l'affichage
-            "interactive_data": json.dumps(interactive_data_dict)
+            "interactive_data": json.dumps(interactive_data_dict),
+            "sent_by_user_id": str(current_user.id),
+            "sent_via": "ui",
         }
         
         # Insérer le message et récupérer l'ID
@@ -1730,7 +1759,8 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
             header_text=normalized_header_text,  # Utiliser la version normalisée
             body_text=body_text,
             footer_text=normalized_footer_text,  # Utiliser la version normalisée
-            buttons=buttons_data  # Passer None si pas de boutons valides
+            buttons=buttons_data,  # Passer None si pas de boutons valides
+            created_by_user_id=str(current_user.id),
         )
         
         logger.info(f"📋 [SEND-INTERACTIVE] Résultat de la création du template: success={template_result.get('success')}")
@@ -1830,7 +1860,9 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         body_text=body_text,
         interactive_payload=interactive_payload,
         header_text=normalized_header_text,  # Utiliser la version normalisée
-        footer_text=normalized_footer_text   # Utiliser la version normalisée
+        footer_text=normalized_footer_text,  # Utiliser la version normalisée
+        sent_by_user_id=str(current_user.id),
+        sent_via="ui",
     )
 
 

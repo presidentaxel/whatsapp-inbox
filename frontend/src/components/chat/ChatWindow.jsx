@@ -14,10 +14,15 @@ import { formatRelativeDateTime } from "../../utils/date";
 import { notifyNewMessage, isNotificationEnabledForAccount } from "../../utils/notifications";
 import { useAuth } from "../../context/AuthContext";
 
+// Debounce check-media: 5 min par conversation (réduit appels inutiles ~75%)
+const CHECK_MEDIA_DEBOUNCE_MS = 5 * 60 * 1000;
+const lastCheckMediaByConversation = new Map();
+
 export default function ChatWindow({
   conversation,
   onFavoriteToggle,
   onBotModeChange,
+  onMarkRead,
   canSend = true,
   isWindowActive = true,
 }) {
@@ -109,49 +114,11 @@ export default function ChatWindow({
         const seenIds = new Set();
         const seenWaIds = new Set();
         
-        // ÉTAPE 1: Supprimer TOUS les messages optimistes (temp-*)
-        // Soit s'ils ont un correspondant réel, soit s'ils sont trop anciens (plus de 3 secondes)
-        const optimisticToRemove = new Set();
-        const now = Date.now();
-        
+        // ÉTAPE 2: Traiter les messages existants
+        // Realtime remplace l'optimiste par le réel quasi instantanément → toujours retirer les optimistes ici
         prev.forEach((msg) => {
           if (msg.id && msg.id.startsWith("temp-")) {
-            const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
-            const age = now - msgTime;
-            
-            // Chercher un message réel correspondant
-            const msgContent = (msg.content_text || "").trim();
-            const matching = filtered.find((newMsg) => {
-              const newMsgContent = (newMsg.content_text || "").trim();
-              if (msgContent !== newMsgContent || msgContent.length === 0) {
-                return false;
-              }
-              
-              const newMsgTime = new Date(newMsg.timestamp || newMsg.created_at).getTime();
-              const timeDiff = Math.abs(msgTime - newMsgTime);
-              
-              // Fenêtre de 10 secondes
-              return timeDiff < 10000;
-            });
-            
-            // Supprimer si correspondant trouvé OU si trop ancien (plus de 30 secondes)
-            if (matching || age > 30000) {
-              optimisticToRemove.add(msg.id);
-            }
-          }
-        });
-        
-        // ÉTAPE 2: Traiter les messages existants (en excluant les optimistes à supprimer)
-        prev.forEach((msg) => {
-          // Supprimer tous les messages optimistes identifiés
-          if (msg.id && msg.id.startsWith("temp-") && optimisticToRemove.has(msg.id)) {
-            return; // Ne pas ajouter ce message optimiste
-          }
-          
-          // Ne JAMAIS garder les messages optimistes qui n'ont pas été identifiés pour suppression
-          // (ils seront supprimés au prochain refresh)
-          if (msg.id && msg.id.startsWith("temp-")) {
-            return; // Ne pas garder les messages optimistes
+            return; // Toujours supprimer : realtime a déjà ajouté le message réel
           }
           
           // Si le message existe dans les nouveaux messages, utiliser la version du serveur
@@ -177,12 +144,7 @@ export default function ChatWindow({
           }
           
           // Garder le message existant s'il n'est pas dans les nouveaux messages
-          // Ne JAMAIS garder les messages optimistes (temp-*) - ils sont supprimés automatiquement
           if (msg.id && !seenIds.has(msg.id)) {
-            // Supprimer tous les messages optimistes
-            if (msg.id.startsWith("temp-")) {
-              return; // Ne pas garder les messages optimistes
-            }
             result.push(msg);
             seenIds.add(msg.id);
             if (msg.wa_message_id) seenWaIds.add(msg.wa_message_id);
@@ -225,16 +187,17 @@ export default function ChatWindow({
     setOldestMessageTimestamp(null);
     setIsInitialLoad(true);
     
-    // Vérifier et télécharger les médias manquants en arrière-plan (ne bloque pas)
-    // Appelé de manière asynchrone pour ne pas ralentir le chargement des messages
-    checkAndDownloadConversationMedia(conversationId)
-      .then(() => {
-        console.log(`✅ [FRONTEND] Media check started for conversation ${conversationId}`);
-      })
-      .catch((err) => {
-        console.warn(`⚠️ [FRONTEND] Failed to start media check for conversation ${conversationId}:`, err);
-        // Ne pas bloquer si ça échoue, c'est juste un bonus
-      });
+    // Vérifier et télécharger les médias manquants en arrière-plan (debounce 5 min)
+    const now = Date.now();
+    const lastCheck = lastCheckMediaByConversation.get(conversationId) || 0;
+    if (now - lastCheck >= CHECK_MEDIA_DEBOUNCE_MS) {
+      lastCheckMediaByConversation.set(conversationId, now);
+      checkAndDownloadConversationMedia(conversationId)
+        .then(() => {})
+        .catch((err) => {
+          console.warn(`⚠️ [FRONTEND] Media check failed for ${conversationId}:`, err);
+        });
+    }
     
     // Charger d'abord les 100 derniers messages pour un affichage immédiat
     const loadMessages = async () => {
@@ -345,14 +308,13 @@ export default function ChatWindow({
   // Marquer la conversation comme lue quand elle est ouverte et active
   useEffect(() => {
     if (conversationId && isWindowActive && conversation) {
-      // Marquer comme lue après un court délai pour éviter les appels trop fréquents
       const markReadTimeout = setTimeout(() => {
-      markConversationRead(conversationId).catch(() => {});
+        onMarkRead?.(conversationId);
+        markConversationRead(conversationId).catch(() => {});
       }, 1000);
-
       return () => clearTimeout(markReadTimeout);
     }
-  }, [conversationId, isWindowActive, conversation]);
+  }, [conversationId, isWindowActive, conversation, onMarkRead]);
 
 
   useEffect(() => {
@@ -364,7 +326,7 @@ export default function ChatWindow({
     const poll = async () => {
       await refreshMessages();
       if (!cancelled) {
-        timeoutId = setTimeout(poll, 4500);
+        timeoutId = setTimeout(poll, 15000);
       }
     };
     poll();
@@ -505,48 +467,18 @@ export default function ChatWindow({
               return sortMessages(updated);
             }
             
-            // Si c'est un message sortant (qu'on vient d'envoyer), supprimer les messages optimistes correspondants
+            // Message sortant : l'événement Realtime = backend a fini (checks, template, etc.)
+            // → Remplacer le message optimiste en attente par le message réel
             if (incoming.direction === "outbound" || incoming.from_me) {
-              // Trouver et supprimer tous les messages optimistes qui correspondent
-              const cleaned = prev.filter((msg) => {
-                // Supprimer les messages optimistes (temp-*) qui correspondent au nouveau message
-                if (msg.id && msg.id.startsWith("temp-")) {
-                  const msgContent = (msg.content_text || "").trim();
-                  const incomingContent = (incoming.content_text || "").trim();
-                  const contentMatch = msgContent === incomingContent && msgContent.length > 0;
-                  
-                  if (contentMatch) {
-                    const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
-                    const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
-                    const timeDiff = Math.abs(msgTime - incomingTime);
-                    
-                    // Si le contenu correspond et que c'est dans les 30 secondes, c'est le même message
-                    if (timeDiff < 30000) {
-                      return false; // Supprimer ce message optimiste
-                    }
-                  }
-                }
-                // Supprimer aussi les messages réels qui ont le même contenu et timestamp proche (doublons)
-                if (msg.id && !msg.id.startsWith("temp-") && msg.direction === "outbound") {
-                  const msgContent = (msg.content_text || "").trim();
-                  const incomingContent = (incoming.content_text || "").trim();
-                  const contentMatch = msgContent === incomingContent && msgContent.length > 0;
-                  
-                  if (contentMatch) {
-                    const msgTime = new Date(msg.timestamp || msg.created_at).getTime();
-                    const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
-                    const timeDiff = Math.abs(msgTime - incomingTime);
-                    
-                    // Si le contenu correspond exactement et que c'est dans les 10 secondes, c'est un doublon
-                    if (timeDiff < 10000 && msg.id !== incoming.id) {
-                      return false; // Supprimer le doublon
-                    }
-                  }
-                }
-                return true; // Garder les autres messages
-              });
-              
-              // Ajouter le nouveau message avec le bon statut depuis le serveur
+              const optimistics = prev.filter((m) => m.id?.startsWith("temp-"));
+              const mostRecent = optimistics.sort((a, b) => {
+                const ta = new Date(a.timestamp || a.created_at).getTime();
+                const tb = new Date(b.timestamp || b.created_at).getTime();
+                return tb - ta;
+              })[0];
+              const cleaned = mostRecent
+                ? prev.filter((m) => m.id !== mostRecent.id)
+                : prev;
               return sortMessages([...cleaned, incoming]);
             }
             

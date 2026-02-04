@@ -1371,6 +1371,12 @@ async def update_message_content(
         refreshed = await fetch_one("SELECT * FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
         if not refreshed:
             return {"error": "update_fetch_failed"}
+        try:
+            from app.services.audit_service import log_action
+            conv = await get_conversation_by_id(str(msg["conversation_id"]))
+            await log_action("message.edited", "message", message_id, user_id=user_id, account_id=conv.get("account_id") if conv else None, details={})
+        except Exception:
+            pass
         return {"success": True, "message": dict(refreshed)}
     msg_res = await supabase_execute(
         supabase.table("messages")
@@ -1406,6 +1412,12 @@ async def update_message_content(
     )
     if not refreshed.data:
         return {"error": "update_fetch_failed"}
+    try:
+        from app.services.audit_service import log_action
+        conv = await get_conversation_by_id(str(msg["conversation_id"]))
+        await log_action("message.edited", "message", message_id, user_id=user_id, account_id=conv.get("account_id") if conv else None, details={})
+    except Exception:
+        pass
     return {"success": True, "message": refreshed.data[0]}
 
 
@@ -1442,6 +1454,12 @@ async def delete_message_scope(
         refreshed = await fetch_one("SELECT * FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
         if not refreshed:
             return {"error": "update_fetch_failed"}
+        try:
+            from app.services.audit_service import log_action
+            conv = await get_conversation_by_id(str(msg["conversation_id"]))
+            await log_action("message.deleted", "message", message_id, user_id=user_id, account_id=conv.get("account_id") if conv else None, details={"scope": scope})
+        except Exception:
+            pass
         return {"success": True, "message": dict(refreshed)}
     msg_res = await supabase_execute(
         supabase.table("messages")
@@ -1470,6 +1488,12 @@ async def delete_message_scope(
     )
     if not refreshed.data:
         return {"error": "update_fetch_failed"}
+    try:
+        from app.services.audit_service import log_action
+        conv = await get_conversation_by_id(str(msg["conversation_id"]))
+        await log_action("message.deleted", "message", message_id, user_id=user_id, account_id=conv.get("account_id") if conv else None, details={"scope": scope})
+    except Exception:
+        pass
     return {"success": True, "message": refreshed.data[0]}
 
 
@@ -1796,8 +1820,14 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
     except ValueError:
         response_json = None
 
+    # Traçabilité: qui a envoyé et via quel canal (propagé par les routes)
+    sent_by_user_id = payload.get("sent_by_user_id")
+    sent_via = payload.get("sent_via")
+    account_id_for_audit = conversation.get("account_id")
+
     # Retourner immédiatement après l'envoi à WhatsApp
     # L'insertion en base se fera en arrière-plan pour ne pas bloquer la réponse
+    existing_message_id = payload.get("existing_message_id")
     message_payload = {
         "conversation_id": conv_id,
         "direction": "outbound",
@@ -1808,19 +1838,64 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         "status": "sent",
         "is_system": is_system,
     }
-    
+    if sent_by_user_id is not None:
+        message_payload["sent_by_user_id"] = sent_by_user_id
+    if sent_via is not None:
+        message_payload["sent_via"] = sent_via
+
     # Ajouter reply_to_message_id si présent
     if reply_to_message_id:
         message_payload["reply_to_message_id"] = reply_to_message_id
 
     async def _save_message_async():
         try:
+            if existing_message_id:
+                # Mise à jour d'un message existant (ex: fallback template -> gratuit)
+                if get_pool():
+                    await execute(
+                        """
+                        UPDATE messages SET wa_message_id = $2, status = 'sent', timestamp = $3::timestamptz,
+                        content_text = $4, sent_by_user_id = $5, sent_via = $6
+                        WHERE id = $1::uuid
+                        """,
+                        existing_message_id,
+                        message_id,
+                        _parse_timestamp_iso(timestamp_iso),
+                        text,
+                        sent_by_user_id,
+                        sent_via,
+                    )
+                else:
+                    await supabase_execute(
+                        supabase.table("messages")
+                        .update({
+                            "wa_message_id": message_id,
+                            "status": "sent",
+                            "timestamp": timestamp_iso,
+                            "content_text": text,
+                            **({"sent_by_user_id": sent_by_user_id} if sent_by_user_id is not None else {}),
+                            **({"sent_via": sent_via} if sent_via is not None else {}),
+                        })
+                        .eq("id", existing_message_id)
+                    )
+                await _update_conversation_timestamp(conv_id, timestamp_iso)
+                if account_id_for_audit and sent_by_user_id:
+                    from app.services.audit_service import log_action
+                    await log_action(
+                        action="message.sent",
+                        resource_type="message",
+                        resource_id=str(existing_message_id),
+                        user_id=sent_by_user_id,
+                        account_id=account_id_for_audit,
+                        details={"sent_via": sent_via or "ui"},
+                    )
+                return
             if get_pool():
                 await execute(
                     """
-                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, is_system, reply_to_message_id)
-                    VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'text', 'sent', $5, $6::uuid)
-                    ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, content_text = EXCLUDED.content_text
+                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, is_system, reply_to_message_id, sent_by_user_id, sent_via)
+                    VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'text', 'sent', $5, $6::uuid, $7::uuid, $8)
+                    ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, content_text = EXCLUDED.content_text, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via
                     """,
                     conv_id,
                     text,
@@ -1828,8 +1903,25 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
                     message_id,
                     message_payload.get("is_system", False),
                     message_payload.get("reply_to_message_id"),
+                    sent_by_user_id,
+                    sent_via,
+                )
+                # execute() doesn't return rows; we need fetch_one for RETURNING - use a different approach
+                row = await fetch_one(
+                    "SELECT id FROM messages WHERE wa_message_id = $1 LIMIT 1",
+                    message_id,
                 )
                 await _update_conversation_timestamp(conv_id, timestamp_iso)
+                if row and account_id_for_audit and sent_by_user_id:
+                    from app.services.audit_service import log_action
+                    await log_action(
+                        action="message.sent",
+                        resource_type="message",
+                        resource_id=str(row["id"]),
+                        user_id=sent_by_user_id,
+                        account_id=account_id_for_audit,
+                        details={"sent_via": sent_via or "ui"},
+                    )
             else:
                 await asyncio.gather(
                     supabase_execute(
@@ -1837,6 +1929,20 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
                     ),
                     _update_conversation_timestamp(conv_id, timestamp_iso)
                 )
+                if account_id_for_audit and sent_by_user_id:
+                    from app.services.audit_service import log_action
+                    res = await supabase_execute(
+                        supabase.table("messages").select("id").eq("wa_message_id", message_id).limit(1)
+                    )
+                    if res.data and len(res.data) > 0:
+                        await log_action(
+                            action="message.sent",
+                            resource_type="message",
+                            resource_id=str(res.data[0]["id"]),
+                            user_id=sent_by_user_id,
+                            account_id=account_id_for_audit,
+                            details={"sent_via": sent_via or "ui"},
+                        )
         except Exception as e:
             logger.error("Error saving message to database in background: %s", e, exc_info=True)
     
@@ -1853,12 +1959,13 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
     return result
 
 
-async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[datetime]]:
+async def is_within_free_window(conversation_id: str, skip_cache: bool = False) -> Tuple[bool, Optional[datetime]]:
     """
     Vérifie si on est dans la fenêtre de 24h pour envoyer un message gratuit.
     
-    OPTIMISATION: Cache de 5 minutes pour éviter les requêtes DB répétées.
+    OPTIMISATION: Cache de 1 minute par défaut pour équilibrer fraîcheur et charge DB.
     Le cache est invalidé lorsqu'un nouveau message entrant arrive.
+    skip_cache=True permet d'obtenir une vérification fraîche (ex: avant envoi template).
     
     WhatsApp Cloud API permet d'envoyer des messages gratuits pendant 24h
     après la dernière interaction CLIENT (message entrant uniquement).
@@ -1872,16 +1979,17 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
         - (False, last_interaction_time) si hors fenêtre (nécessite un template payant)
         - (False, None) si aucun message trouvé
     """
-    # OPTIMISATION: Vérifier le cache d'abord (TTL: 5 minutes)
     from app.core.cache import get_cache
     cache = await get_cache()
     cache_key = f"free_window:{conversation_id}"
-    
-    cached_result = await cache.get(cache_key)
-    if cached_result is not None:
-        is_free, last_interaction_time = cached_result
-        logger.debug(f"🕐 Free window CACHE HIT for conversation {conversation_id}: is_free={is_free}")
-        return (is_free, last_interaction_time)
+    FREE_WINDOW_CACHE_TTL = 60  # 1 minute pour mise à jour plus rapide
+
+    if not skip_cache:
+        cached_result = await cache.get(cache_key)
+        if cached_result is not None:
+            is_free, last_interaction_time = cached_result
+            logger.debug(f"🕐 Free window CACHE HIT for conversation {conversation_id}: is_free={is_free}")
+            return (is_free, last_interaction_time)
     
     # Récupérer le dernier message ENTRANT (client) de la conversation
     # Seuls les messages entrants comptent pour la fenêtre gratuite
@@ -1934,10 +2042,9 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
             f"hours_elapsed={hours_elapsed:.2f}, is_free={is_free}"
         )
         
-        # OPTIMISATION: Mettre en cache le résultat (TTL: 5 minutes)
-        # Le cache sera invalidé lors de l'arrivée d'un nouveau message entrant
-        await cache.set(cache_key, (is_free, last_interaction_time), ttl_seconds=300)
-        
+        if not skip_cache:
+            await cache.set(cache_key, (is_free, last_interaction_time), ttl_seconds=FREE_WINDOW_CACHE_TTL)
+
         return (is_free, last_interaction_time)
         
     except Exception as e:
@@ -1945,7 +2052,7 @@ async def is_within_free_window(conversation_id: str) -> Tuple[bool, Optional[da
         return (False, None)
 
 
-async def calculate_message_price(conversation_id: str, use_template: bool = False, use_conversational: bool = False) -> Dict[str, Any]:
+async def calculate_message_price(conversation_id: str, use_template: bool = False, use_conversational: bool = False, skip_cache: bool = False) -> Dict[str, Any]:
     """
     Calcule le prix d'un message WhatsApp.
     
@@ -1953,6 +2060,7 @@ async def calculate_message_price(conversation_id: str, use_template: bool = Fal
         conversation_id: ID de la conversation
         use_template: Si True, utilise un template UTILITY (le moins cher)
         use_conversational: Si True, utilise un message conversationnel normal (plus cher que template)
+        skip_cache: Si True, vérifie la fenêtre gratuite sans utiliser le cache
     
     Returns:
         Dict avec:
@@ -1963,7 +2071,7 @@ async def calculate_message_price(conversation_id: str, use_template: bool = Fal
         - category: str ("free", "utility", "conversational")
         - last_inbound_time: Optional[datetime]
     """
-    is_free, last_interaction_time = await is_within_free_window(conversation_id)
+    is_free, last_interaction_time = await is_within_free_window(conversation_id, skip_cache=skip_cache)
     
     # Si on est dans la fenêtre gratuite, retourner gratuit peu importe les autres paramètres
     if is_free:
@@ -2135,7 +2243,9 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
         
         message_id = response.get("messages", [{}])[0].get("id")
         timestamp_iso = datetime.now(timezone.utc).isoformat()
-        
+        sent_by_user_id = payload.get("sent_by_user_id")
+        sent_via = payload.get("sent_via")
+
         # Sauvegarder le message
         message_payload = {
             "conversation_id": conv_id,
@@ -2146,20 +2256,26 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
             "message_type": "template",
             "status": "sent",
         }
-        
+        if sent_by_user_id is not None:
+            message_payload["sent_by_user_id"] = sent_by_user_id
+        if sent_via is not None:
+            message_payload["sent_via"] = sent_via
+
         async def _save_message_async():
             try:
                 if get_pool():
                     await execute(
                         """
-                        INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status)
-                        VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'template', 'sent')
-                        ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp
+                        INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, sent_by_user_id, sent_via)
+                        VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'template', 'sent', $5::uuid, $6)
+                        ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via
                         """,
                         conv_id,
                         text,
                         _parse_timestamp_iso(timestamp_iso),
                         message_id,
+                        sent_by_user_id,
+                        sent_via,
                     )
                     await _update_conversation_timestamp(conv_id, timestamp_iso)
                 else:
@@ -2245,7 +2361,9 @@ async def send_interactive_message_with_storage(
     body_text: str,
     interactive_payload: dict,
     header_text: Optional[str] = None,
-    footer_text: Optional[str] = None
+    footer_text: Optional[str] = None,
+    sent_by_user_id: Optional[str] = None,
+    sent_via: Optional[str] = None,
 ):
     """
     Envoie un message interactif (buttons/list) ET l'enregistre correctement dans la base
@@ -2347,15 +2465,17 @@ async def send_interactive_message_with_storage(
         if get_pool():
             await execute(
                 """
-                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, interactive_data)
-                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'interactive', 'sent', $5::jsonb)
-                ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, interactive_data = EXCLUDED.interactive_data
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, interactive_data, sent_by_user_id, sent_via)
+                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'interactive', 'sent', $5::jsonb, $6::uuid, $7)
+                ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, interactive_data = EXCLUDED.interactive_data, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via
                 """,
                 conversation_id,
                 preview_text,
                 _parse_timestamp_iso(timestamp_iso),
                 message_id,
                 interactive_data_json,
+                sent_by_user_id,
+                sent_via,
             )
             await _update_conversation_timestamp(conversation_id, timestamp_iso)
         else:
@@ -2369,6 +2489,10 @@ async def send_interactive_message_with_storage(
                 "status": "sent",
                 "interactive_data": interactive_data_json,
             }
+            if sent_by_user_id is not None:
+                message_payload["sent_by_user_id"] = sent_by_user_id
+            if sent_via is not None:
+                message_payload["sent_via"] = sent_via
             await asyncio.gather(
                 supabase_execute(
                     supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
@@ -2390,7 +2514,9 @@ async def send_media_message_with_storage(
     conversation_id: str,
     media_type: str,
     media_id: str,
-    caption: Optional[str] = None
+    caption: Optional[str] = None,
+    sent_by_user_id: Optional[str] = None,
+    sent_via: Optional[str] = None,
 ):
     """
     Envoie un message média ET l'enregistre correctement dans la base.
@@ -2404,25 +2530,27 @@ async def send_media_message_with_storage(
     
     # Si dans la fenêtre gratuite, envoyer normalement
     if is_free:
-        return await _send_media_message_normal(conversation_id, media_type, media_id, caption)
+        return await _send_media_message_normal(conversation_id, media_type, media_id, caption, sent_by_user_id, sent_via)
     
     # Hors fenêtre : créer un template avec l'image en HEADER
     logger.info(f"💰 Sending paid media message with template for conversation {conversation_id}")
     
     # Pour les images, utiliser un template avec HEADER IMAGE
     if media_type == "image":
-        return await _send_image_with_template_queue(conversation_id, media_id, caption)
+        return await _send_image_with_template_queue(conversation_id, media_id, caption, sent_by_user_id, sent_via)
     
     # Pour les autres types de médias, essayer d'envoyer normalement (sera facturé)
     logger.warning(f"⚠️ Media type {media_type} hors fenêtre - envoi normal (sera facturé)")
-    return await _send_media_message_normal(conversation_id, media_type, media_id, caption)
+    return await _send_media_message_normal(conversation_id, media_type, media_id, caption, sent_by_user_id, sent_via)
 
 
 async def _send_media_message_normal(
     conversation_id: str,
     media_type: str,
     media_id: str,
-    caption: Optional[str] = None
+    caption: Optional[str] = None,
+    sent_by_user_id: Optional[str] = None,
+    sent_via: Optional[str] = None,
 ):
     """Envoie un message média normalement (dans la fenêtre gratuite)"""
     conversation = await get_conversation_by_id(conversation_id)
@@ -2494,14 +2622,17 @@ async def _send_media_message_normal(
         "media_id": media_id,
         "media_mime_type": None,  # Sera mis à jour si disponible
     }
+    if sent_by_user_id is not None:
+        message_payload["sent_by_user_id"] = sent_by_user_id
+    if sent_via is not None:
+        message_payload["sent_via"] = sent_via
 
     if get_pool():
-        row = await fetch_one(
+        await execute(
             """
-            INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, media_id, media_mime_type)
-            VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, $5, 'sent', $6, $7)
-            ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, media_id = EXCLUDED.media_id
-            RETURNING id
+            INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, media_id, media_mime_type, sent_by_user_id, sent_via)
+            VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, $5, 'sent', $6, $7, $8::uuid, $9)
+            ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, media_id = EXCLUDED.media_id, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via
             """,
             conversation_id,
             message_payload.get("content_text") or "",
@@ -2510,6 +2641,12 @@ async def _send_media_message_normal(
             message_payload["message_type"],
             message_payload.get("media_id"),
             message_payload.get("media_mime_type"),
+            sent_by_user_id,
+            sent_via,
+        )
+        row = await fetch_one(
+            "SELECT id FROM messages WHERE wa_message_id = $1 LIMIT 1",
+            message_id,
         )
         message_db_id = row["id"] if row else None
     else:
@@ -2562,7 +2699,9 @@ async def _send_media_message_normal(
 async def _send_image_with_template_queue(
     conversation_id: str,
     media_id: str,
-    caption: Optional[str] = None
+    caption: Optional[str] = None,
+    sent_by_user_id: Optional[str] = None,
+    sent_via: Optional[str] = None,
 ):
     """
     Crée un template avec l'image en HEADER et "(image)" en BODY, puis attend l'approbation.
@@ -2581,14 +2720,16 @@ async def _send_image_with_template_queue(
     if get_pool():
         row = await fetch_one(
             """
-            INSERT INTO messages (conversation_id, direction, content_text, status, timestamp, message_type, media_id)
-            VALUES ($1::uuid, 'outbound', $2, 'pending', $3::timestamptz, 'image', $4)
+            INSERT INTO messages (conversation_id, direction, content_text, status, timestamp, message_type, media_id, sent_by_user_id, sent_via)
+            VALUES ($1::uuid, 'outbound', $2, 'pending', $3::timestamptz, 'image', $4, $5::uuid, $6)
             RETURNING id
             """,
             conversation_id,
             display_text,
             _parse_timestamp_iso(timestamp_iso),
             media_id,
+            sent_by_user_id,
+            sent_via,
         )
         if not row:
             logger.error("❌ Échec de la création du message en base")
@@ -2604,6 +2745,10 @@ async def _send_image_with_template_queue(
             "message_type": "image",
             "media_id": media_id,
         }
+        if sent_by_user_id is not None:
+            message_payload["sent_by_user_id"] = sent_by_user_id
+        if sent_via is not None:
+            message_payload["sent_via"] = sent_via
         message_result = await supabase_execute(
             supabase.table("messages").insert(message_payload)
         )
@@ -2619,7 +2764,8 @@ async def _send_image_with_template_queue(
         account_id=conversation["account_id"],
         message_id=message_id,
         media_id=media_id,
-        body_text=display_text
+        body_text=display_text,
+        created_by_user_id=sent_by_user_id,
     )
     
     if not template_result.get("success"):

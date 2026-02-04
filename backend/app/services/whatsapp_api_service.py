@@ -736,6 +736,14 @@ async def get_message_template_by_id(
         if e.response.status_code == 404:
             logger.debug(f"Template {template_id} not found (404) - may not be synchronized yet")
             return None
+        if e.response.status_code == 400:
+            # Meta peut retourner 400 (ex: ID invalide ou token WABA vs User) -> fallback sur list par nom
+            logger.debug(
+                "Template %s Bad Request (400) - falling back to list by name. Body: %s",
+                template_id,
+                e.response.text[:200] if e.response.text else "",
+            )
+            return None
         raise
 
 
