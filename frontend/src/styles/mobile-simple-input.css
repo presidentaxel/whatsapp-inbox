@@ -10,6 +10,7 @@
 
   .mobile-input-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-end;
     gap: 0.5rem;
     padding: 0.25rem 0;
@@ -59,6 +60,7 @@
 
   .mobile-input-textarea {
     flex: 1;
+    min-width: 0;
     background: transparent;
     border: none;
     color: #e9edef;
@@ -463,9 +465,12 @@
     opacity: 0.9;
   }
 
+  /* Hint "Envoi en template" sur toute la largeur au-dessus de la ligne de saisie */
   .mobile-input-free-window-hint {
+    width: 100%;
+    flex-basis: 100%;
     font-size: 0.7rem;
-    color: var(--text-secondary, #666);
+    color: var(--text-secondary, #8696a0);
     padding: 4px 0 2px;
     margin-bottom: 2px;
   }

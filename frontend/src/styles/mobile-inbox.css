@@ -944,6 +944,7 @@
 }
 
 .mobile-chat__input {
+  flex-shrink: 0;
   padding: 0.375rem 0.5rem;
   padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
 }
