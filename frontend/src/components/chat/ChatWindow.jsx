@@ -4,6 +4,7 @@ import { AiFillStar, AiOutlineStar } from "react-icons/ai";
 import { MdPushPin } from "react-icons/md";
 import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage, checkAndDownloadConversationMedia, pinMessage, unpinMessage, addReaction } from "../../api/messagesApi";
 import { markConversationRead } from "../../api/conversationsApi";
+import { listPlaygroundFlows } from "../../api/playgroundFlowsApi";
 import MessageBubble from "./MessageBubble";
 import AdvancedMessageInput from "./AdvancedMessageInput";
 import TypingIndicator from "./TypingIndicator";
@@ -22,6 +23,7 @@ export default function ChatWindow({
   conversation,
   onFavoriteToggle,
   onBotModeChange,
+  onPlaygroundFlowChange,
   onMarkRead,
   canSend = true,
   isWindowActive = true,
@@ -41,6 +43,9 @@ export default function ChatWindow({
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState(null);
   const [replyingToMessage, setReplyingToMessage] = useState(null);
+  const [playgroundFlows, setPlaygroundFlows] = useState([]);
+  const [playgroundFlowsLoading, setPlaygroundFlowsLoading] = useState(false);
+  const [playgroundFlowPending, setPlaygroundFlowPending] = useState(false);
 
   const sortMessages = useCallback((items) => {
     return [...items].sort((a, b) => {
@@ -651,7 +656,34 @@ export default function ChatWindow({
     return formatPhoneNumber(conversation.client_number);
   }, [conversation]);
 
-  const botEnabled = !!conversation?.bot_enabled;
+  const activeBotSegment = useMemo(() => {
+    if (!conversation?.bot_enabled) return "human";
+    return conversation?.bot_reply_mode === "playground" ? "playground" : "gemini";
+  }, [conversation?.bot_enabled, conversation?.bot_reply_mode]);
+
+  useEffect(() => {
+    const acc = conversation?.account_id;
+    if (!acc || activeBotSegment !== "playground") {
+      setPlaygroundFlows([]);
+      return;
+    }
+    let cancelled = false;
+    setPlaygroundFlowsLoading(true);
+    listPlaygroundFlows(acc)
+      .then((res) => {
+        const rows = Array.isArray(res.data) ? res.data : [];
+        if (!cancelled) setPlaygroundFlows(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setPlaygroundFlows([]);
+      })
+      .finally(() => {
+        if (!cancelled) setPlaygroundFlowsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversation?.account_id, activeBotSegment]);
 
   const filteredMessages = useMemo(() => {
     let filtered = messages;
@@ -930,27 +962,88 @@ export default function ChatWindow({
           <div className="chat-title">{displayName}</div>
           <div className="chat-subtitle">{subtitle}</div>
         </div>
-        <div className="chat-bot-toggle">
-          <span className="chat-bot-toggle__label">
-            {botEnabled ? "Bot Gemini actif" : "Mode opérateur"}
-          </span>
-          <label className={`switch ${botEnabled ? "switch--on" : ""}`}>
-            <input
-              type="checkbox"
-              checked={botEnabled}
-              onChange={async () => {
-                if (!conversation || !onBotModeChange) return;
-                setBotTogglePending(true);
-                try {
-                  await onBotModeChange(conversation, !botEnabled);
-                } finally {
-                  setBotTogglePending(false);
+        <div className="chat-header-bot-stack">
+          <div className="chat-bot-mode">
+            <div className="chat-bot-mode__segments" role="group" aria-label="Mode bot conversation">
+              {[
+                { id: "human", label: "Humain" },
+                { id: "gemini", label: "Gemini" },
+                { id: "playground", label: "Playground" },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className={`chat-bot-mode__seg ${
+                    activeBotSegment === opt.id ? "is-active" : ""
+                  }`}
+                  disabled={!conversation || botTogglePending}
+                  onClick={async () => {
+                    if (!conversation || !onBotModeChange || activeBotSegment === opt.id) return;
+                    setBotTogglePending(true);
+                    try {
+                      if (opt.id === "human") {
+                        await onBotModeChange(conversation, { enabled: false });
+                      } else {
+                        await onBotModeChange(conversation, {
+                          enabled: true,
+                          reply_mode: opt.id,
+                        });
+                      }
+                    } finally {
+                      setBotTogglePending(false);
+                    }
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          {activeBotSegment === "playground" && onPlaygroundFlowChange && conversation ? (
+            <div className="chat-playground-flow">
+              <label
+                className="chat-playground-flow__label"
+                htmlFor="chat-playground-flow-select"
+                title="Scénario Playground pour cette conversation"
+              >
+                Flux
+              </label>
+              <select
+                id="chat-playground-flow-select"
+                className="chat-playground-flow__select"
+                title="Scénario Playground"
+                aria-label="Scénario Playground"
+                disabled={
+                  playgroundFlowsLoading ||
+                  playgroundFlowPending ||
+                  botTogglePending
                 }
-              }}
-              disabled={!conversation || botTogglePending}
-            />
-            <span className="switch__slider" />
-          </label>
+                value={conversation.playground_flow_id || ""}
+                onChange={async (e) => {
+                  const v = e.target.value;
+                  const nextId = v === "" ? null : v;
+                  const cur = conversation.playground_flow_id || null;
+                  if (nextId === cur) return;
+                  setPlaygroundFlowPending(true);
+                  try {
+                    await onPlaygroundFlowChange(conversation, nextId);
+                  } catch (err) {
+                    console.error(err);
+                  } finally {
+                    setPlaygroundFlowPending(false);
+                  }
+                }}
+              >
+                <option value="">Défaut du compte</option>
+                {playgroundFlows.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name || f.id}
+                    {f.is_default ? " · défaut" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
         </div>
         <div className="chat-actions">
           <button

@@ -73,6 +73,12 @@ const withInternalIds = (items, factory) => {
   }));
 };
 
+function normalizePlaybookInputMode(raw) {
+  if (raw == null || raw === "") return "structured";
+  const s = String(raw).trim().toLowerCase();
+  return s === "pitch" ? "pitch" : "structured";
+}
+
 const ensureTemplateConfig = (incoming = {}) => ({
   system_rules: {
     ...emptyTemplate.system_rules,
@@ -102,6 +108,9 @@ const ensureTemplateConfig = (incoming = {}) => ({
     typeof incoming.special_rules === "string" && incoming.special_rules.trim()
       ? incoming.special_rules
       : emptyTemplate.special_rules,
+  playbook_pitch:
+    typeof incoming.playbook_pitch === "string" ? incoming.playbook_pitch : "",
+  playbook_input_mode: normalizePlaybookInputMode(incoming.playbook_input_mode),
 });
 
 const stripTemplateIds = (template) => ({
@@ -231,17 +240,63 @@ const buildTemplatePreview = (template) => {
   return lines.filter(Boolean).join("\n").trim();
 };
 
-export default function GeminiPanel({ accountId, accounts, onAccountChange }) {
+function playbookInputMode(templateConfig) {
+  return normalizePlaybookInputMode(templateConfig?.playbook_input_mode);
+}
+
+/** Contenu du bloc PLAYBOOK côté API (sans le contact, ajouté au runtime). */
+function buildPlaybookCorePreview(form) {
+  const lines = [];
+  const tc = form.template_config || {};
+  const mode = playbookInputMode(tc);
+  const pitch = (tc.playbook_pitch || "").trim();
+  const usePitchMode = mode === "pitch";
+
+  if (usePitchMode) {
+    if (pitch) {
+      lines.push(pitch);
+    } else {
+      lines.push(
+        "(Mode pitch — ce bloc est vide. Remplis le texte ci-dessus : tant qu’il est vide, l’IA utilise le playbook structuré enregistré comme secours.)"
+      );
+    }
+  } else {
+    const templateText = buildTemplatePreview(tc);
+    if (templateText) lines.push(templateText);
+  }
+
+  if (form.business_name) lines.push(`Nom: ${form.business_name}`);
+  if (form.description) lines.push(`Description: ${form.description}`);
+  if (form.address) lines.push(`Adresse: ${form.address}`);
+  if (form.hours) lines.push(`Horaires: ${form.hours}`);
+
+  if (!usePitchMode) {
+    if (form.knowledge_base) {
+      lines.push(`Informations additionnelles: ${form.knowledge_base}`);
+    }
+    (form.custom_fields || []).forEach((field) => {
+      const label = (field.label || "").trim();
+      const value = (field.value || "").trim();
+      if (label && value) lines.push(`${label}: ${value}`);
+    });
+  }
+
+  return lines.filter(Boolean).join("\n").trim() || "Aucune information fournie.";
+}
+
+export default function GeminiPanel({
+  accountId,
+  accounts,
+  onAccountChange,
+  hideAccountSelector = false,
+}) {
   const [form, setForm] = useState(createEmptyProfile());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  const templatePreview = useMemo(
-    () => buildTemplatePreview(form.template_config),
-    [form.template_config]
-  );
+  const playbookCorePreview = useMemo(() => buildPlaybookCorePreview(form), [form]);
 
   useEffect(() => {
     if (!accountId) {
@@ -383,8 +438,17 @@ export default function GeminiPanel({ accountId, accounts, onAccountChange }) {
     }
   };
 
-  const handleCopyPreview = () => {
-    updateField("knowledge_base", templatePreview);
+  const handleCopyPreview = async () => {
+    if (playbookInputMode(form.template_config) === "pitch") {
+      try {
+        await navigator.clipboard.writeText(playbookCorePreview);
+        setError("");
+      } catch {
+        setError("Impossible de copier dans le presse-papiers.");
+      }
+      return;
+    }
+    updateField("knowledge_base", playbookCorePreview);
   };
 
   if (!accounts.length) {
@@ -400,7 +464,11 @@ export default function GeminiPanel({ accountId, accounts, onAccountChange }) {
     return (
       <div className="panel">
         <h3>Assistant Gemini</h3>
-        <p>Sélectionne un compte dans la colonne de gauche pour commencer.</p>
+        <p>
+          {hideAccountSelector
+            ? "Sélectionne un compte dans la barre du haut."
+            : "Sélectionne un compte dans la colonne de gauche pour commencer."}
+        </p>
       </div>
     );
   }
@@ -411,24 +479,26 @@ export default function GeminiPanel({ accountId, accounts, onAccountChange }) {
         <div>
           <h3>Assistant Gemini</h3>
           <p>
-            Définis un playbook structuré : le bot ne répond que depuis ces
-            sections. En dehors, il applique la phrase “Je me renseigne auprès
-            d’un collègue…”.
+            Deux façons d’alimenter le bot : un pitch unique ou un playbook par
+            sections. Le bot ne répond que depuis ce contenu ; en dehors, il
+            applique la phrase « Je me renseigne auprès d’un collègue… ».
           </p>
         </div>
-        <div className="bot-panel__account-select">
-          <label>Compte</label>
-          <select
-            value={accountId ?? ""}
-            onChange={(e) => onAccountChange?.(e.target.value)}
-          >
-            {accounts.map((acc) => (
-              <option key={acc.id} value={acc.id}>
-                {acc.name}
-              </option>
-            ))}
-          </select>
-        </div>
+        {!hideAccountSelector && (
+          <div className="bot-panel__account-select">
+            <label>Compte</label>
+            <select
+              value={accountId ?? ""}
+              onChange={(e) => onAccountChange?.(e.target.value)}
+            >
+              {accounts.map((acc) => (
+                <option key={acc.id} value={acc.id}>
+                  {acc.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </header>
 
       {loading ? (
@@ -476,71 +546,135 @@ export default function GeminiPanel({ accountId, accounts, onAccountChange }) {
             </label>
           </section>
 
-          <TemplateSections
-            form={form}
-            updateTemplateField={updateTemplateField}
-            updateTemplateListItem={updateTemplateListItem}
-            addTemplateItem={addTemplateItem}
-            removeTemplateItem={removeTemplateItem}
-            updateTemplateRoot={updateTemplateRoot}
-          />
-
           <section className="bot-panel__section">
-            <div className="bot-panel__section-header">
-              <h4>Aperçu généré</h4>
-              <button type="button" className="ghost" onClick={handleCopyPreview}>
-                Copier dans la base
+            <h4>Playbook pour le bot</h4>
+            <p className="muted bot-panel__mode-hint">
+              Seul le mode actif alimente le playbook (l’autre est ignoré). Pitch
+              libre : un bloc unique ; base libre et champs perso masqués et non
+              envoyés. Si le pitch est vide, repli sur le structuré enregistré,
+              toujours sans base libre ni perso. Structuré : sections + profil +
+              base libre + champs perso.
+            </p>
+            <div
+              className="bot-panel__mode-toggle"
+              role="group"
+              aria-label="Mode de saisie du playbook"
+            >
+              <button
+                type="button"
+                className={
+                  playbookInputMode(form.template_config) === "pitch"
+                    ? "is-active"
+                    : ""
+                }
+                onClick={() => updateTemplateRoot("playbook_input_mode", "pitch")}
+              >
+                Pitch libre
+              </button>
+              <button
+                type="button"
+                className={
+                  playbookInputMode(form.template_config) !== "pitch"
+                    ? "is-active"
+                    : ""
+                }
+                onClick={() =>
+                  updateTemplateRoot("playbook_input_mode", "structured")
+                }
+              >
+                Playbook structuré
               </button>
             </div>
-            <textarea value={templatePreview} readOnly rows={10} />
-          </section>
-
-          <section className="bot-panel__section">
-            <h4>Base de connaissances libre</h4>
-            <textarea
-              value={form.knowledge_base}
-              onChange={(e) => updateField("knowledge_base", e.target.value)}
-              rows={6}
-              placeholder="Suppléments, scripts commerciaux, etc."
-            />
-          </section>
-
-          <section className="bot-panel__section">
-            <div className="bot-panel__section-header">
-              <h4>Champs personnalisés</h4>
-              <button type="button" className="ghost" onClick={addCustomField}>
-                <FiPlus /> Ajouter un champ
-              </button>
-            </div>
-            {form.custom_fields.length === 0 && (
-              <p className="muted">Aucun champ personnalisé pour l'instant.</p>
+            {playbookInputMode(form.template_config) === "pitch" ? (
+              <label>
+                Tout le contexte pour l’IA
+                <textarea
+                  value={form.template_config.playbook_pitch || ""}
+                  onChange={(e) =>
+                    updateTemplateRoot("playbook_pitch", e.target.value)
+                  }
+                  rows={16}
+                  placeholder="Qui vous êtes, ton, offres, tarifs, procédures, FAQ, cas particuliers, liens utiles, escalade, phrase si une info manque, règles de sécurité…"
+                />
+              </label>
+            ) : (
+              <TemplateSections
+                form={form}
+                updateTemplateField={updateTemplateField}
+                updateTemplateListItem={updateTemplateListItem}
+                addTemplateItem={addTemplateItem}
+                removeTemplateItem={removeTemplateItem}
+                updateTemplateRoot={updateTemplateRoot}
+              />
             )}
-            {form.custom_fields.map((field) => (
-              <div key={field.id} className="custom-field">
-                <input
-                  value={field.label}
-                  onChange={(e) =>
-                    updateCustomField(field.id, "label", e.target.value)
-                  }
-                  placeholder="Label (ex. Numéro SAV)"
-                />
-                <input
-                  value={field.value}
-                  onChange={(e) =>
-                    updateCustomField(field.id, "value", e.target.value)
-                  }
-                  placeholder="Valeur"
-                />
-                <button
-                  type="button"
-                  className="icon danger"
-                  onClick={() => removeCustomField(field.id)}
-                >
-                  <FiTrash2 />
-                </button>
-              </div>
-            ))}
           </section>
+
+          <section className="bot-panel__section">
+            <div className="bot-panel__section-header">
+              <h4>Aperçu envoyé à l’IA</h4>
+              <button
+                type="button"
+                className="ghost"
+                onClick={handleCopyPreview}
+              >
+                {playbookInputMode(form.template_config) === "pitch"
+                  ? "Copier l’aperçu"
+                  : "Copier dans la base libre"}
+              </button>
+            </div>
+            <textarea value={playbookCorePreview} readOnly rows={10} />
+          </section>
+
+          {playbookInputMode(form.template_config) !== "pitch" && (
+            <>
+              <section className="bot-panel__section">
+                <h4>Base de connaissances libre</h4>
+                <textarea
+                  value={form.knowledge_base}
+                  onChange={(e) => updateField("knowledge_base", e.target.value)}
+                  rows={6}
+                  placeholder="Suppléments, scripts commerciaux, etc."
+                />
+              </section>
+
+              <section className="bot-panel__section">
+                <div className="bot-panel__section-header">
+                  <h4>Champs personnalisés</h4>
+                  <button type="button" className="ghost" onClick={addCustomField}>
+                    <FiPlus /> Ajouter un champ
+                  </button>
+                </div>
+                {form.custom_fields.length === 0 && (
+                  <p className="muted">Aucun champ personnalisé pour l'instant.</p>
+                )}
+                {form.custom_fields.map((field) => (
+                  <div key={field.id} className="custom-field">
+                    <input
+                      value={field.label}
+                      onChange={(e) =>
+                        updateCustomField(field.id, "label", e.target.value)
+                      }
+                      placeholder="Label (ex. Numéro SAV)"
+                    />
+                    <input
+                      value={field.value}
+                      onChange={(e) =>
+                        updateCustomField(field.id, "value", e.target.value)
+                      }
+                      placeholder="Valeur"
+                    />
+                    <button
+                      type="button"
+                      className="icon danger"
+                      onClick={() => removeCustomField(field.id)}
+                    >
+                      <FiTrash2 />
+                    </button>
+                  </div>
+                ))}
+              </section>
+            </>
+          )}
 
           <div className="bot-panel__footer">
             <button type="button" onClick={handleSave} disabled={saving}>

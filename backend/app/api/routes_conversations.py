@@ -9,8 +9,10 @@ from app.services.conversation_service import (
     mark_conversation_unread,
     set_conversation_bot_mode,
     set_conversation_favorite,
+    set_conversation_playground_flow,
     find_or_create_conversation,
 )
+from app.services.playground_flow_service import get_flow_by_id
 
 router = APIRouter()
 
@@ -99,9 +101,36 @@ async def toggle_bot(
         raise HTTPException(status_code=404, detail="conversation_not_found")
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     enabled = bool(payload.get("enabled"))
-    updated = await set_conversation_bot_mode(conversation_id, enabled)
+    reply_mode = payload.get("reply_mode")
+    if reply_mode is not None and reply_mode not in ("gemini", "playground"):
+        raise HTTPException(status_code=400, detail="invalid_reply_mode")
+    updated = await set_conversation_bot_mode(conversation_id, enabled, reply_mode)
     if not updated:
         raise HTTPException(status_code=500, detail="bot_toggle_failed")
+    return {"status": "ok", "conversation": updated}
+
+
+@router.post("/{conversation_id}/playground-flow")
+async def set_conversation_playground_flow_route(
+    conversation_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    conversation = await get_conversation_by_id(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+    raw_id = payload.get("playground_flow_id")
+    if raw_id:
+        flow = await get_flow_by_id(str(raw_id))
+        if not flow or str(flow.get("account_id")) != str(conversation["account_id"]):
+            raise HTTPException(status_code=400, detail="invalid_playground_flow")
+        fid = str(raw_id)
+    else:
+        fid = None
+    updated = await set_conversation_playground_flow(conversation_id, fid)
+    if not updated:
+        raise HTTPException(status_code=500, detail="update_failed")
     return {"status": "ok", "conversation": updated}
 
 

@@ -17,7 +17,11 @@ from app.services.account_service import (
     get_account_by_id,
     get_account_by_phone_number_id,
 )
-from app.services.conversation_service import get_conversation_by_id, set_conversation_bot_mode
+from app.services.conversation_service import (
+    get_conversation_by_id,
+    get_conversation_by_id_fresh,
+    set_conversation_bot_mode,
+)
 from app.services.profile_picture_service import queue_profile_picture_update
 from app.services.storage_service import download_and_store_message_media
 from app.services.whatsapp_api_service import (
@@ -661,7 +665,13 @@ async def _process_incoming_message(
             conversation = refreshed_conversation
         
         logger.info(f"🔍 [BOT DEBUG] Processing incoming message: conversation_id={conversation['id']}, bot_enabled={conversation.get('bot_enabled')}, content_text length={len(content_text or '')}")
-        await _maybe_trigger_bot_reply(conversation["id"], content_text, contact, message.get("type"))
+        await _maybe_trigger_bot_reply(
+            conversation["id"],
+            content_text,
+            contact,
+            message.get("type"),
+            wa_message=message,
+        )
         
         logger.info(f"✅ Message processed successfully: conversation_id={conversation['id']}, type={msg_type}, from={wa_id}")
         
@@ -940,20 +950,25 @@ async def _upsert_conversation(
 ):
     if get_pool():
         existing = await fetch_one(
-            "SELECT bot_enabled FROM conversations WHERE account_id = $1::uuid AND client_number = $2 LIMIT 1",
+            """
+            SELECT bot_enabled, bot_reply_mode FROM conversations
+            WHERE account_id = $1::uuid AND client_number = $2 LIMIT 1
+            """,
             account_id,
             client_number,
         )
         bot_enabled = existing.get("bot_enabled") if existing else None
+        bot_reply_mode = (existing.get("bot_reply_mode") if existing else None) or "gemini"
         row = await fetch_one(
             """
-            INSERT INTO conversations (contact_id, client_number, account_id, status, updated_at, bot_enabled)
-            VALUES ($1::uuid, $2, $3::uuid, 'open', $4::timestamptz, $5)
+            INSERT INTO conversations (contact_id, client_number, account_id, status, updated_at, bot_enabled, bot_reply_mode)
+            VALUES ($1::uuid, $2, $3::uuid, 'open', $4::timestamptz, $5, $6)
             ON CONFLICT (account_id, client_number) DO UPDATE SET
                 contact_id = EXCLUDED.contact_id,
                 status = 'open',
                 updated_at = EXCLUDED.updated_at,
-                bot_enabled = COALESCE(conversations.bot_enabled, EXCLUDED.bot_enabled)
+                bot_enabled = COALESCE(conversations.bot_enabled, EXCLUDED.bot_enabled),
+                bot_reply_mode = COALESCE(conversations.bot_reply_mode, EXCLUDED.bot_reply_mode)
             RETURNING *
             """,
             contact_id,
@@ -961,16 +976,20 @@ async def _upsert_conversation(
             account_id,
             _parse_timestamp_iso(timestamp_iso),
             bot_enabled if bot_enabled is not None else False,
+            bot_reply_mode,
         )
         return dict(row) if row else None
     existing = await supabase_execute(
         supabase.table("conversations")
-        .select("bot_enabled")
+        .select("bot_enabled, bot_reply_mode")
         .eq("account_id", account_id)
         .eq("client_number", client_number)
         .limit(1)
     )
     bot_enabled = existing.data[0].get("bot_enabled") if existing.data else None
+    bot_reply_mode = (
+        (existing.data[0].get("bot_reply_mode") if existing.data else None) or "gemini"
+    )
     upsert_data = {
         "contact_id": contact_id,
         "client_number": client_number,
@@ -980,6 +999,7 @@ async def _upsert_conversation(
     }
     if bot_enabled is not None:
         upsert_data["bot_enabled"] = bot_enabled
+    upsert_data["bot_reply_mode"] = bot_reply_mode
     res = await supabase_execute(
         supabase.table("conversations").upsert(upsert_data, on_conflict="account_id,client_number")
     )
@@ -1146,6 +1166,7 @@ async def _maybe_trigger_bot_reply(
     content_text: Optional[str],
     contact: Dict[str, Any],
     message_type: Optional[str] = "text",
+    wa_message: Optional[Dict[str, Any]] = None,
 ):
     print(f"🔍 [BOT DEBUG] _maybe_trigger_bot_reply called for conversation {conversation_id}, content_text length: {len(content_text or '')}, message_type: {message_type}")
     logger.info(f"🔍 [BOT DEBUG] _maybe_trigger_bot_reply called for conversation {conversation_id}, content_text length: {len(content_text or '')}, message_type: {message_type}")
@@ -1156,14 +1177,18 @@ async def _maybe_trigger_bot_reply(
         return
 
     logger.info(f"🔍 [BOT DEBUG] Fetching conversation {conversation_id} to check bot status")
-    conversation = await get_conversation_by_id(conversation_id)
+    conversation = await get_conversation_by_id_fresh(conversation_id)
     
     if not conversation:
         logger.warning(f"⚠️ [BOT DEBUG] Conversation {conversation_id} not found, cannot trigger bot")
         return
         
-    logger.info(f"🔍 [BOT DEBUG] Conversation found: id={conversation_id}, bot_enabled={conversation.get('bot_enabled')}, account_id={conversation.get('account_id')}")
-    
+    reply_mode = str(conversation.get("bot_reply_mode") or "gemini").strip().lower()
+    logger.info(
+        f"🔍 [BOT DEBUG] Conversation found: id={conversation_id}, bot_enabled={conversation.get('bot_enabled')}, "
+        f"bot_reply_mode={reply_mode}, account_id={conversation.get('account_id')}"
+    )
+
     if not conversation.get("bot_enabled"):
         logger.info(f"ℹ️ [BOT DEBUG] Bot skip: bot disabled for conversation {conversation_id}")
         return
@@ -1171,7 +1196,8 @@ async def _maybe_trigger_bot_reply(
     account_id = conversation["account_id"]
     logger.info(f"🔍 [BOT DEBUG] Account ID: {account_id}")
 
-    if message_type and message_type.lower() != "text":
+    mt = (message_type or "text").lower() if message_type else "text"
+    if mt not in ("text", "button", "interactive"):
         fallback = "Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ?"
         logger.info(f"ℹ️ [BOT DEBUG] Non-text message detected for {conversation_id} (type: {message_type}); sending fallback")
         await send_message({"conversation_id": conversation_id, "content": fallback}, skip_bot_trigger=True)
@@ -1179,6 +1205,41 @@ async def _maybe_trigger_bot_reply(
 
     contact_name = contact.get("display_name") or contact.get("whatsapp_number")
     logger.info(f"🔍 [BOT DEBUG] Contact name: {contact_name}, contact data: {list(contact.keys())}")
+
+    if reply_mode == "playground":
+        try:
+            from app.services.flow_runtime_service import try_run_playground_flow
+
+            flow_done = await try_run_playground_flow(
+                conversation_id,
+                conversation,
+                contact,
+                wa_message or {},
+                message_text,
+                message_type,
+            )
+            if flow_done:
+                logger.info(
+                    "🧩 [BOT DEBUG] Playground flow handled message for conversation %s",
+                    conversation_id,
+                )
+                return
+            logger.warning(
+                "playground mode: flux non exécuté (graphe absent, start non match, compte WABA, …) "
+                "— pas de fallback Gemini. conversation_id=%s account_id=%s playground_flow_id=%s",
+                conversation_id,
+                conversation.get("account_id"),
+                conversation.get("playground_flow_id"),
+            )
+            return
+        except Exception as flow_exc:
+            logger.error(
+                "❌ [BOT DEBUG] Playground flow error for %s: %s",
+                conversation_id,
+                flow_exc,
+                exc_info=True,
+            )
+            # Erreur inattendue : dernier recours Gemini pour ne pas laisser sans réponse.
 
     try:
         logger.info(

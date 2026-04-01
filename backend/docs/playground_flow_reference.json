@@ -1,0 +1,186 @@
+{
+  "$comment": "Référence alignée sur flow_runtime_service.py, playground_flow_service.py, flowMigrate.js, flowNodes.jsx (mise à jour handoff + delayNode réel).",
+  "graph": {
+    "description": "Champ graph en base (playground_flows) ou published_playground_flow (legacy).",
+    "shape": {
+      "v": 2,
+      "nodes": [],
+      "edges": []
+    },
+    "normalization_backend": {
+      "source": "playground_flow_service._normalize_graph",
+      "rules": "Force nodes et edges en listes ; v défaut 2."
+    }
+  },
+  "reactFlowNode": {
+    "id": "string, unique dans le graphe",
+    "type": "voir nodeTypes",
+    "position": { "x": "number", "y": "number" },
+    "data": "objet selon le type ; varKey complété par migrateNode si absent"
+  },
+  "reactFlowEdge": {
+    "id": "string recommandé",
+    "source": "id nœud source",
+    "target": "id nœud cible",
+    "sourceHandle": "string | null — ids des poignées source pour le routage",
+    "targetHandle": "optionnel"
+  },
+  "variableSubstitution": {
+    "syntax": "{{nomVariable}}",
+    "source": "_subst_vars",
+    "storage": "conversations.bot_flow_state.variables"
+  },
+  "bot_flow_state": {
+    "description": "Session JSON sur conversations.bot_flow_state",
+    "fields": {
+      "phoneNumber": "string",
+      "currentNodeId": "string | null — en attente réponse interactiveNode",
+      "lastInteractionAt": "ISO UTC",
+      "wabaOptIn": "boolean",
+      "variables": "dict",
+      "continueFromNodeId": "string | null — reprise du parcours",
+      "afterInteractiveTarget": "string | null",
+      "entryStartNodeId": "string | null — start choisi pour la session",
+      "activeFlowId": "string | legacy — id flux résolu ou mot legacy",
+      "flowDelayUntil": "ISO UTC | null — réveil après delayNode ou timeout interactif",
+      "flowDelayResumeNodeId": "string | null — nœud à exécuter après le délai (delayNode ou branche timeout)"
+    },
+    "reset_when_flow_changes": "Si activeFlowId change : variables, currentNodeId, continueFromNodeId, afterInteractiveTarget, entryStartNodeId, flowDelayUntil, flowDelayResumeNodeId sont remis à zéro."
+  },
+  "delayScheduling": {
+    "description": "Nœud delayNode : attente réelle, pas un passthrough.",
+    "implementation": "Boucle asyncio periodic_playground_flow_delays (~45s) + fetch_due_playground_delay_conversation_ids ; pas Celery.",
+    "maxDelaySeconds": 2592000,
+    "maxDelayNote": "30 jours — _FLOW_DELAY_MAX_SECONDS",
+    "onDelayNode": [
+      "Calcule secondes depuis duration (nombre > 0) et unit s|m|h|d",
+      "Si durée invalide ou ≤ 0 : enchaîne comme avant (successeur immédiat)",
+      "Sinon : flowDelayUntil = maintenant + delta, flowDelayResumeNodeId = successeur, vide currentNodeId / continueFromNodeId / afterInteractiveTarget, persiste, return True"
+    ],
+    "whileDelayPending": "Message entrant : si maintenant < flowDelayUntil et pas d’attente interactive (currentNodeId vide), persiste et return True. Si currentNodeId est défini (timeout + réponse attendue), le message est traité normalement.",
+    "whenDelayExpires": [
+      "Soit le prochain message client : _consume_due_flow_delay → continueFromNodeId = resume (currentNodeId / afterInteractiveTarget vidés si présents)",
+      "Soit la tâche périodique : try_run_playground_flow(..., scheduled_delay_wake=true)"
+    ],
+    "interactiveTimeout": "Après envoi interactiveNode : si arête timeout → flowDelayUntil = now + durée, flowDelayResumeNodeId = cible. Réponse utilisateur sur ce nœud : flowDelayUntil et flowDelayResumeNodeId remis à null.",
+    "multiInstanceWarning": "Plusieurs workers API peuvent tenter le réveil ; le premier consomme flowDelayUntil."
+  },
+  "nodeTypes": {
+    "start": {
+      "data": {
+        "varKey": "string",
+        "triggerType": ["message_in", "schedule", "webhook", "manual"],
+        "messageMatch": ["any", "contains", "equals", "regex"],
+        "messageKeyword": "string",
+        "scheduleAt": "string",
+        "scheduleRepeat": ["none", "daily", "weekly", "monthly"],
+        "webhookSecretRef": "string",
+        "entryPriority": "number — priorité décroissante entre starts qui matchent"
+      },
+      "handles": { "source": [null], "target": [] }
+    },
+    "sendText": {
+      "data": { "body": "string", "varKey": "string" },
+      "handles": { "target": [null], "source": [null] }
+    },
+    "sendTemplate": {
+      "data": {
+        "selectedTemplateKey": "name||lang",
+        "templateName": "string",
+        "templateLanguage": "string",
+        "variableValues": "dict",
+        "quickReplyButtons": "array",
+        "varKey": "string"
+      },
+      "handles": { "target": [null], "source": [null] }
+    },
+    "interactiveNode": {
+      "data": {
+        "body": "string",
+        "uiKind": ["buttons", "list"],
+        "choices": [{ "id": "string", "title": "string", "description": "string", "saveToVariable": "string", "saveValue": "any" }],
+        "listButtonText": "string",
+        "timeoutDuration": "number optionnel (ex. 48)",
+        "timeoutUnit": "string optionnel s|m|h|d — défaut h",
+        "varKey": "string"
+      },
+      "handles": { "target": [null], "source": [null, "timeout"] },
+      "limits_runtime": { "buttons": "max 3, titre 20 car.", "list": "max 10 lignes, titre 24, description 72" },
+      "timeout_runtime": "Si arête sourceHandle=timeout et timeoutDuration>0 : flowDelayUntil / flowDelayResumeNodeId ; réponse utilisateur annule le délai"
+    },
+    "routerNode": {
+      "data": { "routes": [{ "label": "string", "match": "string" }], "varKey": "string" },
+      "handles": { "target": [null], "source": ["route-0", "route-1", "...", "escape"] }
+    },
+    "gemini": {
+      "data": {
+        "hint": "string",
+        "systemPrompt": "string",
+        "intents": [{ "keyword": "string", "label": "string" }],
+        "varKey": "string"
+      },
+      "handles": {
+        "sans_intentions": { "source": [null] },
+        "avec_intentions": { "source": ["intent-0", "intent-1", "...", "intent-unknown"] }
+      }
+    },
+    "handoffNode": {
+      "description": "Type UI ; backend accepte aussi l’alias legacy \"handoff\".",
+      "data": {
+        "tagsText": "string",
+        "assignAgent": "string",
+        "internalMessage": "string",
+        "varKey": "string"
+      },
+      "handles": { "target": [null], "source": [null] },
+      "runtime": "set_conversation_bot_mode(False), escalate_to_human, continueFromNodeId = successeur optionnel"
+    },
+    "delayNode": {
+      "data": {
+        "duration": "string ou nombre (interprété en float)",
+        "unit": ["s", "m", "h", "d"],
+        "varKey": "string"
+      },
+      "handles": { "target": [null], "source": [null] },
+      "runtime": "Voir section delayScheduling — attente réelle jusqu’à flowDelayUntil puis reprise."
+    },
+    "waitUntilNode": {
+      "data": { "until": "string", "timezoneNote": "string", "varKey": "string" },
+      "handles": { "target": [null], "source": [null] },
+      "runtime": "passthrough immédiat (pas d’attente calendaire côté serveur)"
+    },
+    "timeWindowNode": {
+      "data": {
+        "activeDays": "array de strings",
+        "startTime": "HH:MM",
+        "endTime": "HH:MM",
+        "varKey": "string"
+      },
+      "handles_UI": { "source": ["inside", "outside"] },
+      "runtime": "passthrough : _successor sans handle — branches inside/outside non distinguées par le moteur"
+    },
+    "logicNode": {
+      "data": { "logicMode": ["si", "ou", "et"], "condition": "string", "varKey": "string" },
+      "handles_UI": {
+        "si": { "source": ["true", "false"] },
+        "ou": { "source": ["a", "b"] },
+        "et": { "target": ["inA", "inB"], "source": [null] }
+      },
+      "runtime": {
+        "si": "branche sourceHandle true sinon premier sans handle",
+        "ou_et": "passthrough simple — pas de routage multi-sortie"
+      }
+    }
+  },
+  "migrations_UI": {
+    "source": "frontend flowMigrate.js",
+    "legacyTypes": { "ifNode": "logicNode logicMode si", "orNode": "logicNode logicMode ou" }
+  },
+  "inboundSignals": {
+    "source": "extract_inbound_flow_signals",
+    "fields": ["text", "button_id", "list_row_id"]
+  },
+  "limits": {
+    "maxStepsPerInvocation": 40
+  }
+}

@@ -50,7 +50,8 @@ async def get_all_conversations(
         # PostgreSQL direct: une seule requête avec LATERAL pour le dernier message
         sql = """
             SELECT c.id, c.contact_id, c.account_id, c.client_number, c.is_group, c.is_favorite,
-                   c.unread_count, c.status, c.updated_at, c.bot_enabled,
+                   c.unread_count, c.status, c.updated_at, c.bot_enabled, c.bot_reply_mode,
+                   c.playground_flow_id,
                    co.display_name AS contact_display_name,
                    co.whatsapp_number AS contact_whatsapp_number,
                    co.profile_picture_url AS contact_profile_picture_url,
@@ -90,6 +91,8 @@ async def get_all_conversations(
                 "status": r.get("status", "open"),
                 "updated_at": r["updated_at"],
                 "bot_enabled": r.get("bot_enabled", False),
+                "bot_reply_mode": r.get("bot_reply_mode") or "gemini",
+                "playground_flow_id": r.get("playground_flow_id"),
                 "contacts": {
                     "display_name": r.get("contact_display_name"),
                     "whatsapp_number": r.get("contact_whatsapp_number"),
@@ -232,6 +235,9 @@ def _row_to_conversation(r: dict) -> dict:
         "status": r.get("status", "open"),
         "updated_at": r.get("updated_at"),
         "bot_enabled": r.get("bot_enabled", False),
+        "bot_reply_mode": r.get("bot_reply_mode") or "gemini",
+        "playground_flow_id": r.get("playground_flow_id"),
+        "bot_flow_state": r.get("bot_flow_state"),
     }
     if "contact_display_name" in r or "contact_whatsapp_number" in r:
         conv["contacts"] = {
@@ -242,16 +248,14 @@ def _row_to_conversation(r: dict) -> dict:
     return conv
 
 
-@cached(ttl_seconds=60, key_prefix="conversation")
-async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
-    """
-    Récupère une conversation avec cache (1 min TTL).
-    """
+async def _fetch_conversation_by_id(conversation_id: str) -> Optional[dict]:
+    """Charge la conversation depuis la base (sans cache)."""
     if get_pool():
         row = await fetch_one(
             """
             SELECT c.id, c.contact_id, c.account_id, c.client_number, c.is_group, c.is_favorite,
-                   c.unread_count, c.status, c.updated_at, c.bot_enabled,
+                   c.unread_count, c.status, c.updated_at, c.bot_enabled, c.bot_reply_mode,
+                   c.playground_flow_id, c.bot_flow_state,
                    co.display_name AS contact_display_name,
                    co.whatsapp_number AS contact_whatsapp_number,
                    co.profile_picture_url AS contact_profile_picture_url
@@ -267,19 +271,66 @@ async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
     )
     if not res.data:
         return None
-    return res.data[0]
+    raw = res.data[0]
+    if not raw.get("bot_reply_mode"):
+        raw = {**raw, "bot_reply_mode": "gemini"}
+    return raw
 
 
-async def set_conversation_bot_mode(conversation_id: str, enabled: bool) -> Optional[dict]:
+@cached(ttl_seconds=60, key_prefix="conversation")
+async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
+    """
+    Récupère une conversation avec cache (1 min TTL).
+    Pour le webhook / bot, préférer get_conversation_by_id_fresh.
+    """
+    return await _fetch_conversation_by_id(conversation_id)
+
+
+async def get_conversation_by_id_fresh(conversation_id: str) -> Optional[dict]:
+    """
+    Même chose que get_conversation_by_id mais sans cache — évite bot_reply_mode
+    ou playground_flow_id obsolètes (TTL 60s, ou autre worker sans invalidation partagée).
+    """
+    return await _fetch_conversation_by_id(conversation_id)
+
+
+async def set_conversation_bot_mode(
+    conversation_id: str,
+    enabled: bool,
+    reply_mode: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Active/désactive le bot et optionnellement fixe bot_reply_mode ('gemini' | 'playground').
+    """
+    rm = None
+    if reply_mode is not None:
+        rm = str(reply_mode).strip().lower()
+        if rm not in ("gemini", "playground"):
+            rm = None
+
     if get_pool():
-        await execute(
-            "UPDATE conversations SET bot_enabled = $2 WHERE id = $1::uuid",
-            conversation_id,
-            enabled,
-        )
+        if rm is not None:
+            await execute(
+                """
+                UPDATE conversations SET bot_enabled = $2, bot_reply_mode = $3
+                WHERE id = $1::uuid
+                """,
+                conversation_id,
+                enabled,
+                rm,
+            )
+        else:
+            await execute(
+                "UPDATE conversations SET bot_enabled = $2 WHERE id = $1::uuid",
+                conversation_id,
+                enabled,
+            )
     else:
+        upd: dict = {"bot_enabled": enabled}
+        if rm is not None:
+            upd["bot_reply_mode"] = rm
         await supabase_execute(
-            supabase.table("conversations").update({"bot_enabled": enabled}).eq("id", conversation_id)
+            supabase.table("conversations").update(upd).eq("id", conversation_id)
         )
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
     
@@ -287,7 +338,8 @@ async def set_conversation_bot_mode(conversation_id: str, enabled: bool) -> Opti
         row = await fetch_one(
             """
             SELECT c.id, c.contact_id, c.account_id, c.client_number, c.is_group, c.is_favorite,
-                   c.unread_count, c.status, c.updated_at, c.bot_enabled,
+                   c.unread_count, c.status, c.updated_at, c.bot_enabled, c.bot_reply_mode,
+                   c.playground_flow_id, c.bot_flow_state,
                    co.display_name AS contact_display_name,
                    co.whatsapp_number AS contact_whatsapp_number,
                    co.profile_picture_url AS contact_profile_picture_url
@@ -303,7 +355,34 @@ async def set_conversation_bot_mode(conversation_id: str, enabled: bool) -> Opti
     )
     if not updated.data:
         return None
-    return updated.data[0]
+    raw = updated.data[0]
+    if not raw.get("bot_reply_mode"):
+        raw = {**raw, "bot_reply_mode": "gemini"}
+    return raw
+
+
+async def set_conversation_playground_flow(
+    conversation_id: str, playground_flow_id: Optional[str]
+) -> Optional[dict]:
+    """Lie une conversation à un flux playground (ou null = défaut du compte). Réinitialise bot_flow_state."""
+    if get_pool():
+        await execute(
+            """
+            UPDATE conversations
+            SET playground_flow_id = $2, bot_flow_state = NULL
+            WHERE id = $1::uuid
+            """,
+            conversation_id,
+            playground_flow_id,
+        )
+    else:
+        await supabase_execute(
+            supabase.table("conversations")
+            .update({"playground_flow_id": playground_flow_id, "bot_flow_state": None})
+            .eq("id", conversation_id)
+        )
+    await invalidate_cache_pattern(f"conversation:{conversation_id}")
+    return await get_conversation_by_id(conversation_id)
 
 
 def normalize_phone_number(phone: str) -> Optional[str]:

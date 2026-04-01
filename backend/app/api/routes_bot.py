@@ -41,5 +41,5 @@ async def update_bot_profile(
     )
     if not has_access:
         raise HTTPException(status_code=403, detail="permission_denied")
-    return await upsert_bot_profile(account_id, payload.dict())
+    return await upsert_bot_profile(account_id, payload.dict(exclude_unset=True))
 

@@ -9,7 +9,13 @@ import { formatPhoneNumber } from "../../utils/formatPhone";
 import MobileContactDetail from "./MobileContactDetail";
 import MobileChatSettings from "./MobileChatSettings";
 
-export default function MobileChatWindow({ conversation, onBack, onRefresh, onShowContact, onToggleBotMode }) {
+export default function MobileChatWindow({
+  conversation,
+  onBack,
+  onRefresh,
+  onShowContact,
+  onBotSettingsUpdated,
+}) {
   const [messages, setMessages] = useState([]);
   const [showMenu, setShowMenu] = useState(false);
   const messagesEndRef = useRef(null);
@@ -482,27 +488,79 @@ export default function MobileChatWindow({ conversation, onBack, onRefresh, onSh
             }}>
               <FiSliders /> Thème de la discussion
             </button>
-            <button onClick={async () => {
-              setShowMenu(false);
-              if (!conversation?.id || isTogglingBot) return;
-              setIsTogglingBot(true);
-              try {
-                const newBotMode = !conversation.bot_enabled;
-                await toggleConversationBotMode(conversation.id, newBotMode);
-                if (onToggleBotMode) {
-                  onToggleBotMode(conversation.id, newBotMode);
+            <button
+              type="button"
+              disabled={isTogglingBot}
+              onClick={async () => {
+                setShowMenu(false);
+                if (!conversation?.id || isTogglingBot) return;
+                setIsTogglingBot(true);
+                try {
+                  const res = await toggleConversationBotMode(conversation.id, {
+                    enabled: false,
+                  });
+                  const updated = res.data?.conversation;
+                  if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
+                  onRefresh?.();
+                } catch (error) {
+                  console.error("Erreur mode humain:", error);
+                  alert("Erreur lors du changement de mode");
+                } finally {
+                  setIsTogglingBot(false);
                 }
-                if (onRefresh) {
-                  onRefresh();
+              }}
+            >
+              <FiCpu /> Mode humain (pas de bot)
+            </button>
+            <button
+              type="button"
+              disabled={isTogglingBot}
+              onClick={async () => {
+                setShowMenu(false);
+                if (!conversation?.id || isTogglingBot) return;
+                setIsTogglingBot(true);
+                try {
+                  const res = await toggleConversationBotMode(conversation.id, {
+                    enabled: true,
+                    reply_mode: "gemini",
+                  });
+                  const updated = res.data?.conversation;
+                  if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
+                  onRefresh?.();
+                } catch (error) {
+                  console.error("Erreur mode Gemini:", error);
+                  alert("Erreur lors du changement de mode");
+                } finally {
+                  setIsTogglingBot(false);
                 }
-              } catch (error) {
-                console.error("Erreur lors du changement de mode:", error);
-                alert("Erreur lors du changement de mode");
-              } finally {
-                setIsTogglingBot(false);
-              }
-            }}>
-              <FiCpu /> {conversation?.bot_enabled ? 'Passer en mode Humain' : 'Passer en mode Bot'}
+              }}
+            >
+              <FiCpu /> Bot Gemini (playbook)
+            </button>
+            <button
+              type="button"
+              disabled={isTogglingBot}
+              onClick={async () => {
+                setShowMenu(false);
+                if (!conversation?.id || isTogglingBot) return;
+                setIsTogglingBot(true);
+                try {
+                  const res = await toggleConversationBotMode(conversation.id, {
+                    enabled: true,
+                    reply_mode: "playground",
+                  });
+                  const updated = res.data?.conversation;
+                  if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
+                  onRefresh?.();
+                } catch (error) {
+                  console.error("Erreur mode Playground:", error);
+                  alert("Erreur lors du changement de mode");
+                } finally {
+                  setIsTogglingBot(false);
+                }
+              }}
+            >
+              <FiCpu /> Bot Playground (flux)
             </button>
             </div>
           )}

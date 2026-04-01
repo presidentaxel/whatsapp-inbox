@@ -9,6 +9,7 @@ from app.services.account_service import (
     expose_accounts_limited,
     get_account_by_id,
 )
+from app.services.playground_flow_service import list_playground_flows_with_default_flag
 from app.schemas.accounts import AccountCreate, AccountGoogleDriveUpdate
 
 router = APIRouter()
@@ -77,6 +78,22 @@ async def update_account_google_drive(
         "google_drive_enabled": updated.get("google_drive_enabled", False),
         "google_drive_folder_id": updated.get("google_drive_folder_id")
     }
+
+
+@router.get("/{account_id}/playground-flows")
+async def list_account_playground_flows(
+    account_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Liste des scénarios Playground du compte (alias de GET /bot/playground-flows?account_id=).
+    Utile si le préfixe /bot/playground-flows n’est pas exposé (proxy / déploiement).
+    """
+    account = await get_account_by_id(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
+    return await list_playground_flows_with_default_flag(account_id)
 
 
 @router.delete("/{account_id}")

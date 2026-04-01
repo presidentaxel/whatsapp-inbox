@@ -15,6 +15,7 @@ from app.api.routes_contacts import router as contacts_router
 from app.api.routes_auth import router as auth_router
 from app.api.routes_admin import router as admin_router
 from app.api.routes_bot import router as bot_router
+from app.api.routes_playground_flows import router as playground_flows_router
 from app.api.routes_health import router as health_router
 from app.api.routes_app import router as app_router
 from app.api.routes_invitations import router as invitations_router
@@ -39,6 +40,7 @@ from app.services.profile_picture_service import periodic_profile_picture_update
 from app.services.media_background_service import periodic_media_backfill
 from app.services.pinned_notification_service import periodic_pin_notification_check
 from app.services.pending_template_service import resume_pending_templates_on_startup, periodic_template_check
+from app.services.flow_runtime_service import periodic_playground_flow_delays
 
 app = FastAPI(
     title="WhatsApp Inbox API",
@@ -65,6 +67,7 @@ app.include_router(google_drive_router)
 app.include_router(contacts_router, prefix="/contacts")
 app.include_router(admin_router, prefix="/admin")
 app.include_router(bot_router, prefix="/bot")
+app.include_router(playground_flows_router, prefix="/bot/playground-flows")
 app.include_router(health_router)
 # Diagnostics accessible directement (pas sous /api car nginx intercepte)
 # Utiliser un préfixe spécial qui n'est pas intercepté
@@ -133,6 +136,10 @@ async def startup_event():
     task4 = asyncio.create_task(periodic_template_check())
     _periodic_tasks.append(task4)
     logger.info("✅ Pending templates periodic check task started")
+
+    task5 = asyncio.create_task(periodic_playground_flow_delays())
+    _periodic_tasks.append(task5)
+    logger.info("✅ Playground flow delay wake task started")
 
 
 @app.on_event("shutdown")

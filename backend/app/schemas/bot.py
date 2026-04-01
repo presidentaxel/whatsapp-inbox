@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -19,4 +19,6 @@ class BotProfileUpdate(BaseModel):
     knowledge_base: Optional[str] = None
     custom_fields: List[BotCustomField] = Field(default_factory=list)
     template_config: dict = Field(default_factory=dict)
+    published_playground_flow: Optional[Dict[str, Any]] = None
+    default_playground_flow_id: Optional[str] = None
 

@@ -264,8 +264,20 @@ export default function MobileConversationsList({
                       <span className="mobile-conv-item__name">
                         {displayName}
                       </span>
-                      <span className={`mobile-conv-item__bot-indicator ${conv.bot_enabled ? 'bot' : 'human'}`}>
-                        {conv.bot_enabled ? 'Bot' : 'Humain'}
+                      <span
+                        className={`mobile-conv-item__bot-indicator ${
+                          !conv.bot_enabled
+                            ? "human"
+                            : conv.bot_reply_mode === "playground"
+                              ? "playground"
+                              : "bot"
+                        }`}
+                      >
+                        {!conv.bot_enabled
+                          ? "Humain"
+                          : conv.bot_reply_mode === "playground"
+                            ? "Playground"
+                            : "Gemini"}
                       </span>
                     </div>
                     <span className="mobile-conv-item__time">{time}</span>

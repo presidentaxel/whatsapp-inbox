@@ -116,8 +116,14 @@ export default function ConversationList({
               </div>
               <div className="conversation-item__header-meta">
                 {c.bot_enabled && (
-                  <span className="bot-pill bot-pill--on">
-                    BOT MODE
+                  <span
+                    className={`bot-pill ${
+                      c.bot_reply_mode === "playground"
+                        ? "bot-pill--playground"
+                        : "bot-pill--on"
+                    }`}
+                  >
+                    {c.bot_reply_mode === "playground" ? "PLAYGROUND" : "GEMINI"}
                   </span>
                 )}
                 <span className="conversation-time">{timeLabel}</span>

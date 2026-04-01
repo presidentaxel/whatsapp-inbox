@@ -54,6 +54,8 @@ def _normalize_profile(row: Dict[str, Any], account_id: str) -> Dict[str, Any]:
         "custom_fields": normalized_fields,
         "updated_at": row.get("updated_at"),
         "template_config": template_config,
+        "published_playground_flow": row.get("published_playground_flow"),
+        "default_playground_flow_id": row.get("default_playground_flow_id"),
     }
 
 
@@ -79,6 +81,8 @@ async def get_bot_profile(account_id: str) -> Dict[str, Any]:
         "knowledge_base": "",
         "custom_fields": [],
         "template_config": _sanitize_template_config({}),
+        "published_playground_flow": None,
+        "default_playground_flow_id": None,
     }
     return placeholder
 
@@ -86,8 +90,15 @@ async def get_bot_profile(account_id: str) -> Dict[str, Any]:
 async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Met à jour le bot profile et invalide le cache.
+    Les clés absentes du payload conservent les valeurs en base (mises à jour partielles).
     """
-    custom_fields = payload.get("custom_fields") or []
+    res_exist = await supabase_execute(
+        supabase.table("bot_profiles").select("*").eq("account_id", account_id).limit(1)
+    )
+    existing: Dict[str, Any] = dict(res_exist.data[0]) if res_exist.data else {}
+    merged: Dict[str, Any] = {**existing, **payload}
+
+    custom_fields = merged.get("custom_fields") or []
     normalized_fields = []
     for field in custom_fields:
         if not field.get("label") and not field.get("value"):
@@ -102,14 +113,18 @@ async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[s
 
     upsert_payload = {
         "account_id": account_id,
-        "business_name": payload.get("business_name"),
-        "description": payload.get("description"),
-        "address": payload.get("address"),
-        "hours": payload.get("hours"),
-        "knowledge_base": payload.get("knowledge_base"),
+        "business_name": merged.get("business_name"),
+        "description": merged.get("description"),
+        "address": merged.get("address"),
+        "hours": merged.get("hours"),
+        "knowledge_base": merged.get("knowledge_base"),
         "custom_fields": normalized_fields,
-        "template_config": _sanitize_template_config(payload.get("template_config") or {}),
+        "template_config": _sanitize_template_config(merged.get("template_config") or {}),
     }
+    if "published_playground_flow" in merged:
+        upsert_payload["published_playground_flow"] = merged.get("published_playground_flow")
+    if "default_playground_flow_id" in merged:
+        upsert_payload["default_playground_flow_id"] = merged.get("default_playground_flow_id")
     await supabase_execute(
         supabase.table("bot_profiles").upsert(
             upsert_payload,
@@ -415,6 +430,91 @@ async def generate_bot_reply(
     return None
 
 
+async def generate_flow_gemini_keyword(
+    conversation_id: str,
+    _account_id: str,
+    user_text: str,
+    system_prompt: str,
+    hint: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Appel Gemini « routeur » : une seule réponse courte (mot-clé), pour les nœuds Gemini du playground.
+    """
+    if not settings.GEMINI_API_KEY:
+        logger.info("GEMINI_API_KEY absent, skip flow gemini for %s", conversation_id)
+        return None
+    user_text = (user_text or "").strip()
+    if not user_text:
+        return None
+    base = (system_prompt or "").strip()
+    if "[INSERER LE TEXTE DU USER ICI]" in base:
+        instruction = base.replace("[INSERER LE TEXTE DU USER ICI]", user_text)
+    else:
+        instruction = f"{base}\n\nTexte de l'utilisateur :\n{user_text}"
+    if hint:
+        instruction = f"{instruction}\n\nConsigne complémentaire :\n{hint.strip()}"
+
+    generation_config: Dict[str, Any] = {
+        "temperature": 0.1,
+        "maxOutputTokens": 32,
+    }
+    if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
+        generation_config["thinkingConfig"] = {"thinkingBudget": 128}
+
+    conversation_parts = [{"role": "user", "parts": [{"text": "Analyse et réponds selon les instructions."}]}]
+
+    payload_v1beta = {
+        "system_instruction": {
+            "role": "system",
+            "parts": [{"text": instruction}],
+        },
+        "contents": conversation_parts,
+        "generationConfig": generation_config,
+    }
+    system_message = {
+        "role": "user",
+        "parts": [{"text": instruction}],
+    }
+    payload_v1 = {
+        "contents": [system_message] + conversation_parts,
+        "generationConfig": generation_config,
+    }
+
+    endpoint_v1beta = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+    endpoint_v1 = (
+        f"https://generativelanguage.googleapis.com/v1/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+
+    try:
+        try:
+            data = await gemini_circuit_breaker.call_async(
+                _call_gemini_api, endpoint_v1beta, payload_v1beta, conversation_id
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 400):
+                data = await gemini_circuit_breaker.call_async(
+                    _call_gemini_api, endpoint_v1, payload_v1, conversation_id
+                )
+            else:
+                raise
+    except Exception as exc:
+        logger.error("Flow Gemini failed for %s: %s", conversation_id, exc)
+        return None
+
+    candidates: List[Dict[str, Any]] = data.get("candidates") or []
+    for candidate in candidates:
+        parts = (candidate.get("content") or {}).get("parts") or []
+        for part in parts:
+            text = (part.get("text") or "").strip()
+            if text:
+                return text.split()[0] if text else None
+    return None
+
+
 def _build_knowledge_text(profile: Dict[str, Any], contact_name: Optional[str]) -> str:
     """
     Construit le PLAYBOOK à partir du template + des champs libres.
@@ -426,9 +526,18 @@ def _build_knowledge_text(profile: Dict[str, Any], contact_name: Optional[str]) 
     """
     lines: List[str] = []
 
-    template_text = _render_template_sections(profile.get("template_config") or {})
-    if template_text:
-        lines.append(template_text)
+    template_cfg = profile.get("template_config") or {}
+    mode = str(template_cfg.get("playbook_input_mode") or "structured").strip().lower()
+    pitch = str(template_cfg.get("playbook_pitch") or "").strip()
+    use_pitch_body = mode == "pitch" and bool(pitch)
+    use_pitch_mode = mode == "pitch"
+
+    if use_pitch_body:
+        lines.append(pitch)
+    else:
+        template_text = _render_template_sections(template_cfg)
+        if template_text:
+            lines.append(template_text)
 
     if profile.get("business_name"):
         lines.append(f"Nom: {profile['business_name']}")
@@ -438,14 +547,16 @@ def _build_knowledge_text(profile: Dict[str, Any], contact_name: Optional[str]) 
         lines.append(f"Adresse: {profile['address']}")
     if profile.get("hours"):
         lines.append(f"Horaires: {profile['hours']}")
-    if profile.get("knowledge_base"):
-        lines.append(f"Informations additionnelles: {profile['knowledge_base']}")
 
-    for field in profile.get("custom_fields", []):
-        label = field.get("label")
-        value = field.get("value")
-        if label and value:
-            lines.append(f"{label}: {value}")
+    if not use_pitch_mode:
+        if profile.get("knowledge_base"):
+            lines.append(f"Informations additionnelles: {profile['knowledge_base']}")
+
+        for field in profile.get("custom_fields", []):
+            label = field.get("label")
+            value = field.get("value")
+            if label and value:
+                lines.append(f"{label}: {value}")
 
     if contact_name:
         lines.append(f"Prenom/nom du contact: {contact_name}")
@@ -547,6 +658,13 @@ def _sanitize_template_config(data: Any) -> Dict[str, Any]:
     }
 
     sanitized["special_rules"] = _clean_str(data.get("special_rules"))
+
+    pitch_raw = _clean_str(data.get("playbook_pitch"))
+    if len(pitch_raw) > 100_000:
+        pitch_raw = pitch_raw[:100_000]
+    sanitized["playbook_pitch"] = pitch_raw
+    mode_raw = str(data.get("playbook_input_mode") or "structured").strip().lower()
+    sanitized["playbook_input_mode"] = "pitch" if mode_raw == "pitch" else "structured"
 
     return sanitized
 

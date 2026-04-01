@@ -506,6 +506,11 @@
   color: rgba(255, 255, 255, 0.7);
 }
 
+.mobile-conv-item__bot-indicator.playground {
+  background: rgba(167, 139, 250, 0.22);
+  color: #c4b5fd;
+}
+
 .mobile-conv-item__time {
   color: #8696a0;
   font-size: 0.75rem;

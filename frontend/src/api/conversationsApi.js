@@ -17,8 +17,19 @@ export const markConversationUnread = (conversationId) =>
 export const toggleConversationFavorite = (conversationId, favorite) =>
   api.post(`/conversations/${conversationId}/favorite`, { favorite });
 
-export const toggleConversationBotMode = (conversationId, enabled) =>
-  api.post(`/conversations/${conversationId}/bot`, { enabled });
+/**
+ * @param {object} opts
+ * @param {boolean} opts.enabled
+ * @param {'gemini'|'playground'|undefined} [opts.reply_mode] — si omis, le mode en base est conservé
+ */
+export const toggleConversationBotMode = (conversationId, opts) =>
+  api.post(`/conversations/${conversationId}/bot`, opts);
+
+/** null = flux par défaut du compte */
+export const setConversationPlaygroundFlow = (conversationId, playgroundFlowId) =>
+  api.post(`/conversations/${conversationId}/playground-flow`, {
+    playground_flow_id: playgroundFlowId,
+  });
 
 export const findOrCreateConversation = (accountId, phoneNumber) =>
   api.post("/conversations/find-or-create", { account_id: accountId, phone_number: phoneNumber });

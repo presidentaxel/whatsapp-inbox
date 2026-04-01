@@ -4,6 +4,7 @@ import {
   markConversationRead,
   toggleConversationFavorite,
   toggleConversationBotMode,
+  setConversationPlaygroundFlow,
   findOrCreateConversation,
 } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
@@ -16,7 +17,7 @@ import ContactsPanel from "../components/contacts/ContactsPanel";
 import AccountMediaGallery from "../components/gallery/AccountMediaGallery";
 import { useAuth } from "../context/AuthContext";
 import SettingsPanel from "../components/settings/SettingsPanel";
-import GeminiPanel from "../components/bot/GeminiPanel";
+import AssistantPanel from "../components/assistant/AssistantPanel";
 import WhatsAppBusinessPanel from "../components/whatsapp/WhatsAppBusinessPanel";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
@@ -429,10 +430,38 @@ export default function InboxPage() {
     refreshConversations();
   };
 
-  const handleBotModeChange = async (conversation, enabled) => {
+  const handleBotModeChange = async (conversation, { enabled, reply_mode } = {}) => {
     if (!conversation) return;
-    const res = await toggleConversationBotMode(conversation.id, enabled);
-    const updated = res.data?.conversation ?? { ...conversation, bot_enabled: enabled };
+    const payload = { enabled };
+    if (reply_mode != null) payload.reply_mode = reply_mode;
+    const res = await toggleConversationBotMode(conversation.id, payload);
+    const updated =
+      res.data?.conversation ??
+      {
+        ...conversation,
+        bot_enabled: enabled,
+        bot_reply_mode:
+          reply_mode ?? conversation.bot_reply_mode ?? "gemini",
+      };
+    setConversations((prev) =>
+      prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+    );
+    setSelectedConversation((prev) =>
+      prev && prev.id === updated.id ? { ...prev, ...updated } : prev
+    );
+  };
+
+  const handlePlaygroundFlowChange = async (conversation, playgroundFlowId) => {
+    if (!conversation?.id) return;
+    const res = await setConversationPlaygroundFlow(
+      conversation.id,
+      playgroundFlowId
+    );
+    const updated =
+      res.data?.conversation ?? {
+        ...conversation,
+        playground_flow_id: playgroundFlowId,
+      };
     setConversations((prev) =>
       prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
     );
@@ -573,7 +602,7 @@ export default function InboxPage() {
           </div>
         ) : navMode === "assistant" ? (
           <div className="workspace-main settings-mode">
-            <GeminiPanel
+            <AssistantPanel
               accountId={activeAccount}
               accounts={accounts}
               onAccountChange={setActiveAccount}
@@ -686,6 +715,7 @@ export default function InboxPage() {
                 conversation={selectedConversation}
                 onFavoriteToggle={handleFavoriteToggle}
                 onBotModeChange={handleBotModeChange}
+                onPlaygroundFlowChange={handlePlaygroundFlowChange}
                 onMarkRead={optimisticallyMarkRead}
                 isWindowActive={isWindowActive && navMode === "chat"}
                 canSend={canSendMessage}

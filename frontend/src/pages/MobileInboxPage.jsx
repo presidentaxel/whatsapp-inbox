@@ -188,11 +188,14 @@ export default function MobileInboxPage({ onLogout }) {
     setActiveTab("contacts");
   };
 
-  const handleToggleBotMode = async (conversationId, enabled) => {
-    // Mettre à jour la conversation dans la liste
-    setConversations(prev => prev.map(conv => 
-      conv.id === conversationId ? { ...conv, bot_enabled: enabled } : conv
-    ));
+  const handleBotSettingsUpdated = (updated) => {
+    if (!updated?.id) return;
+    setConversations((prev) =>
+      prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c))
+    );
+    setSelectedConversation((prev) =>
+      prev?.id === updated.id ? { ...prev, ...updated } : prev
+    );
   };
 
   // Si une conversation est sélectionnée, afficher le chat en plein écran
@@ -203,7 +206,7 @@ export default function MobileInboxPage({ onLogout }) {
         onBack={handleBackToList}
         onRefresh={() => refreshConversations(activeAccount)}
         onShowContact={handleShowContact}
-        onToggleBotMode={handleToggleBotMode}
+        onBotSettingsUpdated={handleBotSettingsUpdated}
       />
     );
   }
