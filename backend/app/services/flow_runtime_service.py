@@ -45,8 +45,14 @@ def _delay_node_seconds(data: dict) -> Optional[float]:
     return min(sec, _FLOW_DELAY_MAX_SECONDS)
 
 
+def _send_template_has_quick_replies(data: dict) -> bool:
+    """True si le nœud sendTemplate attend une réponse bouton (quick replies Meta)."""
+    qrb = data.get("quickReplyButtons")
+    return isinstance(qrb, list) and len(qrb) > 0
+
+
 def _interactive_timeout_seconds(data: dict) -> Optional[float]:
-    """Délai avant branche `timeout` sur interactiveNode (timeoutDuration + timeoutUnit)."""
+    """Délai avant branche `timeout` sur interactiveNode / sendTemplate (timeoutDuration + timeoutUnit)."""
     try:
         d = float(data.get("timeoutDuration") or 0)
     except (TypeError, ValueError):
@@ -340,8 +346,9 @@ async def try_run_playground_flow(
     else:
         until_pending = _parse_iso_utc(session.get("flowDelayUntil"))
         # Bloquer les messages tant qu'un delayNode est actif (pas de currentNodeId).
-        # Avec interactiveNode + branche timeout, currentNodeId est renseigné : il faut
-        # laisser passer la réponse pour annuler le délai et poursuivre le flux.
+        # Avec interactiveNode ou sendTemplate (quick replies) + branche timeout,
+        # currentNodeId est renseigné : il faut laisser passer la réponse pour annuler
+        # le délai et poursuivre le flux.
         if (
             until_pending is not None
             and until_pending > now_dt
@@ -398,6 +405,31 @@ async def try_run_playground_flow(
                 )
                 if matched and ch.get("saveToVariable"):
                     variables[str(ch["saveToVariable"])] = ch.get("saveValue", True)
+            nxt = after_i or _successor(edges, awaiting)
+            session["currentNodeId"] = None
+            session["afterInteractiveTarget"] = None
+            session["flowDelayUntil"] = None
+            session["flowDelayResumeNodeId"] = None
+            cursor = nxt
+        elif wnode.get("type") == "sendTemplate" and _send_template_has_quick_replies(
+            wnode.get("data") or {}
+        ):
+            data = wnode.get("data") or {}
+            vk = data.get("varKey") or "réponse"
+            variables[vk] = inbound_text
+            if button_id:
+                variables[f"{vk}_button_id"] = button_id
+            quick_btns = [
+                b for b in (data.get("quickReplyButtons") or []) if isinstance(b, dict)
+            ]
+            for i, btn in enumerate(quick_btns):
+                bid = str(btn.get("id") or btn.get("payload") or "").strip()
+                title = (btn.get("text") or btn.get("title") or "").strip()
+                matched = (button_id and bid and bid == button_id) or (
+                    title and inbound_text.strip() == title
+                )
+                if matched and btn.get("saveToVariable"):
+                    variables[str(btn["saveToVariable"])] = btn.get("saveValue", True)
             nxt = after_i or _successor(edges, awaiting)
             session["currentNodeId"] = None
             session["afterInteractiveTarget"] = None
@@ -486,6 +518,21 @@ async def try_run_playground_flow(
                 )
             except Exception as exc:
                 logger.error("sendTemplate failed: %s", exc, exc_info=True)
+                cursor = _successor(edges, cursor)
+                continue
+            if _send_template_has_quick_replies(data):
+                after_tgt = _successor(edges, cursor)
+                session["currentNodeId"] = cursor
+                session["afterInteractiveTarget"] = after_tgt
+                session["continueFromNodeId"] = after_tgt
+                timeout_tgt = _successor(edges, cursor, "timeout")
+                timeout_sec = _interactive_timeout_seconds(data)
+                if timeout_tgt and timeout_sec is not None:
+                    wake_at = datetime.now(timezone.utc) + timedelta(seconds=timeout_sec)
+                    session["flowDelayUntil"] = wake_at.isoformat()
+                    session["flowDelayResumeNodeId"] = timeout_tgt
+                await _persist_session(conversation_id, session)
+                return True
             cursor = _successor(edges, cursor)
             continue
 
