@@ -896,6 +896,21 @@ function FlowEditorInner({ accountId }) {
                 Plusieurs blocs <strong>Entrée</strong> : ouvrez un bloc pour mots-clés et priorité.
                 Molette ou clic droit sur le canevas pour déplacer la vue.
               </p>
+              <p className="playground-help-pop__p playground-help-pop__p--warn">
+                <strong>Limites moteur (UI vs production)</strong> — certains blocs dessinent des
+                branches que le serveur ne distingue pas : <strong>Horaires</strong> (inside/outside)
+                enchaîne comme un seul chemin ; <strong>Date</strong> (attente calendaire) ne fait pas
+                attendre (seul <strong>Délai</strong> pause réellement en relatif) ; <strong>Logique</strong>{" "}
+                en modes ET/OU ne route pas, et le mode « si » ne lit pas la condition (pas d’IF métier :
+                préférer Routeur, Interactif ou Gemini). Détail :{" "}
+                <code className="playground-help-pop__code">backend/docs/playground_flow_reference.json</code>.
+              </p>
+              <p className="playground-help-pop__p muted">
+                <strong>Absents aujourd’hui</strong> (vs outils type Make / chatbots classiques) : appel
+                HTTP sortant, nœud « définir variable » hors choix interactif, tags sans handoff (le
+                handoff coupe le bot ; <code className="playground-help-pop__code">tagsText</code> n’est
+                pas appliqué côté serveur), envoi média natif (hors contenu prévu par un template Meta).
+              </p>
             </div>
           </details>
         </div>

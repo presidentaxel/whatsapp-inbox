@@ -1,5 +1,67 @@
 {
-  "$comment": "Référence alignée sur flow_runtime_service.py, playground_flow_service.py, flowMigrate.js, flowNodes.jsx (mise à jour handoff + delayNode réel).",
+  "$comment": "Référence alignée sur flow_runtime_service.py (try_run_playground_flow), playground_flow_service.py, flowMigrate.js, flowNodes.jsx. Vérifier ui_backend_mismatches après toute évolution du moteur.",
+  "ui_backend_mismatches": {
+    "description": "L’UI dessine des branches ou comportements que le moteur playground n’implémente pas — risque de scénarios qui semblent corrects sur le canevas mais ne se comportent pas ainsi en production.",
+    "items": [
+      {
+        "id": "timeWindowNode",
+        "title": "Routage horaire (timeWindowNode)",
+        "ui": "Poignées source inside / outside (pendant vs hors plage).",
+        "backend": "_successor(edges, cursor) sans handle — premier successeur ou arête sans sourceHandle ; branches inside/outside non distinguées (bloc waitUntilNode/timeWindowNode/logicNode hors mode « si » : passthrough, voir flow_runtime_service.py ~686-691).",
+        "impact": "Ex. message « bureaux fermés » sur branche outside ne s’exécute pas à 2h : le flux suit un seul chemin comme si les deux branches étaient équivalentes."
+      },
+      {
+        "id": "waitUntilNode",
+        "title": "Attente calendaire (waitUntilNode)",
+        "ui": "Champ date / intention « attendre jusqu’à ».",
+        "backend": "Passthrough immédiat — aucune attente calendaire serveur (même branche que timeWindowNode).",
+        "impact": "Un nœud « jusqu’au 1er janvier » n’attend pas : l’enchaînement continue tout de suite. Seul delayNode applique une vraie pause (durée relative en s/m/h/d, voir delayScheduling)."
+      },
+      {
+        "id": "logicNode_et_ou",
+        "title": "Logique ET / OU (logicNode)",
+        "ui": "Modes logicMode « ou » et « et » avec poignées multiples.",
+        "backend": "Pour logicMode autre que « si » : passthrough simple (_successor sans routage multi-sortie).",
+        "impact": "Les modes ET/OU ne routent pas : pas de filtrage ni de multi-sortie réelle."
+      },
+      {
+        "id": "logicNode_si",
+        "title": "Logique « si » : condition non évaluée",
+        "ui": "Champ condition + branches true / false.",
+        "backend": "Aucune évaluation de condition ; cursor = _successor(..., \"true\") ou _successor(...) (poignée true prioritaire, sinon arête sans sourceHandle ou première arête). La poignée « false » n’est pas sélectionnée explicitement par le moteur.",
+        "impact": "Ce n’est pas un IF métier : le chemin ne dépend pas du texte ou des variables. Pour un routage basé sur le contenu, utiliser routerNode, interactiveNode ou gemini."
+      }
+    ]
+  },
+  "product_gaps_vs_market": {
+    "description": "Fonctionnalités souvent présentes dans les outils type Make / Chatfuel / ManyChat, absentes ou non couvertes par des nœuds playground dédiés aujourd’hui.",
+    "items": [
+      {
+        "id": "http_request",
+        "title": "Nœud appel HTTP / webhook sortant",
+        "gap": "Pas de requête API depuis le graphe (ex. CRM, Airtable, Google Sheet) pour enrichir le contexte avec bot_flow_state.phoneNumber ou d’autres variables.",
+        "impact": "Impossible d’inférer côté bot si un numéro est déjà client sans poser la question à l’utilisateur ou traiter hors-flux."
+      },
+      {
+        "id": "set_variable",
+        "title": "Nœud « Set variable »",
+        "gap": "Persistance variables surtout via interactiveNode (saveToVariable / saveValue sur un choix), saisie utilisateur (varKey), gemini (varKey + intention). Pas de nœud pour forcer une variable en cours de parcours (ex. score_lead = \"chaud\").",
+        "impact": "Pas de déduction ou assignation arbitraire déclenchée par le scénario seul."
+      },
+      {
+        "id": "tags_without_handoff",
+        "title": "Tags conversation sans handoff",
+        "gap": "Champ tagsText présent sur handoffNode dans l’UI du graphe ; le runtime handoff (flow_runtime_service) appelle set_conversation_bot_mode(False) et _escalate_to_human avec internalMessage / message entrant — tagsText n’est pas lu côté serveur playground. Effet produit : toute intention « taguer pour le suivi » reste liée au bloc Handoff qui coupe le bot.",
+        "impact": "Pas de chemin documenté pour taguer « Lead froid » tout en laissant le bot actif ; en plus, la persistance des tags depuis le graphe n’est pas implémentée dans le moteur actuel."
+      },
+      {
+        "id": "outbound_media",
+        "title": "Envoi médias natifs (image, PDF, audio)",
+        "gap": "Nœuds documentés ici : sendText, sendTemplate uniquement. Pas de nœud sendImage/sendDocument/sendAudio dans le playground.",
+        "impact": "Médias hors gabarits Meta approuvés : pas d’envoi direct via un bloc dédié (les templates peuvent embarquer des médias si le modèle le prévoit)."
+      }
+    ]
+  },
   "graph": {
     "description": "Champ graph en base (playground_flows) ou published_playground_flow (legacy).",
     "shape": {
@@ -81,7 +143,8 @@
     },
     "sendText": {
       "data": { "body": "string", "varKey": "string" },
-      "handles": { "target": [null], "source": [null] }
+      "handles": { "target": [null], "source": [null] },
+      "outbound": "Message texte WhatsApp uniquement — pas de pièce jointe via ce nœud."
     },
     "sendTemplate": {
       "data": {
@@ -92,7 +155,8 @@
         "quickReplyButtons": "array",
         "varKey": "string"
       },
-      "handles": { "target": [null], "source": [null] }
+      "handles": { "target": [null], "source": [null] },
+      "outbound": "Template WhatsApp approuvé ; médias éventuels selon le modèle Meta, pas un upload arbitraire depuis le playground."
     },
     "interactiveNode": {
       "data": {
@@ -127,13 +191,13 @@
     "handoffNode": {
       "description": "Type UI ; backend accepte aussi l’alias legacy \"handoff\".",
       "data": {
-        "tagsText": "string",
+        "tagsText": "string — présent dans le graphe UI ; non consommé par flow_runtime_service au moment de la doc",
         "assignAgent": "string",
-        "internalMessage": "string",
+        "internalMessage": "string — utilisé comme note si non vide, sinon message entrant",
         "varKey": "string"
       },
       "handles": { "target": [null], "source": [null] },
-      "runtime": "set_conversation_bot_mode(False), escalate_to_human, continueFromNodeId = successeur optionnel"
+      "runtime": "set_conversation_bot_mode(False), _escalate_to_human(conversation, inbound_text ou internalMessage), continueFromNodeId = successeur optionnel ; pas de lecture de tagsText ni assignAgent dans le moteur playground documenté"
     },
     "delayNode": {
       "data": {
@@ -147,7 +211,8 @@
     "waitUntilNode": {
       "data": { "until": "string", "timezoneNote": "string", "varKey": "string" },
       "handles": { "target": [null], "source": [null] },
-      "runtime": "passthrough immédiat (pas d’attente calendaire côté serveur)"
+      "runtime": "passthrough immédiat (pas d’attente calendaire côté serveur) — voir ui_backend_mismatches.waitUntilNode",
+      "workaround": "Utiliser delayNode pour une attente réelle relative (max 30 jours)."
     },
     "timeWindowNode": {
       "data": {
@@ -157,7 +222,7 @@
         "varKey": "string"
       },
       "handles_UI": { "source": ["inside", "outside"] },
-      "runtime": "passthrough : _successor sans handle — branches inside/outside non distinguées par le moteur"
+      "runtime": "passthrough : _successor sans handle — branches inside/outside non distinguées par le moteur — voir ui_backend_mismatches.timeWindowNode"
     },
     "logicNode": {
       "data": { "logicMode": ["si", "ou", "et"], "condition": "string", "varKey": "string" },
@@ -167,8 +232,8 @@
         "et": { "target": ["inA", "inB"], "source": [null] }
       },
       "runtime": {
-        "si": "branche sourceHandle true sinon premier sans handle",
-        "ou_et": "passthrough simple — pas de routage multi-sortie"
+        "si": "Non conditionnel : data.condition ignoré ; _successor(..., \"true\") puis repli _successor(...) — voir ui_backend_mismatches.logicNode_si",
+        "ou_et": "passthrough simple — pas de routage multi-sortie — voir ui_backend_mismatches.logicNode_et_ou"
       }
     }
   },
