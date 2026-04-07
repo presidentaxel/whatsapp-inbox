@@ -138,11 +138,18 @@ async def upsert_bot_profile(account_id: str, payload: Dict[str, Any]) -> Dict[s
     return await get_bot_profile(account_id)
 
 
+# Réponses bot conversationnel : court délai. Playground assist (gros JSON) : voir read_timeout.
+_GEMINI_DEFAULT_READ_TIMEOUT_S = 15.0
+_GEMINI_PLAYGROUND_ASSIST_READ_TIMEOUT_S = 120.0
+
+
 @retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)
 async def _call_gemini_api(
     endpoint: str,
     payload: dict,
     conversation_id: str,
+    *,
+    read_timeout: float = _GEMINI_DEFAULT_READ_TIMEOUT_S,
 ) -> dict:
     """
     Appelle l'API Gemini avec retry sur les erreurs réseau.
@@ -154,13 +161,22 @@ async def _call_gemini_api(
     """
     client = await get_http_client()
 
-    # Timeout spécifique pour Gemini
-    timeout = httpx.Timeout(
-        connect=3.0,
-        read=15.0,  # 15s au lieu de 45s
-        write=5.0,
-        pool=5.0,
-    )
+    read_s = float(read_timeout) if read_timeout else _GEMINI_DEFAULT_READ_TIMEOUT_S
+    if read_s > _GEMINI_DEFAULT_READ_TIMEOUT_S:
+        # Assistant Playground : gros prompt / réponse JSON — laisser plus de marge réseau.
+        timeout = httpx.Timeout(
+            connect=10.0,
+            read=read_s,
+            write=60.0,
+            pool=5.0,
+        )
+    else:
+        timeout = httpx.Timeout(
+            connect=3.0,
+            read=read_s,
+            write=5.0,
+            pool=5.0,
+        )
 
     try:
         response = await client.post(
@@ -172,7 +188,11 @@ async def _call_gemini_api(
         response.raise_for_status()
         return response.json()
     except httpx.TimeoutException:
-        logger.error("Gemini timeout for conversation %s after 15s", conversation_id)
+        logger.error(
+            "Gemini timeout for conversation %s (read=%ss)",
+            conversation_id,
+            read_s,
+        )
         raise
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
@@ -796,3 +816,278 @@ def _render_template_sections(template: Dict[str, Any]) -> str:
         lines.append(template["special_rules"])
 
     return "\n".join(filter(None, lines)).strip()
+
+
+_PLAYGROUND_ASSIST_NODE_TYPES = frozenset(
+    {
+        "start",
+        "sendText",
+        "sendTemplate",
+        "gemini",
+        "interactiveNode",
+        "routerNode",
+        "handoffNode",
+        "delayNode",
+        "waitUntilNode",
+        "timeWindowNode",
+        "logicNode",
+    }
+)
+
+
+def _parse_playground_assistant_json(text: str) -> Optional[Dict[str, Any]]:
+    if not text or not str(text).strip():
+        return None
+    t = str(text).strip()
+    if "```" in t:
+        for chunk in t.split("```"):
+            c = chunk.strip()
+            if c.lower().startswith("json"):
+                c = c[4:].strip()
+            if c.startswith("{"):
+                try:
+                    return json.loads(c)
+                except json.JSONDecodeError:
+                    continue
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        pass
+    i0 = t.find("{")
+    i1 = t.rfind("}")
+    if i0 >= 0 and i1 > i0:
+        try:
+            return json.loads(t[i0 : i1 + 1])
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _validate_playground_assist_graph(g: Dict[str, Any]) -> bool:
+    nodes = g.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return False
+    if not any(isinstance(n, dict) and n.get("type") == "start" for n in nodes):
+        return False
+    seen: set = set()
+    for n in nodes:
+        if not isinstance(n, dict):
+            return False
+        nid = n.get("id")
+        ntype = n.get("type")
+        if not nid or not isinstance(nid, str):
+            return False
+        if nid in seen:
+            return False
+        seen.add(nid)
+        if ntype not in _PLAYGROUND_ASSIST_NODE_TYPES:
+            return False
+        pos = n.get("position")
+        if not isinstance(pos, dict):
+            return False
+        if not isinstance(pos.get("x"), (int, float)) or not isinstance(pos.get("y"), (int, float)):
+            return False
+    edges = g.get("edges")
+    if edges is None:
+        edges = []
+    if not isinstance(edges, list):
+        return False
+    for e in edges:
+        if not isinstance(e, dict):
+            return False
+        s, t = e.get("source"), e.get("target")
+        if not s or not t or s not in seen or t not in seen:
+            return False
+    return True
+
+
+async def generate_playground_assist_reply(
+    *,
+    account_id: str,
+    flow_id: Optional[str],
+    flow_name: str,
+    graph: Dict[str, Any],
+    messages: List[Dict[str, str]],
+    mode: str = "agent",
+) -> Dict[str, Any]:
+    """
+    Assistant éditeur Playground : mode « ask » (Q&R / analyse, sans graphe) ou « agent » (peut proposer un graphe complet).
+    """
+    if not settings.GEMINI_API_KEY:
+        return {"reply": "GEMINI_API_KEY n’est pas configurée côté serveur.", "graph": None}
+
+    from app.services.playground_flow_service import _normalize_graph
+
+    norm = _normalize_graph(graph)
+    graph_json = json.dumps(norm, ensure_ascii=False)
+
+    hist: List[Dict[str, Any]] = []
+    for m in messages[-24:]:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "user").strip().lower()
+        content = str(m.get("content") or "").strip()
+        if not content:
+            continue
+        if role == "assistant":
+            hist.append({"role": "model", "parts": [{"text": content}]})
+        else:
+            hist.append({"role": "user", "parts": [{"text": content}]})
+
+    if not hist:
+        return {"reply": "Envoie un message pour commencer.", "graph": None}
+
+    fn = (flow_name or "").strip() or "(sans nom)"
+    fid = flow_id or "—"
+
+    assist_mode = (mode or "agent").strip().lower()
+    if assist_mode not in ("ask", "agent"):
+        assist_mode = "agent"
+    is_ask = assist_mode == "ask"
+
+    common_ctx = f"""Tu es l’assistant des scénarios « Playground » (automatisations WhatsApp) pour le compte {account_id}.
+Scénario ouvert : « {fn} » (id flux : {fid}).
+
+Graphe JSON actuel (React Flow, v=2) :
+{graph_json}
+
+Types de nœuds autorisés : start, sendText, sendTemplate, gemini, interactiveNode, routerNode, handoffNode, delayNode, waitUntilNode, timeWindowNode, logicNode.
+Chaque nœud a id (string unique), type, position {{x,y}}, data (objet selon le type — préserve varKey quand il existe).
+
+Limites importantes du moteur en production (à mentionner si pertinent) :
+- timeWindowNode / waitUntilNode : le serveur ne distingue pas toutes les branches ni l’attente calendaire comme dans l’UI ; seul delayNode fait une vraie pause relative.
+- logicNode : modes « si » / « et » / « ou » ne font pas d’IF métier côté serveur comme dans l’UI ; pour du routage par texte préférer routerNode, interactiveNode ou gemini.
+"""
+
+    if is_ask:
+        system_text = (
+            common_ctx
+            + """
+
+MODE ACTUEL : ASK (questions / explications uniquement).
+- Réponds en français, de façon claire ; reste concis sauf si l’utilisateur demande le détail.
+- Tu n’appliques pas de changements : le champ JSON "graph" doit TOUJOURS être null (aucun graphe exporté, même si on te demande de « modifier » — décris plutôt les étapes ou le JSON à construire à la main).
+- Tu peux expliquer le parcours, les branches, les risques (UI vs moteur), et suggérer des améliorations en langage naturel.
+
+FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
+{"reply": "…", "graph": null}
+"""
+        )
+    else:
+        system_text = (
+            common_ctx
+            + """
+
+MODE ACTUEL : AGENT (édition du scénario).
+- Réponds en français. Tu peux expliquer, puis si l’utilisateur veut une modification concrète du canevas, renvoie le graphe COMPLET mis à jour dans "graph".
+- Si tu ne modifies pas le graphe, mets "graph": null. Si tu modifies, fournis nodes + edges + v:2, au moins un start, ids stables pour les nœuds conservés, arêtes cohérentes.
+
+FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, de la forme :
+{"reply": "message pour l’utilisateur", "graph": null ou {"v":2,"nodes":[...],"edges":[...]}}
+"""
+        )
+
+    generation_config: Dict[str, Any] = {
+        "temperature": 0.22 if is_ask else 0.25,
+        "maxOutputTokens": 4096 if is_ask else 8192,
+    }
+    if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
+        generation_config["thinkingConfig"] = {
+            "thinkingBudget": 128 if is_ask else 256
+        }
+
+    payload_v1beta = {
+        "system_instruction": {"role": "system", "parts": [{"text": system_text}]},
+        "contents": hist,
+        "generationConfig": generation_config,
+    }
+    flat_system = {"role": "user", "parts": [{"text": system_text}]}
+    payload_v1 = {
+        "contents": [flat_system] + hist,
+        "generationConfig": generation_config,
+    }
+
+    endpoint_v1beta = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+    endpoint_v1 = (
+        f"https://generativelanguage.googleapis.com/v1/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+
+    conv_key = f"playground-assist-{flow_id or account_id}"
+
+    assist_timeout = _GEMINI_PLAYGROUND_ASSIST_READ_TIMEOUT_S
+    try:
+        try:
+            data = await gemini_circuit_breaker.call_async(
+                _call_gemini_api,
+                endpoint_v1beta,
+                payload_v1beta,
+                conv_key,
+                read_timeout=assist_timeout,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 400):
+                data = await gemini_circuit_breaker.call_async(
+                    _call_gemini_api,
+                    endpoint_v1,
+                    payload_v1,
+                    conv_key,
+                    read_timeout=assist_timeout,
+                )
+            else:
+                raise
+    except CircuitBreakerOpenError:
+        return {
+            "reply": "Le service IA est temporairement indisponible (circuit ouvert). Réessaie dans quelques instants.",
+            "graph": None,
+        }
+    except httpx.TimeoutException:
+        logger.warning(
+            "Playground assist Gemini read timeout after %ss (flow=%s)",
+            assist_timeout,
+            flow_id or account_id,
+        )
+        return {
+            "reply": (
+                f"L’IA a mis trop longtemps à répondre (plus de {int(assist_timeout)} s). "
+                "Réessaie : si le scénario est très grand, demande une question courte ou un changement ciblé."
+            ),
+            "graph": None,
+        }
+    except Exception as exc:
+        logger.error("Playground assist Gemini failed: %s", exc, exc_info=True)
+        return {"reply": f"Erreur lors de l’appel à l’IA : {exc!s}", "graph": None}
+
+    raw_text = ""
+    candidates: List[Dict[str, Any]] = data.get("candidates") or []
+    for candidate in candidates:
+        parts = (candidate.get("content") or {}).get("parts") or []
+        for part in parts:
+            raw_text += part.get("text") or ""
+
+    parsed = _parse_playground_assistant_json(raw_text)
+    if not isinstance(parsed, dict):
+        fallback = (raw_text or "").strip() or "Réponse vide du modèle."
+        return {"reply": fallback, "graph": None}
+
+    reply = parsed.get("reply")
+    reply_str = reply.strip() if isinstance(reply, str) else ""
+    if not reply_str:
+        reply_str = (raw_text or "").strip() or "Réponse vide."
+
+    out_graph: Optional[Dict[str, Any]] = None
+    if not is_ask:
+        g = parsed.get("graph")
+        if g is not None and isinstance(g, dict):
+            merged = _normalize_graph(g)
+            if _validate_playground_assist_graph(merged):
+                out_graph = merged
+            else:
+                reply_str += (
+                    "\n\n_(Un graphe proposé était présent mais invalide — il n’a pas été renvoyé pour application.)_"
+                )
+
+    return {"reply": reply_str, "graph": out_graph}

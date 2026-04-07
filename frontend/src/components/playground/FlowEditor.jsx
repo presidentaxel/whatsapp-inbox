@@ -38,6 +38,7 @@ import {
 import { playgroundNodeTypes } from "./flowNodes";
 import { loadFlow, saveFlow } from "./flowStorage";
 import { migrateFlowPayload, makeVarKeyFromId } from "./flowMigrate";
+import PlaygroundAssistantChat from "./PlaygroundAssistantChat";
 
 import "./playground.css";
 
@@ -671,7 +672,7 @@ function FlowEditorInner({ accountId }) {
       const payload = {
         source_flow_id: activeFlowId,
         target_account_id: copyTargetAccount,
-        name: `${flowName || "Flux"} (import)`,
+        name: `${flowName || "Flux"}`,
       };
       if (sub?.nodes?.length) {
         payload.node_ids = sub.nodes.map((n) => n.id);
@@ -752,6 +753,15 @@ function FlowEditorInner({ accountId }) {
 
   const varListValue = useMemo(() => ({ items: varListItems }), [varListItems]);
 
+  const getGraphSnapshot = useCallback(
+    () => ({
+      nodes: nodesRef.current,
+      edges: edgesRef.current,
+      v: 2,
+    }),
+    []
+  );
+
   const publishStatusTitle =
     publishStatus === "ok"
       ? "Ce scénario est le défaut du compte pour le webhook (mode Playground), sauf si une conversation a un autre scénario dans le chat."
@@ -765,6 +775,7 @@ function FlowEditorInner({ accountId }) {
 
   return (
     <div className="playground-shell">
+      <div className="playground-shell__main">
       <div className="playground-compact">
         <div className="playground-compact__row playground-compact__row--controls">
           <select
@@ -1056,6 +1067,15 @@ function FlowEditorInner({ accountId }) {
           </OpenNodeSettingsContext.Provider>
         </PlaygroundGraphContext.Provider>
       </div>
+      </div>
+      <PlaygroundAssistantChat
+        accountId={accountId}
+        flowId={activeFlowId}
+        flowName={flowName}
+        disabled={flowsLoading || !activeFlowId}
+        getGraphSnapshot={getGraphSnapshot}
+        onApplyGraph={applyGraph}
+      />
     </div>
   );
 }
