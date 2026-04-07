@@ -90,7 +90,22 @@
   "variableSubstitution": {
     "syntax": "{{nomVariable}}",
     "source": "_subst_vars",
-    "storage": "conversations.bot_flow_state.variables"
+    "storage": "conversations.bot_flow_state.variables",
+    "builtin_each_turn": {
+      "description": "Renseignés au début de chaque exécution du flux depuis le contact / la conversation (écrasent les clés du même nom dans variables).",
+      "keys": {
+        "contact_name": "display_name ou whatsapp_number du contact",
+        "nom_client": "alias de contact_name",
+        "contact_phone": "whatsapp_number ou client_number de la conversation",
+        "numero_client": "alias de contact_phone",
+        "contact_first_name": "premier mot du display_name, sinon contact_name",
+        "prenom_client": "alias de contact_first_name",
+        "contact.firstName": "alias de contact_first_name (notation objet)",
+        "contact.first_name": "alias de contact_first_name",
+        "contact.name": "alias de contact_name",
+        "contact.phone": "alias de contact_phone"
+      }
+    }
   },
   "bot_flow_state": {
     "description": "Session JSON sur conversations.bot_flow_state",

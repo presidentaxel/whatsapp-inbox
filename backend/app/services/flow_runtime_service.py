@@ -120,6 +120,70 @@ def _subst_vars(text: str, variables: Dict[str, Any]) -> str:
     return out
 
 
+# Remplies à chaque tour depuis le contact / la conversation (prioritaires sur le reste).
+_BUILTIN_FLOW_VAR_KEYS = frozenset(
+    {
+        "contact_name",
+        "nom_client",
+        "contact_phone",
+        "numero_client",
+        "contact_first_name",
+        "prenom_client",
+        # Alias style « objet » (souvent générés par l’IA / autres outils)
+        "contact.firstName",
+        "contact.first_name",
+        "contact.name",
+        "contact.phone",
+    }
+)
+
+
+def _builtin_flow_variables(
+    contact: Optional[Dict[str, Any]],
+    conversation: Optional[Dict[str, Any]],
+) -> Dict[str, str]:
+    """
+    Variables toujours disponibles dans {{…}} (sendText, sendTemplate, prompts Gemini, etc.).
+    """
+    c = contact if isinstance(contact, dict) else {}
+    conv = conversation if isinstance(conversation, dict) else {}
+    display = (c.get("display_name") or "").strip()
+    wa = (c.get("whatsapp_number") or "").strip()
+    client_num = (conv.get("client_number") or "").strip()
+    name = display or wa or ""
+    phone = wa or client_num or ""
+    first = ""
+    if display:
+        parts = display.split(None, 1)
+        if parts:
+            first = parts[0]
+    if not first:
+        first = name or ""
+    return {
+        "contact_name": name,
+        "nom_client": name,
+        "contact_phone": phone,
+        "numero_client": phone,
+        "contact_first_name": first,
+        "prenom_client": first,
+        "contact.firstName": first,
+        "contact.first_name": first,
+        "contact.name": name,
+        "contact.phone": phone,
+    }
+
+
+def _apply_builtin_flow_variables(
+    variables: Dict[str, Any],
+    contact: Optional[Dict[str, Any]],
+    conversation: Optional[Dict[str, Any]],
+) -> None:
+    built = _builtin_flow_variables(contact, conversation)
+    for k in _BUILTIN_FLOW_VAR_KEYS:
+        if k in built:
+            variables[k] = built[k]
+
+
 def _edges_from(edges: List[dict], source_id: str) -> List[Tuple[str, Optional[str]]]:
     res: List[Tuple[str, Optional[str]]] = []
     for e in edges or []:
@@ -333,6 +397,7 @@ async def try_run_playground_flow(
         session = base_sess
     session["phoneNumber"] = phone or session.get("phoneNumber") or ""
     variables = session["variables"]
+    _apply_builtin_flow_variables(variables, contact, conversation)
     now_dt = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat()
     session["lastInteractionAt"] = now_iso

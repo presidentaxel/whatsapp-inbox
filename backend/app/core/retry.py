@@ -10,9 +10,10 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
+    retry_if_exception,
     retry_if_exception_type,
     before_sleep_log,
-    RetryError
+    RetryError,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,41 @@ def retry_on_network_error(
         )),
         before_sleep=before_sleep_log(logger, logging.WARNING),
         reraise=True
+    )
+
+
+def retry_on_gemini_transient(
+    max_attempts: int = 5,
+    min_wait: float = 2.0,
+    max_wait: float = 45.0,
+):
+    """
+    Retry pour l’API Gemini : timeouts / réseau + 5xx et 429 (surcharge temporaire côté Google).
+    """
+
+    def _retryable(exc: BaseException) -> bool:
+        if isinstance(
+            exc,
+            (
+                httpx.TimeoutException,
+                httpx.NetworkError,
+                httpx.ConnectError,
+                httpx.ConnectTimeout,
+                httpx.ReadTimeout,
+            ),
+        ):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            code = exc.response.status_code
+            return code >= 500 or code == 429
+        return False
+
+    return retry(
+        stop=stop_after_attempt(max_attempts),
+        wait=wait_exponential(multiplier=1, min=min_wait, max=max_wait),
+        retry=retry_if_exception(_retryable),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
     )
 
 

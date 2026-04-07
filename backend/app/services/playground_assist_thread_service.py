@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.db import supabase, supabase_execute
-from app.core.pg import fetch_all, fetch_one, get_pool
+from app.core.pg import execute, fetch_all, fetch_one, get_pool
 
 
 def _serialize_messages(messages: Any) -> List[Dict[str, Any]]:

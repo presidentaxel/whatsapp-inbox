@@ -20,23 +20,25 @@ function readStoredMode() {
   return "ask";
 }
 
-/** Messages fantaisistes affichés pendant l’attente — rassurent sans être de vraies étapes techniques. */
+/** Bulle d’attente : phrases plus longues, rotation lente, humour tech (pas de vraies étapes). */
+const ASSIST_WAIT_ROTATION_MS = 5800;
+
 const ASSIST_WAITING_THOUGHTS = [
-  "Je parcours le graphe… tu sais, comme quand on relit un mail avant d’envoyer.",
-  "Synchronisation avec les nuages de pensée… (en vrai c’est juste l’API qui réfléchit.)",
-  "Je vérifie que les blocs sur le canevas se sont pas disputés entre eux.",
-  "Hmm, bonne question. Je mets de l’ordre dans les nœuds et les flèches.",
-  "Patience : les gros scénarios, ça mérite un peu d’amour.",
-  "J’allume une lampe torche sur ton parcours utilisateur.",
-  "Presque là — je traduis le bazar en français clair.",
-  "Je fais semblant d’être une IA très sérieuse pendant encore 2 secondes.",
-  "Encore un instant : je range mes idées avant de te répondre proprement.",
-  "Si tu entends du silence, c’est que je lis… pas que j’ai planté. Enfin, normalement.",
-  "Je compte les branches. Spoiler : il y en a peut-être plus qu’on ne croit.",
-  "Connexion au cerveau artificiel… barre de progression imaginaire à 87 %.",
-  "Je vérifie les limites moteur vs ce que l’UI promet — le classique.",
-  "Un dernier coup d’œil sur les handles source/target pour pas dire de bêtises.",
-  "Ça arrive. Les modèles aussi ont leurs petits moments de grâce.",
+  "Je parcours ton graphe comme on relit un mail à 23 h avant de cliquer « Envoyer » — sauf que là, c’est un POST vers un modèle qui fait semblant d’avoir lu toute ta vie professionnelle.",
+  "Négociation en cours avec le tokenizer : il refuse catégoriquement d’ajouter un emoji licorne dans le JSON de réponse. On avance quand même, mais le débat est houleux.",
+  "Si c’est lent, c’est peut‑être que le modèle débat intérieurement sur le sens existentiel du nœud handoff. Ou alors c’est juste du réseau. Les deux se valent sur le plan poétique.",
+  "Étape actuelle : prétendre avec conviction que je maîtrise la différence entre un routerNode et un routeur Cisco. (Spoiler : l’un route des intentions, l’autre route des paquets — merci, j’ai révisé sur Wikipédia en 2009.)",
+  "Je vérifie que ton JSON n’a pas attrapé le variant « virgule fantôme » ou le classique guillemet mal échappé. C’est comme du lint, mais avec plus de drama et moins de café.",
+  "Cold start du cluster… ah non, pardon, c’est un simple appel HTTP. J’ai toujours rêvé de dire « cold start » devant quelqu’un qui paye l’infra.",
+  "Barre de progression imaginaire : ████████░░ 82 % — les 18 % restants, c’est la part « on sait pas trop mais ça rassure l’utilisateur ».",
+  "J’aligne les handles source/target dans ma tête pour ne pas confondre avec un bug produit. Parce que si je dis « c’est la faute du front », quelqu’un, quelque part, reçoit une notification Slack.",
+  "Patience : Gemini ingère un prompt qui fait probablement la taille d’une nouvelle de science‑fiction. La fin est meilleure que celle de Lost, promis (clause de non‑garantie légale).",
+  "En attendant, je refactorise mentalement ton parcours en microservices. Non, je ne le ferai pas vraiment — c’est juste un coping mechanism hérité de 2017.",
+  "Si tu vois cette phrase trop longtemps, ce n’est pas un bug, c’est du « temps utilisateur perçu ». En vrai si ça dépasse deux éons, vérifie ta connexion ou sacrifie un câble Ethernet au dieu des timeouts.",
+  "Je compile le graphe… conceptuellement. Personne ne compile du JSON, arrêtez de me regarder comme ça, je suis déjà assez fragile.",
+  "Synchronisation avec le nuage de pensée™ — marque déposée par le marketing. Techniquement c’est une file d’attente et des GPUs qui chauffent un datacenter quelque part en Europe.",
+  "Stack overflow imminent… non, je rigole. Enfin, sauf si tu as vraiment mis 400 nœuds. Là je ne garantis ni le JSON ni mon état mental.",
+  "Je rédige une réponse qui a l’air intelligente tout en restant compatible avec la politique « pas de hallucination sur ton numéro de TVA ». C’est un équilibre, comme tenir un monoroue sur un câble RJ45.",
 ];
 
 function makeAutoThreadTitle() {
@@ -58,6 +60,21 @@ function titleFromFirstUserMessage(text) {
   const max = 52;
   if (line.length <= max) return line;
   return `${line.slice(0, max - 1).trim()}…`;
+}
+
+/** Affichage bulle assistant : pas de JSON brut si le modèle a mélangé reply et graphe. */
+function assistantBubbleText(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  if (s.startsWith("{") && s.includes('"reply"')) {
+    try {
+      const j = JSON.parse(s);
+      if (j && typeof j.reply === "string" && j.reply.trim()) return j.reply.trim();
+    } catch {
+      /* ignore */
+    }
+  }
+  return s;
 }
 
 function normalizeThread(row) {
@@ -159,7 +176,7 @@ export default function PlaygroundAssistantChat({
     );
     const id = window.setInterval(() => {
       setWaitingThoughtIdx((i) => (i + 1) % ASSIST_WAITING_THOUGHTS.length);
-    }, 2300);
+    }, ASSIST_WAIT_ROTATION_MS);
     return () => window.clearInterval(id);
   }, [sending]);
 
@@ -447,7 +464,9 @@ export default function PlaygroundAssistantChat({
             <span className="playground-assist__bubble-label">
               {m.role === "user" ? "Toi" : assistMode === "agent" ? "Agent" : "Ask"}
             </span>
-            <div className="playground-assist__bubble-body">{m.content}</div>
+            <div className="playground-assist__bubble-body">
+              {m.role === "assistant" ? assistantBubbleText(m.content) : m.content}
+            </div>
             {m.role === "assistant" &&
             m.proposedGraph &&
             assistMode === "agent" ? (

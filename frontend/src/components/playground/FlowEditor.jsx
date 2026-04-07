@@ -907,6 +907,14 @@ function FlowEditorInner({ accountId }) {
                 Plusieurs blocs <strong>Entrée</strong> : ouvrez un bloc pour mots-clés et priorité.
                 Molette ou clic droit sur le canevas pour déplacer la vue.
               </p>
+              <p className="playground-help-pop__p muted">
+                <strong>Templates &amp; texte</strong> : dans les champs (y compris variables Meta), tu
+                peux utiliser{" "}
+                <code className="playground-help-pop__code">{"{{prenom_client}}"}</code>,{" "}
+                <code className="playground-help-pop__code">{"{{nom_client}}"}</code>,{" "}
+                <code className="playground-help-pop__code">{"{{numero_client}}"}</code> — remplis
+                automatiquement avec le contact WhatsApp de la conversation.
+              </p>
               <p className="playground-help-pop__p playground-help-pop__p--warn">
                 <strong>Limites moteur (UI vs production)</strong> — certains blocs dessinent des
                 branches que le serveur ne distingue pas : <strong>Horaires</strong> (inside/outside)

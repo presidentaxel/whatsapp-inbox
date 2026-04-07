@@ -204,10 +204,12 @@ export function SendTemplateSettingsForm({ id, data, patch }) {
     );
   }, [data.selectedTemplateKey, templates]);
 
-  const varIds = useMemo(
-    () => collectVarIdsFromTemplate(selectedTpl),
-    [selectedTpl]
-  );
+  const varIds = useMemo(() => {
+    const fromTpl = collectVarIdsFromTemplate(selectedTpl);
+    const fromData = Object.keys(data.variableValues || {});
+    const extra = fromData.filter((k) => !fromTpl.includes(k));
+    return [...fromTpl, ...extra];
+  }, [selectedTpl, data.variableValues]);
   const quickReplies = useMemo(() => {
     if (data.quickReplyButtons?.length) return data.quickReplyButtons;
     return extractQuickReplyButtons(selectedTpl);
@@ -272,10 +274,20 @@ export function SendTemplateSettingsForm({ id, data, patch }) {
       </label>
       {varIds.length > 0 && (
         <div className="pg-modal__section">
-          <span className="pg-modal__section-title">Variables</span>
+          <span className="pg-modal__section-title">Variables du template Meta</span>
+          <p className="pg-modal__hint">
+            Texte fixe ou placeholders du <strong>client</strong> (remplis à l’envoi) :{" "}
+            <code>{"{{prenom_client}}"}</code>, <code>{"{{nom_client}}"}</code>,{" "}
+            <code>{"{{numero_client}}"}</code> — ou en anglais{" "}
+            <code>{"{{contact_first_name}}"}</code>, <code>{"{{contact_name}}"}</code>,{" "}
+            <code>{"{{contact_phone}}"}</code> — alias courants{" "}
+            <code>{"{{contact.firstName}}"}</code>, <code>{"{{contact.name}}"}</code>,{" "}
+            <code>{"{{contact.phone}}"}</code>. Civilité (M./Mme) : pas de variable dédiée — préfixe fixe, ex.{" "}
+            <code>{"M. {{nom_client}}"}</code>.
+          </p>
           {varIds.map((vk) => (
             <label key={vk} className="pg-modal__label">
-              <code>{`{{${vk}}}`}</code>
+              <code>{`{{${vk}}}`}</code> (corps Meta)
               <input
                 className="pg-modal__input"
                 type="text"
@@ -288,6 +300,7 @@ export function SendTemplateSettingsForm({ id, data, patch }) {
                     },
                   })
                 }
+                placeholder="Ex. Bonjour {{prenom_client}} !"
               />
             </label>
           ))}

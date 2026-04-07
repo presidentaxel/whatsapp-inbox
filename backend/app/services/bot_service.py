@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException
@@ -22,7 +22,7 @@ from app.core.circuit_breaker import gemini_circuit_breaker, CircuitBreakerOpenE
 from app.core.config import settings
 from app.core.db import supabase, supabase_execute
 from app.core.http_client import get_http_client
-from app.core.retry import retry_on_network_error
+from app.core.retry import retry_on_gemini_transient
 
 logger = logging.getLogger("uvicorn.error").getChild("bot.gemini")
 logger.setLevel(logging.INFO)
@@ -143,7 +143,30 @@ _GEMINI_DEFAULT_READ_TIMEOUT_S = 15.0
 _GEMINI_PLAYGROUND_ASSIST_READ_TIMEOUT_S = 120.0
 
 
-@retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)
+def _user_visible_gemini_failure(exc: BaseException) -> str:
+    """Message client sans URL ni clé API (les exceptions httpx peuvent les inclure)."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code == 429:
+            return (
+                "Le fournisseur IA limite temporairement les requêtes. Réessaie dans une minute."
+            )
+        if code >= 500:
+            return (
+                "Le service IA est temporairement indisponible ou surchargé (erreur côté Google). "
+                "Réessaie dans quelques instants."
+            )
+        if code == 400:
+            return (
+                "La requête vers l’IA a été refusée (paramètres ou quota). Vérifie le modèle configuré (GEMINI_MODEL)."
+            )
+        return f"L’IA a renvoyé une erreur HTTP {code}."
+    if isinstance(exc, httpx.TimeoutException):
+        return "L’appel à l’IA a expiré. Réessaie avec un message plus court."
+    return "Erreur réseau ou inattendue lors de l’appel à l’IA. Réessaie plus tard."
+
+
+@retry_on_gemini_transient(max_attempts=5, min_wait=2.0, max_wait=45.0)
 async def _call_gemini_api(
     endpoint: str,
     payload: dict,
@@ -834,6 +857,144 @@ _PLAYGROUND_ASSIST_NODE_TYPES = frozenset(
     }
 )
 
+# Tours user+assistant envoyés à Gemini (le graphe actuel occupe déjà beaucoup de contexte).
+_PLAYGROUND_ASSIST_MAX_MESSAGES = 96
+
+
+def _playground_assist_max_output_tokens(is_ask: bool) -> int:
+    """Plafond sortie : l’API refuse ou tronque selon le modèle ; les graphes agents ont besoin de marge."""
+    if is_ask:
+        return 8192
+    m = str(settings.GEMINI_MODEL).lower()
+    if "gemini-2.5" in m or "gemini-2.0" in m:
+        return 65536
+    if "gemini-1.5" in m:
+        return 8192
+    return 32768
+
+
+def _playground_assist_collect_model_text(data: dict) -> str:
+    """Concatène le texte utile ; ignore les parts marquées thought (Gemini 2.5+)."""
+    raw = ""
+    for candidate in data.get("candidates") or []:
+        for part in (candidate.get("content") or {}).get("parts") or []:
+            if part.get("thought"):
+                continue
+            raw += part.get("text") or ""
+    return raw
+
+
+def _playground_assist_try_reply_only_json(t: str) -> Optional[str]:
+    """
+    Si le JSON racine est tronqué (souvent dans « graph ») mais que « reply » est complet,
+    extrait uniquement la chaîne reply via JSONDecoder.
+    """
+    s = t.strip()
+    if not s.startswith("{"):
+        return None
+    key = '"reply"'
+    i = s.find(key)
+    if i < 0:
+        return None
+    j = i + len(key)
+    while j < len(s) and s[j] in " \t\n\r":
+        j += 1
+    if j >= len(s) or s[j] != ":":
+        return None
+    j += 1
+    while j < len(s) and s[j] in " \t\n\r":
+        j += 1
+    if j >= len(s):
+        return None
+    dec = json.JSONDecoder()
+    try:
+        val, _end = dec.raw_decode(s, j)
+    except json.JSONDecodeError:
+        return None
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val
+    return None
+
+
+def _playground_assist_parse_model_payload(raw_text: str) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """
+    Retourne (payload, partial) où partial=True si seul « reply » a pu être récupéré (JSON tronqué).
+    """
+    parsed = _parse_playground_assistant_json(raw_text)
+    if isinstance(parsed, dict) and "reply" in parsed:
+        return parsed, False
+    t = (raw_text or "").strip()
+    if t.startswith("{"):
+        try:
+            j = json.loads(t)
+            if isinstance(j, dict) and "reply" in j:
+                return j, False
+        except json.JSONDecodeError:
+            pass
+    reply_only = _playground_assist_try_reply_only_json(t)
+    if reply_only is not None:
+        return {"reply": reply_only, "graph": None}, True
+    return None, False
+
+
+def _playground_assist_finish_reason(data: dict) -> Optional[str]:
+    cands = data.get("candidates") or []
+    if not cands or not isinstance(cands[0], dict):
+        return None
+    c0 = cands[0]
+    return c0.get("finishReason") or c0.get("finish_reason")
+
+
+def _playground_assist_fallback_reply(
+    raw_text: str, *, finish_reason: Optional[str] = None
+) -> str:
+    fr = (finish_reason or "").strip().upper()
+    if "MAX_TOKEN" in fr:
+        return (
+            "La génération a été coupée par la limite de tokens (réponse + graphe trop volumineux). "
+            "Demande une modification très ciblée (un seul nœud, une seule branche, ou une variable), "
+            "ou passe en mode Ask pour une explication sans graphe."
+        )
+    t = (raw_text or "").strip()
+    if not t:
+        return "Réponse vide du modèle."
+    logger.warning(
+        "Playground assist: parse JSON échoué, finishReason=%s, len=%s, extrait=%r",
+        finish_reason,
+        len(t),
+        t[:500] + ("…" if len(t) > 500 else ""),
+    )
+    if len(t) > 3000:
+        return (
+            "La réponse de l’IA n’est pas un JSON complet (souvent troncature au milieu du graphe). "
+            "Réessaie avec une demande plus courte ou une modification locale, ou utilise le mode Ask."
+        )
+    return (
+        "Impossible d’interpréter la réponse de l’IA. Réessaie en une phrase, ou en mode Ask. "
+        f"(Aperçu : {t[:240]}{'…' if len(t) > 240 else ''})"
+    )
+
+
+def _playground_assist_clean_reply_string(reply_str: str) -> str:
+    """Évite d’afficher tout le JSON dans le champ « reply » si le modèle s’emballe."""
+    s = (reply_str or "").strip()
+    if not s:
+        return s
+    if len(s) > 6000:
+        return s[:5999] + "…"
+    if s.startswith("{") and '"reply"' in s:
+        try:
+            j = json.loads(s)
+            if isinstance(j, dict) and isinstance(j.get("reply"), str):
+                inner = j["reply"].strip()
+                if inner:
+                    return inner
+        except json.JSONDecodeError:
+            pass
+    return s
+
 
 def _parse_playground_assistant_json(text: str) -> Optional[Dict[str, Any]]:
     if not text or not str(text).strip():
@@ -922,7 +1083,7 @@ async def generate_playground_assist_reply(
     graph_json = json.dumps(norm, ensure_ascii=False)
 
     hist: List[Dict[str, Any]] = []
-    for m in messages[-24:]:
+    for m in messages[-_PLAYGROUND_ASSIST_MAX_MESSAGES:]:
         if not isinstance(m, dict):
             continue
         role = str(m.get("role") or "user").strip().lower()
@@ -957,6 +1118,12 @@ Chaque nœud a id (string unique), type, position {{x,y}}, data (objet selon le 
 Limites importantes du moteur en production (à mentionner si pertinent) :
 - timeWindowNode / waitUntilNode : le serveur ne distingue pas toutes les branches ni l’attente calendaire comme dans l’UI ; seul delayNode fait une vraie pause relative.
 - logicNode : modes « si » / « et » / « ou » ne font pas d’IF métier côté serveur comme dans l’UI ; pour du routage par texte préférer routerNode, interactiveNode ou gemini.
+
+Historique de discussion : les entrées « contents » reprennent la conversation dans l’ordre chronologique (tours user puis réponses assistant). Tu DOIS t’en servir : si l’utilisateur dit « oui », « comme avant », « fais-le », ou précise une nuance, elle se rapporte aux messages précédents du même fil.
+
+Variables utiles pour les champs « variableValues » des nœuds sendTemplate (substitution côté serveur au moment de l’envoi, d’après le contact) :
+{{prenom_client}}, {{contact_first_name}}, {{contact.firstName}}, {{nom_client}}, {{contact.name}}, {{numero_client}}, {{contact.phone}}.
+Il n’y a pas de civilité automatique (M./Mme) en base : pour « M. Dupont » mets par ex. le texte fixe « M. {{nom_client}} » ou « M. {{prenom_client}} » dans la valeur du slot Meta (ex. variable « nom » du template).
 """
 
     if is_ask:
@@ -981,30 +1148,39 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
 MODE ACTUEL : AGENT (édition du scénario).
 - Réponds en français. Tu peux expliquer, puis si l’utilisateur veut une modification concrète du canevas, renvoie le graphe COMPLET mis à jour dans "graph".
 - Si tu ne modifies pas le graphe, mets "graph": null. Si tu modifies, fournis nodes + edges + v:2, au moins un start, ids stables pour les nœuds conservés, arêtes cohérentes.
+- Si la demande est surtout explicative ou le canevas ne change pas : mets toujours "graph": null (évite de renvoyer tout le JSON du graphe pour rien — limite de taille).
+- Dans "reply", message court pour l’humain uniquement : ne jamais y coller l’objet JSON complet ni le graphe (le graphe est uniquement dans "graph").
 
 FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, de la forme :
 {"reply": "message pour l’utilisateur", "graph": null ou {"v":2,"nodes":[...],"edges":[...]}}
 """
         )
 
-    generation_config: Dict[str, Any] = {
+    # Agent : graphe complet en JSON → besoin de beaucoup de tokens de sortie (sinon JSON tronqué → parse KO).
+    generation_config_base: Dict[str, Any] = {
         "temperature": 0.22 if is_ask else 0.25,
-        "maxOutputTokens": 4096 if is_ask else 8192,
+        "maxOutputTokens": _playground_assist_max_output_tokens(is_ask),
     }
     if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
-        generation_config["thinkingConfig"] = {
-            "thinkingBudget": 128 if is_ask else 256
+        # Budget pensée plus bas en agent pour laisser de la marge au JSON de sortie.
+        generation_config_base["thinkingConfig"] = {
+            "thinkingBudget": 128 if is_ask else 128
         }
+    # Sortie JSON contrainte côté API (sinon le modèle renvoie souvent du texte libre → parse KO).
+    generation_config_json: Dict[str, Any] = {
+        **generation_config_base,
+        "responseMimeType": "application/json",
+    }
 
     payload_v1beta = {
         "system_instruction": {"role": "system", "parts": [{"text": system_text}]},
         "contents": hist,
-        "generationConfig": generation_config,
+        "generationConfig": generation_config_json,
     }
     flat_system = {"role": "user", "parts": [{"text": system_text}]}
     payload_v1 = {
         "contents": [flat_system] + hist,
-        "generationConfig": generation_config,
+        "generationConfig": generation_config_json,
     }
 
     endpoint_v1beta = (
@@ -1029,14 +1205,72 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, 
                 read_timeout=assist_timeout,
             )
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (404, 400):
-                data = await gemini_circuit_breaker.call_async(
-                    _call_gemini_api,
-                    endpoint_v1,
-                    payload_v1,
-                    conv_key,
-                    read_timeout=assist_timeout,
+            if exc.response.status_code == 400:
+                logger.warning(
+                    "Playground assist: v1beta 400 avec responseMimeType JSON, retentative sans MIME forcé"
                 )
+                payload_v1beta_plain = {
+                    **payload_v1beta,
+                    "generationConfig": generation_config_base,
+                }
+                try:
+                    data = await gemini_circuit_breaker.call_async(
+                        _call_gemini_api,
+                        endpoint_v1beta,
+                        payload_v1beta_plain,
+                        conv_key,
+                        read_timeout=assist_timeout,
+                    )
+                except httpx.HTTPStatusError as exc2:
+                    if exc2.response.status_code in (404, 400):
+                        payload_v1_plain = {
+                            **payload_v1,
+                            "generationConfig": generation_config_base,
+                        }
+                        try:
+                            data = await gemini_circuit_breaker.call_async(
+                                _call_gemini_api,
+                                endpoint_v1,
+                                payload_v1,
+                                conv_key,
+                                read_timeout=assist_timeout,
+                            )
+                        except httpx.HTTPStatusError as exc3:
+                            if exc3.response.status_code == 400:
+                                data = await gemini_circuit_breaker.call_async(
+                                    _call_gemini_api,
+                                    endpoint_v1,
+                                    payload_v1_plain,
+                                    conv_key,
+                                    read_timeout=assist_timeout,
+                                )
+                            else:
+                                raise exc3
+                    else:
+                        raise exc2
+            elif exc.response.status_code in (404, 400):
+                try:
+                    data = await gemini_circuit_breaker.call_async(
+                        _call_gemini_api,
+                        endpoint_v1,
+                        payload_v1,
+                        conv_key,
+                        read_timeout=assist_timeout,
+                    )
+                except httpx.HTTPStatusError as exc2:
+                    if exc2.response.status_code == 400:
+                        data = await gemini_circuit_breaker.call_async(
+                            _call_gemini_api,
+                            endpoint_v1,
+                            {
+                                **payload_v1,
+                                "generationConfig": generation_config_base,
+                            },
+                            conv_key,
+                            read_timeout=assist_timeout,
+                        )
+                    else:
+                        raise exc2
             else:
                 raise
     except CircuitBreakerOpenError:
@@ -1059,27 +1293,35 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, 
         }
     except Exception as exc:
         logger.error("Playground assist Gemini failed: %s", exc, exc_info=True)
-        return {"reply": f"Erreur lors de l’appel à l’IA : {exc!s}", "graph": None}
+        return {"reply": _user_visible_gemini_failure(exc), "graph": None}
 
-    raw_text = ""
-    candidates: List[Dict[str, Any]] = data.get("candidates") or []
-    for candidate in candidates:
-        parts = (candidate.get("content") or {}).get("parts") or []
-        for part in parts:
-            raw_text += part.get("text") or ""
+    raw_text = _playground_assist_collect_model_text(data)
+    finish_reason = _playground_assist_finish_reason(data)
 
-    parsed = _parse_playground_assistant_json(raw_text)
+    parsed, partial_json = _playground_assist_parse_model_payload(raw_text)
     if not isinstance(parsed, dict):
-        fallback = (raw_text or "").strip() or "Réponse vide du modèle."
-        return {"reply": fallback, "graph": None}
+        return {
+            "reply": _playground_assist_fallback_reply(
+                raw_text, finish_reason=finish_reason
+            ),
+            "graph": None,
+        }
 
     reply = parsed.get("reply")
     reply_str = reply.strip() if isinstance(reply, str) else ""
+    reply_str = _playground_assist_clean_reply_string(reply_str)
     if not reply_str:
-        reply_str = (raw_text or "").strip() or "Réponse vide."
+        reply_str = _playground_assist_clean_reply_string((raw_text or "").strip()) or "Réponse vide."
+
+    if partial_json:
+        reply_str += (
+            "\n\n_(Le JSON de réponse était incomplet — souvent parce que le graphe a été coupé en cours de génération. "
+            "Tu peux relire le texte ci-dessus ; le bouton « Appliquer sur le canevas » n’est pas disponible pour ce tour. "
+            "Réessaie avec une modification plus cible ou en mode Ask.)_"
+        )
 
     out_graph: Optional[Dict[str, Any]] = None
-    if not is_ask:
+    if not is_ask and not partial_json:
         g = parsed.get("graph")
         if g is not None and isinstance(g, dict):
             merged = _normalize_graph(g)
