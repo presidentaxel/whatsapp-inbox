@@ -659,6 +659,20 @@ export function GeminiSettingsForm({ id, data, patch }) {
           onChange={(e) => patch(id, { hint: e.target.value })}
         />
       </label>
+      <label className="pg-modal__label">
+        Base de connaissances (optionnel)
+        <textarea
+          className="pg-modal__input pg-modal__code"
+          rows={5}
+          value={data.knowledgeBase || ""}
+          onChange={(e) => patch(id, { knowledgeBase: e.target.value })}
+          placeholder="Ajoutez ici des infos spécifiques à ce nœud : FAQ, tarifs, procédures...\nCes infos s'ajoutent au profil bot (entreprise, description, etc.)"
+        />
+      </label>
+      <p className="pg-modal__hint muted">
+        Le profil bot (nom, description, horaires, base de connaissances générale) est automatiquement injecté.
+        Ce champ permet d'ajouter du contexte supplémentaire propre à ce nœud.
+      </p>
       <div className="pg-modal__section">
         <span className="pg-modal__section-title">Mots-clés → branche</span>
         <p className="pg-modal__hint">

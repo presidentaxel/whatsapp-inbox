@@ -560,15 +560,17 @@ async def generate_flow_gemini_keyword(
 
 async def generate_flow_gemini_text_reply(
     conversation_id: str,
-    _account_id: str,
+    account_id: str,
     user_text: str,
     system_prompt: str,
     hint: Optional[str] = None,
+    node_knowledge: Optional[str] = None,
 ) -> Optional[str]:
     """
     Nœud Gemini « sans intentions » mais avec prompt système : réponse conversationnelle
     complète (pour {{varKey}} puis sendText / interactive), pas le playbook SAV.
-    Utilise l'historique de la conversation pour un meilleur contexte.
+    Utilise l'historique de la conversation + la base de connaissances du bot_profile
+    + une base de connaissances optionnelle spécifique au nœud.
     """
     if not settings.GEMINI_API_KEY:
         logger.info("GEMINI_API_KEY absent, skip flow gemini text for %s", conversation_id)
@@ -577,12 +579,41 @@ async def generate_flow_gemini_text_reply(
     base = (system_prompt or "").strip()
     if not base:
         return None
+
+    knowledge_block = ""
+    try:
+        profile = await get_bot_profile(account_id)
+        kb_parts: List[str] = []
+        if profile.get("business_name"):
+            kb_parts.append(f"Entreprise: {profile['business_name']}")
+        if profile.get("description"):
+            kb_parts.append(f"Description: {profile['description']}")
+        if profile.get("address"):
+            kb_parts.append(f"Adresse: {profile['address']}")
+        if profile.get("hours"):
+            kb_parts.append(f"Horaires: {profile['hours']}")
+        if profile.get("knowledge_base"):
+            kb_parts.append(profile["knowledge_base"])
+        for field in profile.get("custom_fields", []):
+            label = field.get("label")
+            value = field.get("value")
+            if label and value:
+                kb_parts.append(f"{label}: {value}")
+        if node_knowledge and node_knowledge.strip():
+            kb_parts.append(node_knowledge.strip())
+        if kb_parts:
+            knowledge_block = "\n\nBASE DE CONNAISSANCES (utilise ces infos pour répondre) :\n" + "\n".join(kb_parts)
+    except Exception as kb_exc:
+        logger.warning("Flow Gemini: could not load knowledge base: %s", kb_exc)
+
     if "[INSERER LE TEXTE DU USER ICI]" in base:
         instruction = base.replace("[INSERER LE TEXTE DU USER ICI]", user_text or "(aucun message)")
     else:
         instruction = f"{base}\n\nDernier message de l'utilisateur :\n{user_text or '(aucun message)'}"
     if hint:
         instruction = f"{instruction}\n\nConsigne complémentaire :\n{hint.strip()}"
+    if knowledge_block:
+        instruction = f"{instruction}{knowledge_block}"
     instruction = (
         f"{instruction}\n\n"
         "Réponds en français. Réponse directe au client (pas de préambule méta, pas de guillemets autour du message entier)."

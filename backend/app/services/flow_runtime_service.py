@@ -804,12 +804,14 @@ async def try_run_playground_flow(
                     try:
                         sys_prompt = _subst_vars(sys_raw, variables)
                         hint = data.get("hint") or ""
+                        node_kb = (data.get("knowledgeBase") or "").strip()
                         reply = await generate_flow_gemini_text_reply(
                             conversation_id,
                             account_id,
                             inbound_text,
                             sys_prompt,
                             hint if hint else None,
+                            node_knowledge=node_kb if node_kb else None,
                         )
                     except BaseException as _gemini_exc:
                         logger.error(
