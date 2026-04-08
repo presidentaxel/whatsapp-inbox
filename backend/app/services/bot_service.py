@@ -502,7 +502,7 @@ async def generate_flow_gemini_keyword(
         "maxOutputTokens": 32,
     }
     if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
-        generation_config["thinkingConfig"] = {"thinkingBudget": 128}
+        generation_config["thinkingConfig"] = {"thinkingBudget": 512}
 
     conversation_parts = [{"role": "user", "parts": [{"text": "Analyse et réponds selon les instructions."}]}]
 
@@ -624,7 +624,7 @@ async def generate_flow_gemini_text_reply(
         "maxOutputTokens": 1024,
     }
     if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
-        generation_config["thinkingConfig"] = {"thinkingBudget": 256}
+        generation_config["thinkingConfig"] = {"thinkingBudget": 512}
 
     conversation_parts: List[Dict[str, Any]] = []
     try:
@@ -1310,7 +1310,7 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, 
     if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
         # Budget pensée plus bas en agent pour laisser de la marge au JSON de sortie.
         generation_config_base["thinkingConfig"] = {
-            "thinkingBudget": 128 if is_ask else 128
+            "thinkingBudget": 512
         }
     # Sortie JSON contrainte côté API (sinon le modèle renvoie souvent du texte libre → parse KO).
     generation_config_json: Dict[str, Any] = {
