@@ -113,11 +113,40 @@ def _subst_vars(text: str, variables: Dict[str, Any]) -> str:
     if not text:
         return text or ""
     out = str(text)
-    for key, val in variables.items():
-        if key is None:
-            continue
-        out = out.replace("{{" + str(key) + "}}", str(val if val is not None else ""))
+    items = [(str(k), str(v if v is not None else "")) for k, v in variables.items() if k is not None]
+    # Bidirectional accent alias: réponse_… ↔ reponse_…
+    accent_prefix = "réponse"
+    ascii_prefix = "reponse"
+    extra: List[Tuple[str, str]] = []
+    for key, repl in items:
+        if key.startswith(accent_prefix):
+            ascii_key = ascii_prefix + key[len(accent_prefix):]
+            if ascii_key != key:
+                extra.append((ascii_key, repl))
+        elif key.startswith(ascii_prefix):
+            accented_key = accent_prefix + key[len(ascii_prefix):]
+            if accented_key != key:
+                extra.append((accented_key, repl))
+    items.extend(extra)
+    # Clés les plus longues d’abord (ex. contact.firstName avant contact)
+    items.sort(key=lambda kv: len(kv[0]), reverse=True)
+    for key, repl in items:
+        out = out.replace("{{" + key + "}}", repl)
+    for key, repl in items:
+        out = out.replace("{" + key + "}", repl)
     return out
+
+
+def _warn_unresolved_vars(text: str, node_id: str) -> None:
+    """Log if any {{…}} placeholders remain after substitution."""
+    if text and "{{" in text and "}}" in text:
+        import re as _re
+        unresolved = _re.findall(r"\{\{([^}]+)\}\}", text)
+        if unresolved:
+            logger.warning(
+                "playground flow: unresolved variable(s) %s in node %s body",
+                unresolved, node_id,
+            )
 
 
 # Remplies à chaque tour depuis le contact / la conversation (prioritaires sur le reste).
@@ -238,6 +267,8 @@ def _pick_start_node_id(nodes_by_id: Dict[str, dict], inbound_text: str) -> Opti
 
 def _start_allows_message(start_node: dict, inbound_text: str) -> bool:
     data = start_node.get("data") or {}
+    if data.get("triggerType") == "playground_audience":
+        return False
     if data.get("triggerType") != "message_in":
         return True
     match = data.get("messageMatch") or "any"
@@ -335,24 +366,32 @@ async def try_run_playground_flow(
     message_type: Optional[str],
     *,
     scheduled_delay_wake: bool = False,
+    scheduled_flow_launch: bool = False,
+    launch_entry_node_id: Optional[str] = None,
 ) -> bool:
     """
     Si un flux playground est publié pour le compte, exécute une étape du graphe.
     Retourne True si le message a été traité par le flux (ne pas appeler le bot Gemini classique).
 
     scheduled_delay_wake: appel interne quand le délai (delayNode) est échu — pas de message entrant.
+    scheduled_flow_launch: lancement programmé depuis un nœud Entrée « campagne » — enchaîne le graphe
+    sans message entrant (première étape = successeur du start).
     """
     from app.services.bot_service import (
         get_bot_profile,
         generate_bot_reply,
         generate_flow_gemini_keyword,
+        generate_flow_gemini_text_reply,
     )
     from app.services.message_service import (
         send_message,
         send_interactive_message_with_storage,
         _escalate_to_human,
     )
-    from app.services.whatsapp_api_service import send_template_message
+    from app.services.whatsapp_api_service import (
+        get_template_named_body_parameter_names,
+        send_template_message,
+    )
     from app.services.account_service import get_account_by_id
     from app.services.playground_flow_service import resolve_graph_for_conversation
     from app.core.config import settings
@@ -381,20 +420,45 @@ async def try_run_playground_flow(
     nodes_by_id: Dict[str, dict] = {n["id"]: n for n in nodes_list if n.get("id")}
     edges: List[dict] = raw_flow.get("edges") or []
 
+    if scheduled_flow_launch:
+        lid = str(launch_entry_node_id or "").strip()
+        if not lid or lid not in nodes_by_id:
+            logger.warning(
+                "playground flow scheduled launch: invalid entry node %r flow=%s",
+                lid,
+                resolved_flow_id,
+            )
+            return False
+        sn = nodes_by_id[lid]
+        if sn.get("type") != "start":
+            logger.warning("playground flow scheduled launch: node %s is not start", lid)
+            return False
+        sdata = sn.get("data") or {}
+        if sdata.get("triggerType") != "playground_audience":
+            logger.warning(
+                "playground flow scheduled launch: start %s must be trigger playground_audience",
+                lid,
+            )
+            return False
+
     signals = extract_inbound_flow_signals(wa_message or {})
     inbound_text = (signals.get("text") or content_text or "").strip()
     button_id = signals.get("button_id")
     list_row_id = signals.get("list_row_id")
 
     phone = conversation.get("client_number") or ""
-    raw_state = conversation.get("bot_flow_state")
-    base_sess = _default_session(phone)
-    if isinstance(raw_state, dict):
-        session = {**base_sess, **raw_state}
-        if not isinstance(session.get("variables"), dict):
-            session["variables"] = {}
+    if scheduled_flow_launch:
+        session = _default_session(phone)
+        session["entryStartNodeId"] = str(launch_entry_node_id).strip()
     else:
-        session = base_sess
+        raw_state = conversation.get("bot_flow_state")
+        base_sess = _default_session(phone)
+        if isinstance(raw_state, dict):
+            session = {**base_sess, **raw_state}
+            if not isinstance(session.get("variables"), dict):
+                session["variables"] = {}
+        else:
+            session = base_sess
     session["phoneNumber"] = phone or session.get("phoneNumber") or ""
     variables = session["variables"]
     _apply_builtin_flow_variables(variables, contact, conversation)
@@ -408,7 +472,7 @@ async def try_run_playground_flow(
             return False
         if not _consume_due_flow_delay(session, now_dt):
             return False
-    else:
+    elif not scheduled_flow_launch:
         until_pending = _parse_iso_utc(session.get("flowDelayUntil"))
         # Bloquer les messages tant qu'un delayNode est actif (pas de currentNodeId).
         # Avec interactiveNode ou sendTemplate (quick replies) + branche timeout,
@@ -439,11 +503,12 @@ async def try_run_playground_flow(
     after_i = session.get("afterInteractiveTarget")
 
     entry_start = session.get("entryStartNodeId")
+    if not scheduled_flow_launch:
+        if not entry_start or entry_start not in nodes_by_id:
+            entry_start = _pick_start_node_id(nodes_by_id, inbound_text)
+            if entry_start:
+                session["entryStartNodeId"] = entry_start
     if not entry_start or entry_start not in nodes_by_id:
-        entry_start = _pick_start_node_id(nodes_by_id, inbound_text)
-        if entry_start:
-            session["entryStartNodeId"] = entry_start
-    if not entry_start:
         logger.warning("playground flow: no matching start node for account %s", account_id)
         return False
 
@@ -511,7 +576,9 @@ async def try_run_playground_flow(
         if cf and cf in nodes_by_id:
             cursor = cf
         else:
-            if not _start_allows_message(nodes_by_id[entry_start], inbound_text):
+            if not scheduled_flow_launch and not _start_allows_message(
+                nodes_by_id[entry_start], inbound_text
+            ):
                 logger.warning(
                     "playground flow: message entrant refusé par le filtre du nœud start "
                     "(message_in / mot-clé). entry_start=%s inbound_preview=%r",
@@ -539,9 +606,17 @@ async def try_run_playground_flow(
         node = nodes_by_id[cursor]
         ntype = node.get("type")
         data = node.get("data") or {}
+        logger.info(
+            "playground flow step %d: node=%s type=%s  vars_keys=%s",
+            step, cursor, ntype, list(variables.keys()),
+        )
 
         if ntype == "sendText":
             body = _subst_vars(data.get("body") or "", variables)
+            _warn_unresolved_vars(body, cursor)
+            body = re.sub(r"\{\{[^}]+\}\}", "", body).strip()
+            if not body:
+                body = "Pouvez-vous préciser votre réponse ?"
             if body:
                 await send_message(
                     {"conversation_id": conversation_id, "content": body},
@@ -565,11 +640,48 @@ async def try_run_playground_flow(
             var_vals = data.get("variableValues") or {}
             components: List[Dict[str, Any]] = []
             if isinstance(var_vals, dict) and var_vals:
-                params = []
-                for _k, v in var_vals.items():
-                    params.append(
-                        {"type": "text", "text": _subst_vars(str(v or ""), variables)}
-                    )
+                named_params: Optional[List[str]] = None
+                waba_id = account.get("waba_id")
+                if waba_id:
+                    try:
+                        named_params = await get_template_named_body_parameter_names(
+                            str(waba_id),
+                            token,
+                            name,
+                            lang,
+                        )
+                    except Exception as meta_exc:
+                        logger.warning(
+                            "sendTemplate: could not resolve named body params: %s",
+                            meta_exc,
+                        )
+                params: List[Dict[str, Any]] = []
+                if named_params:
+                    for i, pname in enumerate(named_params):
+                        raw = var_vals.get(pname)
+                        if raw is None:
+                            raw = var_vals.get(str(i + 1))
+                        params.append(
+                            {
+                                "type": "text",
+                                "parameter_name": pname,
+                                "text": _subst_vars(str(raw or ""), variables),
+                            }
+                        )
+                else:
+                    keys = list(var_vals.keys())
+
+                    def _sort_var_key(k: Any) -> Any:
+                        ks = str(k)
+                        if ks.isdigit():
+                            return (0, int(ks))
+                        return (1, ks)
+
+                    for k in sorted(keys, key=_sort_var_key):
+                        v = var_vals[k]
+                        params.append(
+                            {"type": "text", "text": _subst_vars(str(v or ""), variables)}
+                        )
                 if params:
                     components.append({"type": "body", "parameters": params})
             try:
@@ -603,6 +715,10 @@ async def try_run_playground_flow(
 
         if ntype == "interactiveNode":
             body = _subst_vars(data.get("body") or "", variables)
+            _warn_unresolved_vars(body, cursor)
+            body = re.sub(r"\{\{[^}]+\}\}", "", body).strip()
+            if not body:
+                body = "Pouvez-vous préciser votre réponse ?"
             kind = data.get("uiKind") == "list" and "list" or "button"
             choices = [c for c in (data.get("choices") or []) if isinstance(c, dict)]
             if not body:
@@ -681,13 +797,62 @@ async def try_run_playground_flow(
         if ntype == "gemini":
             intents = data.get("intents") or []
             if not intents:
-                cname = contact.get("display_name") or contact.get("whatsapp_number")
-                reply = await generate_bot_reply(
-                    conversation_id,
-                    account_id,
-                    inbound_text,
-                    cname,
-                )
+                vk = data.get("varKey")
+                sys_raw = (data.get("systemPrompt") or "").strip()
+                if sys_raw:
+                    reply = None
+                    try:
+                        sys_prompt = _subst_vars(sys_raw, variables)
+                        hint = data.get("hint") or ""
+                        reply = await generate_flow_gemini_text_reply(
+                            conversation_id,
+                            account_id,
+                            inbound_text,
+                            sys_prompt,
+                            hint if hint else None,
+                        )
+                    except BaseException as _gemini_exc:
+                        logger.error(
+                            "playground flow: gemini gen CRASHED for node %s: %s",
+                            cursor, _gemini_exc,
+                        )
+                    if not reply:
+                        logger.warning(
+                            "playground flow: gemini text reply empty/None for node %s, "
+                            "using fallback. inbound=%r  vars=%s",
+                            cursor, (inbound_text or "")[:80],
+                            list(variables.keys()),
+                        )
+                    if vk:
+                        variables[vk] = reply if reply else (
+                            "Je suis là pour vous aider. Pouvez-vous préciser votre réponse ?"
+                        )
+                        logger.info(
+                            "playground flow: set var %r = %r (node %s)",
+                            vk, (variables[vk] or "")[:60], cursor,
+                        )
+                    cursor = _successor(edges, cursor) or _successor(
+                        edges, cursor, "intent-unknown"
+                    )
+                    continue
+                reply = None
+                try:
+                    cname = contact.get("display_name") or contact.get("whatsapp_number")
+                    reply = await generate_bot_reply(
+                        conversation_id,
+                        account_id,
+                        inbound_text,
+                        cname,
+                    )
+                except BaseException as _bot_exc:
+                    logger.error(
+                        "playground flow: bot reply CRASHED for node %s: %s",
+                        cursor, _bot_exc,
+                    )
+                if vk:
+                    variables[vk] = reply if reply else (
+                        "Je suis là pour vous aider. Pouvez-vous préciser votre réponse ?"
+                    )
                 if reply:
                     await send_message(
                         {"conversation_id": conversation_id, "content": reply},
@@ -699,13 +864,20 @@ async def try_run_playground_flow(
                 continue
             sys_prompt = _subst_vars(data.get("systemPrompt") or "", variables)
             hint = data.get("hint") or ""
-            keyword = await generate_flow_gemini_keyword(
-                conversation_id,
-                account_id,
-                inbound_text,
-                sys_prompt,
-                hint if hint else None,
-            )
+            keyword = None
+            try:
+                keyword = await generate_flow_gemini_keyword(
+                    conversation_id,
+                    account_id,
+                    inbound_text,
+                    sys_prompt,
+                    hint if hint else None,
+                )
+            except BaseException as _kw_exc:
+                logger.error(
+                    "playground flow: gemini keyword CRASHED for node %s: %s",
+                    cursor, _kw_exc,
+                )
             if not keyword:
                 cursor = (
                     _successor(edges, cursor, "intent-unknown")

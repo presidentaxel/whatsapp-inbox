@@ -1,14 +1,50 @@
-import { useState, useEffect } from "react";
-import { FiX, FiPlus, FiTrash2, FiSearch } from "react-icons/fi";
+import { useState, useEffect, useRef } from "react";
+import { FiX, FiPlus, FiTrash2, FiSearch, FiUpload } from "react-icons/fi";
 import { getContacts } from "../../api/contactsApi";
-import { 
-  createBroadcastGroup, 
-  updateBroadcastGroup, 
-  getGroupRecipients, 
+import {
+  createBroadcastGroup,
+  updateBroadcastGroup,
+  getGroupRecipients,
   addRecipientToGroup,
-  removeRecipientFromGroup 
+  removeRecipientFromGroup,
+  importBroadcastRecipients,
+  importBroadcastRecipientsCsv,
 } from "../../api/broadcastApi";
 import { formatPhoneNumber } from "../../utils/formatPhone";
+
+function normalizePhoneDigits(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (d.startsWith("0") && d.length === 10) d = "33" + d.slice(1);
+  return d.length >= 8 ? d : null;
+}
+
+function parseBulkRecipientLines(text) {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const sep = line.includes(";") ? ";" : line.includes(",") ? "," : null;
+      let phone;
+      let name = "";
+      if (sep) {
+        const parts = line.split(sep).map((s) => s.trim());
+        phone = parts[0];
+        name = parts.slice(1).join(" ").trim();
+      } else {
+        const tab = line.split(/\t/);
+        if (tab.length >= 2) {
+          phone = tab[0].trim();
+          name = tab.slice(1).join(" ").trim();
+        } else {
+          phone = line;
+        }
+      }
+      const normalized = normalizePhoneDigits(phone);
+      return { phone, name, normalized };
+    })
+    .filter((r) => r.normalized);
+}
 
 export default function BroadcastGroupEditor({
   group = null,
@@ -24,7 +60,11 @@ export default function BroadcastGroupEditor({
   const [searchTerm, setSearchTerm] = useState("");
   const [phoneInput, setPhoneInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [bulkPaste, setBulkPaste] = useState("");
+  const [importFeedback, setImportFeedback] = useState(null);
   const [showAddRecipient, setShowAddRecipient] = useState(false);
+  const csvInputRef = useRef(null);
 
   useEffect(() => {
     if (group) {
@@ -67,23 +107,22 @@ export default function BroadcastGroupEditor({
         // Création d'un nouveau groupe
         const res = await createBroadcastGroup({ account_id: accountId, name, description });
         const newGroup = res.data;
-        
-        // Ajouter tous les destinataires en attente
+
         if (pendingRecipients.length > 0) {
-          for (const recipient of pendingRecipients) {
-            try {
-              await addRecipientToGroup(newGroup.id, {
-                phone_number: recipient.phone_number,
-                contact_id: recipient.contact_id,
-                display_name: recipient.display_name,
-              });
-            } catch (error) {
-              console.error("Error adding recipient:", error);
-              // Continuer même si un destinataire échoue
-            }
+          try {
+            await importBroadcastRecipients(newGroup.id, {
+              rows: pendingRecipients.map((r) => ({
+                phone: r.phone_number,
+                name: r.display_name || "",
+              })),
+              create_conversations: true,
+            });
+          } catch (error) {
+            console.error("Error importing pending recipients:", error);
+            alert(error.response?.data?.detail || "Groupe créé mais import des destinataires partiellement échoué.");
           }
         }
-        
+
         if (onSave) {
           onSave(newGroup);
         }
@@ -143,6 +182,90 @@ export default function BroadcastGroupEditor({
       setPhoneInput("");
       setShowAddRecipient(false);
     }
+  };
+
+  const handleCsvFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !group) return;
+    setImportFeedback(null);
+    setImportBusy(true);
+    try {
+      const res = await importBroadcastRecipientsCsv(group.id, file, true);
+      const d = res.data || {};
+      const nErr = Array.isArray(d.errors) ? d.errors.length : 0;
+      setImportFeedback({
+        ok: true,
+        text: `${d.imported ?? 0} ligne(s) importée(s). ${nErr ? `${nErr} erreur(s).` : ""}`,
+      });
+      await loadRecipients();
+    } catch (err) {
+      console.error(err);
+      setImportFeedback({
+        ok: false,
+        text: err.response?.data?.detail || err.message || "Import CSV échoué",
+      });
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  const handleBulkPasteApply = async () => {
+    const parsed = parseBulkRecipientLines(bulkPaste);
+    if (!parsed.length) {
+      setImportFeedback({ ok: false, text: "Aucun numéro valide dans le texte." });
+      return;
+    }
+    setImportFeedback(null);
+    if (group) {
+      setImportBusy(true);
+      try {
+        const rows = parsed.map(({ phone, name }) => ({
+          phone,
+          name: name || undefined,
+        }));
+        const res = await importBroadcastRecipients(group.id, {
+          rows,
+          create_conversations: true,
+        });
+        const d = res.data || {};
+        const nErr = Array.isArray(d.errors) ? d.errors.length : 0;
+        setImportFeedback({
+          ok: true,
+          text: `${d.imported ?? 0} importée(s). ${nErr ? `${nErr} erreur(s).` : ""}`,
+        });
+        setBulkPaste("");
+        await loadRecipients();
+      } catch (err) {
+        console.error(err);
+        setImportFeedback({
+          ok: false,
+          text: err.response?.data?.detail || err.message || "Import échoué",
+        });
+      } finally {
+        setImportBusy(false);
+      }
+      return;
+    }
+    setPendingRecipients((prev) => {
+      const map = new Map(prev.map((r) => [r.phone_number, r]));
+      for (const r of parsed) {
+        if (!map.has(r.normalized)) {
+          map.set(r.normalized, {
+            phone_number: r.normalized,
+            display_name: r.name || null,
+            contact_id: null,
+            contacts: null,
+          });
+        }
+      }
+      return [...map.values()];
+    });
+    setBulkPaste("");
+    setImportFeedback({
+      ok: true,
+      text: `${parsed.length} ligne(s) ajoutées au brouillon (création des fiches à l’enregistrement du groupe).`,
+    });
   };
 
   const handleRemoveRecipient = async (recipientId, phoneNumber = null) => {
@@ -247,6 +370,63 @@ export default function BroadcastGroupEditor({
             rows={3}
             disabled={loading}
           />
+        </div>
+
+        <div className="form-group broadcast-group-editor__import">
+          <label>Importer des contacts / prospects</label>
+          <p className="broadcast-group-editor__import-hint">
+            Fichier CSV avec colonnes reconnues : téléphone, mobile, nom, prénom, etc. Séparateur{" "}
+            <code>,</code> ou <code>;</code>. Ou colle une ligne par numéro :{" "}
+            <code>+33601020304, Jean Dupont</code>
+          </p>
+          <p className="broadcast-group-editor__import-hint">
+            Les numéros sont normalisés (ex. 06… → 33…). Une fiche contact et une conversation sont créées sur ce
+            compte WhatsApp pour chaque ligne, puis le contact est ajouté au groupe. Tu peux ensuite lancer une campagne
+            depuis l’onglet du groupe.
+          </p>
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv,text/csv,text/plain"
+            style={{ display: "none" }}
+            onChange={handleCsvFile}
+          />
+          <div className="broadcast-group-editor__import-actions">
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              disabled={!group || loading || importBusy}
+              onClick={() => csvInputRef.current?.click()}
+            >
+              <FiUpload aria-hidden /> CSV
+            </button>
+            {!group ? (
+              <span className="muted broadcast-group-editor__import-note">
+                Enregistre le groupe une première fois pour activer l’import fichier.
+              </span>
+            ) : null}
+          </div>
+          <textarea
+            className="broadcast-group-editor__bulk-text"
+            rows={4}
+            placeholder={"+33601020304, Jean Dupont\n0755123456;Marie"}
+            value={bulkPaste}
+            onChange={(e) => setBulkPaste(e.target.value)}
+            disabled={loading || importBusy}
+          />
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => void handleBulkPasteApply()}
+            disabled={loading || importBusy || !bulkPaste.trim()}
+          >
+            Importer depuis le texte
+          </button>
+          {importFeedback ? (
+            <p className={importFeedback.ok ? "import-feedback ok" : "import-feedback err"} role="status">
+              {importFeedback.text}
+            </p>
+          ) : null}
         </div>
 
         <div className="broadcast-group-editor__recipients">

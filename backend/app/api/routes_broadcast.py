@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import Optional
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from typing import Any, List, Optional
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
@@ -12,6 +12,8 @@ from app.services.broadcast_service import (
     add_recipient_to_group,
     get_group_recipients,
     remove_recipient_from_group,
+    import_recipients_for_broadcast_group,
+    parse_broadcast_import_csv,
     send_broadcast_campaign,
     get_broadcast_campaign,
     get_broadcast_campaigns,
@@ -193,6 +195,102 @@ async def remove_recipient(
     return {"status": "ok"}
 
 
+@router.post("/groups/{group_id}/import")
+async def import_recipients_bulk(
+    group_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Import JSON : { "rows": [ {"phone":"...", "name":"..."}, ... ], "create_conversations": true }
+    Crée/met à jour les contacts, ouvre les conversations inbox sur le compte du groupe, rattache au groupe.
+    """
+    group = await get_broadcast_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="group_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_SEND, group["account_id"])
+
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=400, detail="rows_required")
+
+    cc_raw = payload.get("create_conversations")
+    if cc_raw is None:
+        create_conversations = True
+    elif isinstance(cc_raw, bool):
+        create_conversations = cc_raw
+    elif isinstance(cc_raw, str):
+        create_conversations = cc_raw.lower() in ("1", "true", "yes", "on")
+    else:
+        create_conversations = bool(cc_raw)
+
+    normalized_rows: List[Dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        phone = item.get("phone") or item.get("telephone")
+        if not phone:
+            continue
+        normalized_rows.append(
+            {
+                "phone": str(phone).strip(),
+                "name": (item.get("name") or item.get("display_name") or ""),
+            }
+        )
+
+    if not normalized_rows:
+        raise HTTPException(status_code=400, detail="no_valid_rows")
+
+    result = await import_recipients_for_broadcast_group(
+        group_id,
+        str(group["account_id"]),
+        normalized_rows,
+        create_conversations=create_conversations,
+    )
+    return result
+
+
+@router.post("/groups/{group_id}/import-csv")
+async def import_recipients_csv(
+    group_id: str,
+    file: UploadFile = File(...),
+    create_conversations: str = Form("true"),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Import fichier CSV (colonnes téléphone + nom / prénom…)."""
+    group = await get_broadcast_group(group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="group_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_SEND, group["account_id"])
+
+    content = await file.read()
+    if len(content) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file_too_large")
+
+    try:
+        parsed = parse_broadcast_import_csv(content)
+    except ValueError as e:
+        if str(e) == "file_too_large":
+            raise HTTPException(status_code=413, detail="file_too_large") from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if not parsed:
+        raise HTTPException(status_code=400, detail="csv_empty_or_no_phone_column")
+
+    cc = str(create_conversations).lower() in ("1", "true", "yes", "on")
+
+    result = await import_recipients_for_broadcast_group(
+        group_id,
+        str(group["account_id"]),
+        parsed,
+        create_conversations=cc,
+    )
+    result["csv_rows_detected"] = len(parsed)
+    return result
+
+
 # ==================== CAMPAGNES ====================
 
 @router.post("/groups/{group_id}/send")
@@ -201,7 +299,7 @@ async def send_campaign(
     payload: dict,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    """Envoie un message à tous les destinataires d'un groupe"""
+    """Envoie un message à tous les destinataires d'un groupe, ou planifie l'envoi (scheduled_for ISO8601 UTC)."""
     group = await get_broadcast_group(group_id)
     if not group:
         raise HTTPException(status_code=404, detail="group_not_found")
@@ -216,6 +314,7 @@ async def send_campaign(
     message_type = payload.get("message_type", "text")
     media_url = payload.get("media_url")
     sent_by = current_user.id
+    scheduled_for = payload.get("scheduled_for")
     
     campaign = await send_broadcast_campaign(
         group_id=group_id,
@@ -224,6 +323,7 @@ async def send_campaign(
         message_type=message_type,
         media_url=media_url,
         sent_by=sent_by,
+        scheduled_for=scheduled_for,
     )
     
     return campaign

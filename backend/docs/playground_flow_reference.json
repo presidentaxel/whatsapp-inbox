@@ -146,13 +146,16 @@
     "start": {
       "data": {
         "varKey": "string",
-        "triggerType": ["message_in", "schedule", "webhook", "manual"],
+        "triggerType": ["message_in", "schedule", "webhook", "manual", "playground_audience"],
         "messageMatch": ["any", "contains", "equals", "regex"],
         "messageKeyword": "string",
         "scheduleAt": "string",
         "scheduleRepeat": ["none", "daily", "weekly", "monthly"],
         "webhookSecretRef": "string",
-        "entryPriority": "number — priorité décroissante entre starts qui matchent"
+        "audienceBroadcastGroupId": "string — groupe de diffusion (persisté) pour type playground_audience",
+        "campaignScheduledFor": "string — datetime-local brouillon date/heure de lancement (persisté)",
+        "entryPriority": "number — priorité décroissante entre starts qui matchent",
+        "playground_audience_note": "Pas de message sur ce nœud : à l’heure planifiée le moteur enchaîne depuis ce start vers le successeur (organigramme)."
       },
       "handles": { "source": [null], "target": [] }
     },

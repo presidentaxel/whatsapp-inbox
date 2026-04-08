@@ -24,6 +24,8 @@ export function migrateNode(node) {
     if (!data.triggerType) data.triggerType = "message_in";
     if (!data.messageMatch) data.messageMatch = "contains";
     if (!data.scheduleRepeat) data.scheduleRepeat = "none";
+    if (data.audienceBroadcastGroupId == null) data.audienceBroadcastGroupId = "";
+    if (data.campaignScheduledFor == null) data.campaignScheduledFor = "";
   } else if (!data.varKey) {
     data.varKey = makeVarKeyFromId(node.id);
   }

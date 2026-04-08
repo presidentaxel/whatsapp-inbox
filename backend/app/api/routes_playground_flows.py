@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
@@ -15,12 +15,15 @@ from app.services.playground_assist_thread_service import (
     soft_hide_thread,
     update_thread,
 )
+from app.services.broadcast_service import parse_broadcast_import_csv
 from app.services.playground_flow_service import (
     append_subgraph_to_flow,
     create_flow,
+    create_scheduled_flow_launch,
     delete_flow,
     duplicate_flow,
     get_flow_by_id,
+    import_playground_flow_audience as run_playground_audience_import,
     list_playground_flows_with_default_flag,
     set_default_flow,
     update_flow,
@@ -360,3 +363,144 @@ async def paste_subgraph(
     if not updated:
         raise HTTPException(status_code=500, detail="paste_failed")
     return updated
+
+
+@router.post("/{flow_id}/schedule-flow-launch")
+async def post_schedule_flow_launch(
+    flow_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Planifie le lancement du graphe pour chaque membre du groupe à l'heure indiquée :
+    le moteur enchaîne depuis le nœud Entrée « campagne » vers l'étape suivante (pas de message broadcast séparé).
+    """
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    aid = str(row["account_id"])
+    _require_flow_account_access(current_user, aid)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, aid):
+        raise HTTPException(status_code=403, detail="permission_denied")
+
+    group_id = payload.get("broadcast_group_id")
+    entry_node_id = payload.get("entry_node_id")
+    scheduled_for = payload.get("scheduled_for")
+    if not group_id or not str(group_id).strip():
+        raise HTTPException(status_code=400, detail="broadcast_group_id_required")
+    if not entry_node_id or not str(entry_node_id).strip():
+        raise HTTPException(status_code=400, detail="entry_node_id_required")
+    if not scheduled_for or not str(scheduled_for).strip():
+        raise HTTPException(status_code=400, detail="scheduled_for_required")
+
+    try:
+        return await create_scheduled_flow_launch(
+            flow_id=flow_id,
+            account_id=aid,
+            broadcast_group_id=str(group_id).strip(),
+            entry_node_id=str(entry_node_id).strip(),
+            scheduled_for_raw=str(scheduled_for).strip(),
+            created_by=current_user.id,
+        )
+    except ValueError as e:
+        code = str(e)
+        st = 404 if code == "flow_not_found" else 400
+        raise HTTPException(status_code=st, detail=code) from e
+
+
+@router.post("/{flow_id}/import-audience")
+async def post_import_playground_audience(
+    flow_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Import liste (JSON) : rattache chaque numéro à ce scénario playground (conversation + bot mode playground).
+    Optionnel : broadcast_group_id pour aussi alimenter un groupe de campagne.
+    """
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    aid = str(row["account_id"])
+    _require_flow_account_access(current_user, aid)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, aid):
+        raise HTTPException(status_code=403, detail="permission_denied")
+
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=400, detail="rows_required")
+
+    bg = payload.get("broadcast_group_id")
+    bg_id: Optional[str] = None
+    if bg is not None and str(bg).strip():
+        bg_id = str(bg).strip()
+
+    normalized_rows: List[Dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        phone = item.get("phone") or item.get("telephone")
+        if not phone:
+            continue
+        normalized_rows.append(
+            {
+                "phone": str(phone).strip(),
+                "name": item.get("name") or item.get("display_name") or "",
+            }
+        )
+    if not normalized_rows:
+        raise HTTPException(status_code=400, detail="no_valid_rows")
+
+    try:
+        return await run_playground_audience_import(
+            flow_id, normalized_rows, broadcast_group_id=bg_id
+        )
+    except ValueError as e:
+        code = str(e)
+        if code == "invalid_broadcast_group":
+            raise HTTPException(status_code=400, detail=code) from e
+        raise HTTPException(status_code=400, detail=code) from e
+
+
+@router.post("/{flow_id}/import-audience-csv")
+async def post_import_playground_audience_csv(
+    flow_id: str,
+    file: UploadFile = File(...),
+    broadcast_group_id: str = Form(""),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    aid = str(row["account_id"])
+    _require_flow_account_access(current_user, aid)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, aid):
+        raise HTTPException(status_code=403, detail="permission_denied")
+
+    content = await file.read()
+    if len(content) > 6 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file_too_large")
+
+    try:
+        parsed = parse_broadcast_import_csv(content)
+    except ValueError as e:
+        if str(e) == "file_too_large":
+            raise HTTPException(status_code=413, detail="file_too_large") from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if not parsed:
+        raise HTTPException(status_code=400, detail="csv_empty_or_no_phone_column")
+
+    bg_id = str(broadcast_group_id).strip() or None
+
+    try:
+        result = await run_playground_audience_import(
+            flow_id, parsed, broadcast_group_id=bg_id
+        )
+    except ValueError as e:
+        code = str(e)
+        if code == "invalid_broadcast_group":
+            raise HTTPException(status_code=400, detail=code) from e
+        raise HTTPException(status_code=400, detail=code) from e
+    result["csv_rows_detected"] = len(parsed)
+    return result

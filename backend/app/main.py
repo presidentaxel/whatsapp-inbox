@@ -41,6 +41,8 @@ from app.services.media_background_service import periodic_media_backfill
 from app.services.pinned_notification_service import periodic_pin_notification_check
 from app.services.pending_template_service import resume_pending_templates_on_startup, periodic_template_check
 from app.services.flow_runtime_service import periodic_playground_flow_delays
+from app.services.broadcast_service import periodic_scheduled_broadcasts
+from app.services.playground_flow_service import periodic_playground_scheduled_launches
 
 app = FastAPI(
     title="WhatsApp Inbox API",
@@ -140,6 +142,14 @@ async def startup_event():
     task5 = asyncio.create_task(periodic_playground_flow_delays())
     _periodic_tasks.append(task5)
     logger.info("✅ Playground flow delay wake task started")
+
+    task6 = asyncio.create_task(periodic_scheduled_broadcasts())
+    _periodic_tasks.append(task6)
+    logger.info("✅ Scheduled broadcast campaigns task started")
+
+    task7 = asyncio.create_task(periodic_playground_scheduled_launches())
+    _periodic_tasks.append(task7)
+    logger.info("✅ Playground scheduled flow launches task started")
 
 
 @app.on_event("shutdown")

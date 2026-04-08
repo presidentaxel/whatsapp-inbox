@@ -4,7 +4,8 @@ Implémente tous les endpoints de l'API Meta WhatsApp
 """
 import json
 import logging
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 import httpx
@@ -773,6 +774,99 @@ async def list_message_templates(
     )
     response.raise_for_status()
     return response.json()
+
+
+_named_body_params_cache: Dict[Tuple[str, str, str], Tuple[float, Optional[List[str]]]] = {}
+_NAMED_BODY_PARAM_CACHE_TTL = 300.0
+
+
+async def get_template_named_body_parameter_names(
+    waba_id: str,
+    access_token: str,
+    template_name: str,
+    language_code: str,
+) -> Optional[List[str]]:
+    """
+    Si le BODY du template utilise des variables nommées (example.body_text_named_params),
+    retourne les param_name dans l'ordre attendu par Meta.
+    Sinon None (variables positionnelles {{1}}, {{2}} — pas de parameter_name sur l'envoi).
+    """
+    if not waba_id or not access_token or not (template_name or "").strip():
+        return None
+    lang_key = (language_code or "en").strip().lower()
+    cache_key = (waba_id, template_name.strip(), lang_key)
+    now_m = time.monotonic()
+    cached = _named_body_params_cache.get(cache_key)
+    if cached and now_m < cached[0]:
+        return cached[1]
+
+    result: Optional[List[str]] = None
+    try:
+        all_rows: List[Dict[str, Any]] = []
+        cursor_after: Optional[str] = None
+        while True:
+            batch = await list_message_templates(
+                waba_id, access_token, limit=100, after=cursor_after
+            )
+            chunk = batch.get("data") or []
+            if not chunk:
+                break
+            all_rows.extend(chunk)
+            cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
+            if not cursor_after:
+                break
+
+        tpl = next(
+            (
+                t
+                for t in all_rows
+                if t.get("name") == template_name and t.get("language") == language_code
+            ),
+            None,
+        )
+        if not tpl:
+            tpl = next((t for t in all_rows if t.get("name") == template_name), None)
+        if not tpl:
+            _named_body_params_cache[cache_key] = (
+                now_m + _NAMED_BODY_PARAM_CACHE_TTL,
+                None,
+            )
+            return None
+
+        body_comp = next(
+            (c for c in (tpl.get("components") or []) if c.get("type") == "BODY"),
+            None,
+        )
+        if not body_comp:
+            _named_body_params_cache[cache_key] = (
+                now_m + _NAMED_BODY_PARAM_CACHE_TTL,
+                None,
+            )
+            return None
+        named = (body_comp.get("example") or {}).get("body_text_named_params") or []
+        if not named:
+            _named_body_params_cache[cache_key] = (
+                now_m + _NAMED_BODY_PARAM_CACHE_TTL,
+                None,
+            )
+            return None
+        names: List[str] = []
+        for p in named:
+            if not isinstance(p, dict):
+                continue
+            pn = (p.get("param_name") or "").strip()
+            if pn:
+                names.append(pn)
+        result = names if names else None
+    except Exception as exc:
+        logger.warning("get_template_named_body_parameter_names: %s", exc, exc_info=True)
+        result = None
+
+    _named_body_params_cache[cache_key] = (
+        time.monotonic() + _NAMED_BODY_PARAM_CACHE_TTL,
+        result,
+    )
+    return result
 
 
 async def create_message_template(

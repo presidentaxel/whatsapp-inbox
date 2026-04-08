@@ -7,7 +7,7 @@ import copy
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import supabase, supabase_execute
@@ -349,3 +349,301 @@ async def append_subgraph_to_flow(target_flow_id: str, nodes: List[dict], edges:
     base["nodes"] = base["nodes"] + remapped["nodes"]
     base["edges"] = base["edges"] + remapped["edges"]
     return await update_flow(target_flow_id, graph=base, set_graph=True)
+
+
+async def import_playground_flow_audience(
+    flow_id: str,
+    rows: List[Dict[str, Any]],
+    *,
+    broadcast_group_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Pour chaque ligne (téléphone + nom optionnel) : conversation inbox, contact,
+    conversation liée à ce scénario playground, bot activé en mode playground.
+    Optionnel : ajout / mise à jour dans un groupe de diffusion (campagnes classiques).
+    """
+    from app.services.broadcast_service import (
+        _update_contact_display_name,
+        get_broadcast_group,
+        upsert_recipient_to_group,
+    )
+    from app.services.conversation_service import (
+        find_or_create_conversation,
+        normalize_phone_number,
+        set_conversation_bot_mode,
+        set_conversation_playground_flow,
+    )
+
+    flow = await get_flow_by_id(flow_id)
+    if not flow:
+        raise ValueError("flow_not_found")
+    account_id = str(flow["account_id"])
+
+    if broadcast_group_id:
+        grp = await get_broadcast_group(broadcast_group_id)
+        if not grp or str(grp["account_id"]) != account_id:
+            raise ValueError("invalid_broadcast_group")
+
+    imported = 0
+    skipped = 0
+    errors: List[Dict[str, Any]] = []
+
+    for raw in rows:
+        raw_phone = (raw.get("phone") or raw.get("telephone") or "").strip()
+        if not raw_phone:
+            skipped += 1
+            continue
+        name_raw = raw.get("name") or raw.get("display_name") or ""
+        display_name = str(name_raw).strip() if name_raw else None
+
+        normalized = normalize_phone_number(raw_phone)
+        if not normalized:
+            errors.append({"phone": raw_phone, "error": "invalid_phone"})
+            continue
+
+        try:
+            conv = await find_or_create_conversation(account_id, normalized)
+            if not conv:
+                errors.append({"phone": raw_phone, "error": "conversation_failed"})
+                continue
+            conv_id = conv.get("id")
+            contact_id = conv.get("contact_id")
+            if not conv_id:
+                errors.append({"phone": raw_phone, "error": "conversation_failed"})
+                continue
+
+            await set_conversation_playground_flow(str(conv_id), flow_id)
+            await set_conversation_bot_mode(str(conv_id), True, "playground")
+
+            if contact_id and display_name:
+                await _update_contact_display_name(str(contact_id), display_name)
+
+            if broadcast_group_id:
+                await upsert_recipient_to_group(
+                    broadcast_group_id,
+                    normalized,
+                    str(contact_id) if contact_id else None,
+                    display_name,
+                )
+            imported += 1
+        except Exception as e:
+            logger.exception("playground audience import failed for %s", raw_phone)
+            errors.append({"phone": raw_phone, "error": str(e)})
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "total_input_rows": len(rows),
+        "playground_flow_id": flow_id,
+        "account_id": account_id,
+    }
+
+
+def _parse_schedule_datetime(raw: Optional[str]) -> Optional[datetime]:
+    if not raw or not str(raw).strip():
+        return None
+    s = str(raw).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+async def create_scheduled_flow_launch(
+    flow_id: str,
+    account_id: str,
+    broadcast_group_id: str,
+    entry_node_id: str,
+    scheduled_for_raw: str,
+    created_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Enregistre un lancement de graphe à une date/heure pour tous les membres du groupe."""
+    from app.services.broadcast_service import get_broadcast_group
+
+    flow = await get_flow_by_id(flow_id)
+    if not flow or str(flow["account_id"]) != str(account_id):
+        raise ValueError("flow_not_found")
+
+    grp = await get_broadcast_group(broadcast_group_id)
+    if not grp or str(grp["account_id"]) != str(account_id):
+        raise ValueError("invalid_broadcast_group")
+
+    g = _normalize_graph(flow.get("graph"))
+    nodes_by_id = {n["id"]: n for n in g.get("nodes") or [] if n.get("id")}
+    eid = str(entry_node_id).strip()
+    if eid not in nodes_by_id:
+        raise ValueError("invalid_entry_node")
+    node = nodes_by_id[eid]
+    if node.get("type") != "start":
+        raise ValueError("entry_not_start")
+    data = node.get("data") or {}
+    if data.get("triggerType") != "playground_audience":
+        raise ValueError("entry_not_campaign_trigger")
+
+    sched = _parse_schedule_datetime(scheduled_for_raw)
+    if not sched:
+        raise ValueError("invalid_schedule_time")
+    now = datetime.now(timezone.utc)
+    if sched <= now + timedelta(seconds=5):
+        raise ValueError("schedule_time_must_be_future")
+
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO playground_scheduled_flow_launches (
+                account_id, playground_flow_id, broadcast_group_id, entry_node_id,
+                scheduled_for, schedule_status, created_by
+            )
+            VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::timestamptz, 'scheduled', $6::uuid)
+            RETURNING *
+            """,
+            account_id,
+            flow_id,
+            broadcast_group_id,
+            eid,
+            sched,
+            created_by,
+        )
+        if not row:
+            raise ValueError("insert_failed")
+        return dict(row)
+
+    ins = {
+        "account_id": account_id,
+        "playground_flow_id": flow_id,
+        "broadcast_group_id": broadcast_group_id,
+        "entry_node_id": eid,
+        "scheduled_for": sched.isoformat(),
+        "schedule_status": "scheduled",
+        "created_by": created_by,
+    }
+    res = await supabase_execute(
+        supabase.table("playground_scheduled_flow_launches").insert(ins)
+    )
+    if not res.data:
+        raise ValueError("insert_failed")
+    return res.data[0]
+
+
+async def _claim_next_scheduled_flow_launch(now_utc: datetime) -> Optional[Dict[str, Any]]:
+    pool = get_pool()
+    if not pool:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                WITH cte AS (
+                  SELECT id FROM playground_scheduled_flow_launches
+                  WHERE schedule_status = 'scheduled'
+                    AND scheduled_for <= $1::timestamptz
+                  ORDER BY scheduled_for ASC
+                  LIMIT 1
+                  FOR UPDATE SKIP LOCKED
+                )
+                UPDATE playground_scheduled_flow_launches b
+                SET schedule_status = 'sending'
+                FROM cte
+                WHERE b.id = cte.id AND b.schedule_status = 'scheduled'
+                RETURNING b.*
+                """,
+                now_utc,
+            )
+            return dict(row) if row else None
+
+
+async def process_due_playground_scheduled_launches_once() -> int:
+    """Traite jusqu'à 15 lancements planifiés (pool PG requis)."""
+    from app.services.broadcast_service import get_group_recipients
+    from app.services.conversation_service import (
+        find_or_create_conversation,
+        get_conversation_by_id_fresh,
+        normalize_phone_number,
+        set_conversation_bot_mode,
+        set_conversation_playground_flow,
+    )
+    from app.services.flow_runtime_service import try_run_playground_flow
+
+    if not get_pool():
+        return 0
+
+    now = datetime.now(timezone.utc)
+    n = 0
+    for _ in range(15):
+        row = await _claim_next_scheduled_flow_launch(now)
+        if not row:
+            break
+        launch_id = str(row["id"])
+        flow_id = str(row["playground_flow_id"])
+        account_id = str(row["account_id"])
+        group_id = str(row["broadcast_group_id"])
+        entry_node_id = str(row["entry_node_id"])
+        try:
+            recipients = await get_group_recipients(group_id)
+            for rec in recipients:
+                phone = (rec.get("phone_number") or "").strip()
+                if not phone:
+                    continue
+                normalized = normalize_phone_number(phone)
+                if not normalized:
+                    continue
+                conv = await find_or_create_conversation(account_id, normalized)
+                if not conv or not conv.get("id"):
+                    continue
+                cid = str(conv["id"])
+                await set_conversation_playground_flow(cid, flow_id)
+                await set_conversation_bot_mode(cid, True, "playground")
+                conv_full = await get_conversation_by_id_fresh(cid)
+                if not conv_full:
+                    continue
+                contact = conv_full.get("contacts")
+                if not isinstance(contact, dict):
+                    contact = {}
+                await try_run_playground_flow(
+                    cid,
+                    conv_full,
+                    contact,
+                    {},
+                    "",
+                    "text",
+                    scheduled_flow_launch=True,
+                    launch_entry_node_id=entry_node_id,
+                )
+            await execute(
+                """
+                UPDATE playground_scheduled_flow_launches
+                SET schedule_status = 'done'
+                WHERE id = $1::uuid
+                """,
+                launch_id,
+            )
+            n += 1
+        except Exception:
+            logger.exception("playground scheduled flow launch failed id=%s", launch_id)
+            await execute(
+                """
+                UPDATE playground_scheduled_flow_launches
+                SET schedule_status = 'failed'
+                WHERE id = $1::uuid
+                """,
+                launch_id,
+            )
+            n += 1
+    return n
+
+
+async def periodic_playground_scheduled_launches() -> None:
+    import asyncio
+
+    while True:
+        try:
+            await asyncio.sleep(30)
+            await process_due_playground_scheduled_launches_once()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("periodic_playground_scheduled_launches tick failed")

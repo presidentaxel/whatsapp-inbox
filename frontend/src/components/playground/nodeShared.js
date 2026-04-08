@@ -90,6 +90,7 @@ const TRIGGER_LABELS = {
   schedule: "Planification",
   webhook: "Webhook",
   manual: "Manuel",
+  playground_audience: "Campagne",
 };
 
 export function summarizeStart(data) {
@@ -100,6 +101,10 @@ export function summarizeStart(data) {
   }
   if (tt === "message_in" && data.messageMatch && data.messageMatch !== "any") {
     return `${base} · ${data.messageMatch}${data.messageKeyword ? ` «${truncate(data.messageKeyword, 16)}»` : ""}`;
+  }
+  if (tt === "playground_audience") {
+    const when = (data.campaignScheduledFor || "").replace("T", " ");
+    return when ? `${base} · ${when}` : `${base} · groupe`;
   }
   return base;
 }

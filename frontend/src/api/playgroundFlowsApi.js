@@ -24,6 +24,21 @@ export const duplicatePlaygroundFlow = (payload) =>
 export const pastePlaygroundSubgraph = (flowId, payload) =>
   api.post(`/bot/playground-flows/${flowId}/paste-subgraph`, payload);
 
+/** Planifie le lancement du graphe pour le groupe (entry_node_id = id React du nœud Entrée campagne). */
+export const schedulePlaygroundFlowLaunch = (flowId, payload) =>
+  api.post(`/bot/playground-flows/${flowId}/schedule-flow-launch`, payload);
+
+/** Liste → conversations liées à ce scénario + bot mode playground ; broadcast_group_id optionnel. */
+export const importPlaygroundAudience = (flowId, payload) =>
+  api.post(`/bot/playground-flows/${flowId}/import-audience`, payload);
+
+export const importPlaygroundAudienceCsv = (flowId, file, broadcastGroupId = "") => {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("broadcast_group_id", broadcastGroupId || "");
+  return api.post(`/bot/playground-flows/${flowId}/import-audience-csv`, fd);
+};
+
 /** Chat assistant Playground (explications + graphe optionnel). */
 export const postPlaygroundAssistant = (payload) =>
   api.post("/bot/playground-flows/assistant", payload);

@@ -28,8 +28,21 @@ export const addRecipientToGroup = (groupId, data) =>
 export const removeRecipientFromGroup = (groupId, recipientId) =>
   api.delete(`/broadcast/groups/${groupId}/recipients/${recipientId}`);
 
+/** Import JSON : { rows: [{ phone, name? }], create_conversations?: bool } */
+export const importBroadcastRecipients = (groupId, payload) =>
+  api.post(`/broadcast/groups/${groupId}/import`, payload);
+
+/** Fichier CSV (multipart). createConversations défaut true = fiche inbox + contact. */
+export const importBroadcastRecipientsCsv = (groupId, file, createConversations = true) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("create_conversations", createConversations ? "true" : "false");
+  return api.post(`/broadcast/groups/${groupId}/import-csv`, fd);
+};
+
 // ==================== CAMPAGNES ====================
 
+/** content_text requis ; scheduled_for (ISO8601 UTC) optionnel pour envoi différé. */
 export const sendBroadcastCampaign = (groupId, data) =>
   api.post(`/broadcast/groups/${groupId}/send`, data);
 

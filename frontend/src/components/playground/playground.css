@@ -1441,6 +1441,20 @@ textarea.pg-modal__input {
   color: var(--text-muted);
 }
 
+.pg-modal__status {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  margin: 8px 0 0;
+}
+
+.pg-modal__status--ok {
+  color: #25d366;
+}
+
+.pg-modal__status--err {
+  color: #e53935;
+}
+
 .pg-modal__section {
   margin-top: 4px;
   padding: 10px 12px;
@@ -1500,6 +1514,33 @@ textarea.pg-modal__input {
 .pg-modal__var code {
   font-family: ui-monospace, monospace;
   word-break: break-all;
+}
+
+.pg-modal__var-clickable {
+  cursor: pointer;
+  border-bottom: 1px dashed var(--text-muted, #777);
+  transition: border-color 0.15s;
+}
+.pg-modal__var-clickable:hover {
+  border-bottom-color: var(--accent, #3b82f6);
+}
+
+.pg-modal__var-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.pg-modal__var-input {
+  font-family: ui-monospace, monospace;
+  font-size: 0.72rem;
+  background: var(--bg-primary, #111);
+  color: inherit;
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 4px;
+  padding: 2px 4px;
+  outline: none;
+  width: 16ch;
 }
 
 .pg-modal__qr-list {

@@ -61,6 +61,8 @@ const initialNodes = () => [
       scheduleRepeat: "none",
       webhookSecretRef: "",
       entryPriority: 0,
+      audienceBroadcastGroupId: "",
+      campaignScheduledFor: "",
     },
   },
 ];
@@ -76,6 +78,8 @@ function defaultDataForType(type) {
         scheduleRepeat: "none",
         webhookSecretRef: "",
         entryPriority: 0,
+        audienceBroadcastGroupId: "",
+        campaignScheduledFor: "",
       };
     case "sendText":
       return { body: "" };
@@ -904,8 +908,9 @@ function FlowEditorInner({ accountId }) {
                 choisi dans le chat.
               </p>
               <p className="playground-help-pop__p muted">
-                Plusieurs blocs <strong>Entrée</strong> : ouvrez un bloc pour mots-clés et priorité.
-                Molette ou clic droit sur le canevas pour déplacer la vue.
+                Plusieurs blocs <strong>Entrée</strong> : ouvrez un bloc pour mots-clés, priorité, ou type{" "}
+                <strong>Campagne planifiée</strong> (groupe + date de lancement du scénario, sans message sur le
+                déclencheur). Molette ou clic droit sur le canevas pour déplacer la vue.
               </p>
               <p className="playground-help-pop__p muted">
                 <strong>Templates &amp; texte</strong> : dans les champs (y compris variables Meta), tu
@@ -1066,6 +1071,8 @@ function FlowEditorInner({ accountId }) {
                         open={Boolean(settingsNodeId && settingsNode)}
                         onClose={() => setSettingsNodeId(null)}
                         patchNode={patchNode}
+                        accountId={accountId}
+                        flowId={activeFlowId}
                       />
                     </VarListContext.Provider>
                   </TemplatesContext.Provider>

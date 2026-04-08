@@ -29,13 +29,21 @@ const TITLES = {
   logicNode: "Logique",
 };
 
-function renderForm(node, patchNode) {
+function renderForm(node, patchNode, accountId, flowId) {
   if (!node) return null;
   const { id, type, data } = node;
   const patch = (nid, partial) => patchNode(nid, partial);
   switch (type) {
     case "start":
-      return <StartSettingsForm id={id} data={data} patch={patch} />;
+      return (
+        <StartSettingsForm
+          id={id}
+          data={data}
+          patch={patch}
+          accountId={accountId}
+          flowId={flowId}
+        />
+      );
     case "sendText":
       return <SendTextSettingsForm id={id} data={data} patch={patch} />;
     case "sendTemplate":
@@ -61,7 +69,14 @@ function renderForm(node, patchNode) {
   }
 }
 
-export default function NodeSettingsModal({ node, open, onClose, patchNode }) {
+export default function NodeSettingsModal({
+  node,
+  open,
+  onClose,
+  patchNode,
+  accountId,
+  flowId,
+}) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -93,7 +108,9 @@ export default function NodeSettingsModal({ node, open, onClose, patchNode }) {
             <FiX />
           </button>
         </header>
-        <div className="pg-modal__body">{renderForm(node, patchNode)}</div>
+        <div className="pg-modal__body">
+          {renderForm(node, patchNode, accountId, flowId)}
+        </div>
       </div>
     </div>,
     document.body

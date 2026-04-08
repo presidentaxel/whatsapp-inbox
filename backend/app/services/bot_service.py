@@ -544,8 +544,8 @@ async def generate_flow_gemini_keyword(
                 )
             else:
                 raise
-    except Exception as exc:
-        logger.error("Flow Gemini failed for %s: %s", conversation_id, exc)
+    except BaseException as exc:
+        logger.error("Flow Gemini keyword failed for %s: %s (%s)", conversation_id, exc, type(exc).__name__)
         return None
 
     candidates: List[Dict[str, Any]] = data.get("candidates") or []
@@ -555,6 +555,121 @@ async def generate_flow_gemini_keyword(
             text = (part.get("text") or "").strip()
             if text:
                 return text.split()[0] if text else None
+    return None
+
+
+async def generate_flow_gemini_text_reply(
+    conversation_id: str,
+    _account_id: str,
+    user_text: str,
+    system_prompt: str,
+    hint: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Nœud Gemini « sans intentions » mais avec prompt système : réponse conversationnelle
+    complète (pour {{varKey}} puis sendText / interactive), pas le playbook SAV.
+    Utilise l'historique de la conversation pour un meilleur contexte.
+    """
+    if not settings.GEMINI_API_KEY:
+        logger.info("GEMINI_API_KEY absent, skip flow gemini text for %s", conversation_id)
+        return None
+    user_text = (user_text or "").strip()
+    base = (system_prompt or "").strip()
+    if not base:
+        return None
+    if "[INSERER LE TEXTE DU USER ICI]" in base:
+        instruction = base.replace("[INSERER LE TEXTE DU USER ICI]", user_text or "(aucun message)")
+    else:
+        instruction = f"{base}\n\nDernier message de l'utilisateur :\n{user_text or '(aucun message)'}"
+    if hint:
+        instruction = f"{instruction}\n\nConsigne complémentaire :\n{hint.strip()}"
+    instruction = (
+        f"{instruction}\n\n"
+        "Réponds en français. Réponse directe au client (pas de préambule méta, pas de guillemets autour du message entier)."
+    )
+
+    generation_config: Dict[str, Any] = {
+        "temperature": 0.55,
+        "maxOutputTokens": 1024,
+    }
+    if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
+        generation_config["thinkingConfig"] = {"thinkingBudget": 256}
+
+    conversation_parts: List[Dict[str, Any]] = []
+    try:
+        history_rows = (
+            await supabase_execute(
+                supabase.table("messages")
+                .select("direction, content_text")
+                .eq("conversation_id", conversation_id)
+                .order("timestamp", desc=True)
+                .limit(8)
+            )
+        ).data
+        history_rows.reverse()
+        for row in history_rows:
+            content = (row.get("content_text") or "").strip()
+            if not content:
+                continue
+            role = "user" if row.get("direction") == "inbound" else "model"
+            conversation_parts.append({"role": role, "parts": [{"text": content}]})
+    except Exception as hist_exc:
+        logger.warning("Flow Gemini text: could not load history: %s", hist_exc)
+
+    if not conversation_parts or conversation_parts[-1]["role"] != "user":
+        conversation_parts.append({"role": "user", "parts": [{"text": user_text or "Rédige la réponse demandée."}]})
+
+    payload_v1beta = {
+        "system_instruction": {
+            "role": "system",
+            "parts": [{"text": instruction}],
+        },
+        "contents": conversation_parts,
+        "generationConfig": generation_config,
+    }
+    system_message = {
+        "role": "user",
+        "parts": [{"text": instruction}],
+    }
+    payload_v1 = {
+        "contents": [system_message] + conversation_parts,
+        "generationConfig": generation_config,
+    }
+
+    endpoint_v1beta = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+    endpoint_v1 = (
+        f"https://generativelanguage.googleapis.com/v1/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+
+    try:
+        try:
+            data = await gemini_circuit_breaker.call_async(
+                _call_gemini_api, endpoint_v1beta, payload_v1beta, conversation_id
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (404, 400):
+                data = await gemini_circuit_breaker.call_async(
+                    _call_gemini_api, endpoint_v1, payload_v1, conversation_id
+                )
+            else:
+                raise
+    except BaseException as exc:
+        logger.error("Flow Gemini text reply failed for %s: %s (%s)", conversation_id, exc, type(exc).__name__)
+        return None
+
+    candidates: List[Dict[str, Any]] = data.get("candidates") or []
+    for candidate in candidates:
+        parts = (candidate.get("content") or {}).get("parts") or []
+        for part in parts:
+            if part.get("thought"):
+                continue
+            text = (part.get("text") or "").strip()
+            if text:
+                return text
     return None
 
 

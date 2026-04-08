@@ -1,11 +1,17 @@
+import csv
+import io
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.db import supabase, supabase_execute
 from app.core.pg import execute as pg_execute, fetch_all, fetch_one, get_pool
 from app.services.account_service import get_account_by_id
-from app.services.conversation_service import find_or_create_conversation as _find_or_create_conversation
+from app.services.conversation_service import (
+    find_or_create_conversation as _find_or_create_conversation,
+    normalize_phone_number,
+)
 from app.services.message_service import (
     send_message,
     is_within_free_window,
@@ -14,6 +20,16 @@ from app.services.pending_template_service import create_and_queue_template
 from app.services.template_deduplication import find_or_create_template
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_scheduled_for_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value or not str(value).strip():
+        return None
+    s = str(value).strip().replace("Z", "+00:00")
+    dt = datetime.fromisoformat(s)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 # ==================== GROUPES ====================
@@ -217,6 +233,261 @@ async def remove_recipient_from_group(recipient_id: str) -> bool:
     return True
 
 
+# ==================== IMPORT CSV / LISTE (contacts + inbox + groupe) ====================
+
+_MAX_IMPORT_ROWS = 10000
+_MAX_IMPORT_BYTES = 6 * 1024 * 1024
+
+
+def _normalize_csv_header(h: str) -> str:
+    s = (h or "").strip().lower()
+    for a, b in (("é", "e"), ("è", "e"), ("ê", "e"), (" ", "_"), ("°", "")):
+        s = s.replace(a, b)
+    return s.strip("_").strip()
+
+
+def _phone_from_normalized_row(r: Dict[str, str]) -> Optional[str]:
+    for key in ("phone", "telephone", "tel", "mobile", "whatsapp", "numero"):
+        v = (r.get(key) or "").strip()
+        if v:
+            return v
+    digits_min = 8
+    for v in r.values():
+        vv = (v or "").strip()
+        d = re.sub(r"\D", "", vv)
+        if len(d) >= digits_min:
+            return vv
+    return None
+
+
+def _display_name_from_normalized_row(r: Dict[str, str]) -> Optional[str]:
+    pre = (r.get("prenom") or r.get("firstname") or "").strip()
+    nom = (r.get("nom") or r.get("nom_famille") or r.get("lastname") or "").strip()
+    if pre and nom:
+        return f"{pre} {nom}".strip()
+    for key in ("name", "display_name", "fullname", "contact", "client", "societe", "entreprise", "company"):
+        v = (r.get(key) or "").strip()
+        if v:
+            return v
+    return None
+
+
+def parse_broadcast_import_csv(content: bytes, max_rows: int = _MAX_IMPORT_ROWS) -> List[Dict[str, str]]:
+    """
+    Parse un CSV (séparateur , ; ou tab). Colonnes reconnues : phone / telephone / mobile / nom / prenom / name…
+    Retourne une liste de {"phone": str brute, "name": str optionnelle}.
+    """
+    if len(content) > _MAX_IMPORT_BYTES:
+        raise ValueError("file_too_large")
+    text = content.decode("utf-8-sig", errors="replace")
+    buf = io.StringIO(text)
+    sample = text[:4096]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,\t")
+    except csv.Error:
+        dialect = csv.excel
+    buf.seek(0)
+    reader = csv.DictReader(buf, dialect=dialect)
+    out: List[Dict[str, str]] = []
+    for i, raw in enumerate(reader):
+        if i >= max_rows:
+            break
+        if not raw:
+            continue
+        canon: Dict[str, str] = {}
+        for k, v in raw.items():
+            if k is None:
+                continue
+            nk = _normalize_csv_header(str(k))
+            if not nk:
+                continue
+            canon[nk] = ("" if v is None else str(v)).strip()
+        phone = _phone_from_normalized_row(canon)
+        if not phone:
+            continue
+        name = _display_name_from_normalized_row(canon) or ""
+        out.append({"phone": phone, "name": name})
+    return out
+
+
+async def _update_contact_display_name(contact_id: str, display_name: str) -> None:
+    if not contact_id or not display_name or not str(display_name).strip():
+        return
+    n = str(display_name).strip()
+    if get_pool():
+        await pg_execute(
+            "UPDATE contacts SET display_name = $2 WHERE id = $1::uuid",
+            contact_id,
+            n,
+        )
+    else:
+        await supabase_execute(supabase.table("contacts").update({"display_name": n}).eq("id", contact_id))
+
+
+async def _ensure_contact_only(phone: str, display_name: Optional[str]) -> Optional[str]:
+    """Contact WhatsApp global (sans créer de conversation)."""
+    dn = str(display_name).strip() if display_name else None
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO contacts (whatsapp_number, display_name)
+            VALUES ($1, $2)
+            ON CONFLICT (whatsapp_number) DO UPDATE SET
+                display_name = CASE
+                    WHEN EXCLUDED.display_name IS NOT NULL AND BTRIM(EXCLUDED.display_name) <> ''
+                    THEN EXCLUDED.display_name
+                    ELSE contacts.display_name
+                END
+            RETURNING id
+            """,
+            phone,
+            dn,
+        )
+        return str(row["id"]) if row else None
+    payload: Dict[str, Any] = {"whatsapp_number": phone}
+    if dn:
+        payload["display_name"] = dn
+    res = await supabase_execute(supabase.table("contacts").upsert(payload, on_conflict="whatsapp_number"))
+    if res.data and len(res.data) > 0:
+        return str(res.data[0]["id"])
+    sel = await supabase_execute(
+        supabase.table("contacts").select("id").eq("whatsapp_number", phone).limit(1)
+    )
+    if sel.data and len(sel.data) > 0:
+        cid = str(sel.data[0]["id"])
+        if dn:
+            await supabase_execute(supabase.table("contacts").update({"display_name": dn}).eq("id", cid))
+        return cid
+    return None
+
+
+async def upsert_recipient_to_group(
+    group_id: str,
+    phone_number: str,
+    contact_id: Optional[str],
+    display_name: Optional[str],
+) -> Dict[str, Any]:
+    """Ajoute ou met à jour un destinataire (même numéro dans le groupe)."""
+    dn = str(display_name).strip() if display_name else None
+    if get_pool():
+        row = await fetch_one(
+            """
+            INSERT INTO broadcast_group_recipients (group_id, contact_id, phone_number, display_name)
+            VALUES ($1::uuid, $2::uuid, $3, $4)
+            ON CONFLICT (group_id, phone_number) DO UPDATE SET
+                contact_id = COALESCE(EXCLUDED.contact_id, broadcast_group_recipients.contact_id),
+                display_name = CASE
+                    WHEN EXCLUDED.display_name IS NOT NULL AND BTRIM(EXCLUDED.display_name) <> ''
+                    THEN EXCLUDED.display_name
+                    ELSE broadcast_group_recipients.display_name
+                END
+            RETURNING *
+            """,
+            group_id,
+            contact_id,
+            phone_number,
+            dn,
+        )
+        if not row:
+            raise ValueError("upsert_recipient_failed")
+        return dict(row)
+    res = await supabase_execute(
+        supabase.table("broadcast_group_recipients").upsert(
+            {
+                "group_id": group_id,
+                "contact_id": contact_id,
+                "phone_number": phone_number,
+                "display_name": dn,
+            },
+            on_conflict="group_id,phone_number",
+        )
+    )
+    if res.data and len(res.data) > 0:
+        return res.data[0]
+    sel = await supabase_execute(
+        supabase.table("broadcast_group_recipients")
+        .select("*")
+        .eq("group_id", group_id)
+        .eq("phone_number", phone_number)
+        .limit(1)
+    )
+    if sel.data and len(sel.data) > 0:
+        return sel.data[0]
+    raise ValueError("upsert_recipient_failed")
+
+
+async def import_recipients_for_broadcast_group(
+    group_id: str,
+    account_id: str,
+    rows: List[Dict[str, Any]],
+    *,
+    create_conversations: bool = True,
+) -> Dict[str, Any]:
+    """
+    Pour chaque ligne : normalise le numéro, met à jour/crée le contact, optionnellement la conversation inbox,
+    puis rattache au groupe de campagne.
+    """
+    imported = 0
+    skipped = 0
+    errors: List[Dict[str, Any]] = []
+
+    for raw in rows:
+        raw_phone = (raw.get("phone") or raw.get("telephone") or "").strip()
+        if not raw_phone:
+            skipped += 1
+            continue
+        name_raw = raw.get("name") or raw.get("display_name") or ""
+        display_name = str(name_raw).strip() if name_raw else None
+
+        normalized = normalize_phone_number(raw_phone)
+        if not normalized:
+            errors.append({"phone": raw_phone, "error": "invalid_phone"})
+            continue
+
+        contact_id: Optional[str] = None
+        try:
+            if create_conversations:
+                conv = await _find_or_create_conversation(account_id, normalized)
+                if not conv:
+                    errors.append({"phone": raw_phone, "error": "conversation_failed"})
+                    continue
+                contact_id = conv.get("contact_id")
+            else:
+                contact_id = await _ensure_contact_only(normalized, display_name)
+                if not contact_id:
+                    errors.append({"phone": raw_phone, "error": "contact_failed"})
+                    continue
+        except ValueError as e:
+            errors.append({"phone": raw_phone, "error": str(e)})
+            continue
+        except Exception as e:
+            logger.exception("import row failed for %s", raw_phone)
+            errors.append({"phone": raw_phone, "error": str(e)})
+            continue
+
+        if contact_id and display_name:
+            await _update_contact_display_name(str(contact_id), display_name)
+
+        try:
+            await upsert_recipient_to_group(
+                group_id,
+                normalized,
+                str(contact_id) if contact_id else None,
+                display_name,
+            )
+            imported += 1
+        except Exception as e:
+            logger.exception("upsert recipient failed for %s", normalized)
+            errors.append({"phone": raw_phone, "error": str(e)})
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors,
+        "total_input_rows": len(rows),
+    }
+
+
 # ==================== CAMPAGNES ====================
 
 async def create_broadcast_campaign(
@@ -226,35 +497,74 @@ async def create_broadcast_campaign(
     message_type: str = "text",
     media_url: Optional[str] = None,
     sent_by: Optional[str] = None,
+    scheduled_for: Optional[datetime] = None,
+    defer_dispatch: bool = False,
 ) -> Dict[str, Any]:
-    """Crée une nouvelle campagne d'envoi groupé"""
-    # Compter les destinataires
+    """Crée une ligne campagne (envoi immédiat ou planifié si defer_dispatch)."""
     recipients = await get_group_recipients(group_id)
     total_recipients = len(recipients)
-    
+
     if get_pool():
-        row = await fetch_one(
-            """
-            INSERT INTO broadcast_campaigns (group_id, account_id, content_text, message_type, media_url, sent_by, total_recipients)
-            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7)
-            RETURNING *
-            """,
-            group_id, account_id, content_text, message_type, media_url, sent_by, total_recipients,
-        )
+        if defer_dispatch and scheduled_for is not None:
+            row = await fetch_one(
+                """
+                INSERT INTO broadcast_campaigns (
+                    group_id, account_id, content_text, message_type, media_url, sent_by, total_recipients,
+                    scheduled_for, schedule_status, sent_at
+                )
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7, $8::timestamptz, 'scheduled', NULL)
+                RETURNING *
+                """,
+                group_id,
+                account_id,
+                content_text,
+                message_type,
+                media_url,
+                sent_by,
+                total_recipients,
+                scheduled_for,
+            )
+        else:
+            row = await fetch_one(
+                """
+                INSERT INTO broadcast_campaigns (
+                    group_id, account_id, content_text, message_type, media_url, sent_by, total_recipients,
+                    scheduled_for, schedule_status, sent_at
+                )
+                VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6::uuid, $7, NULL, 'done', now())
+                RETURNING *
+                """,
+                group_id,
+                account_id,
+                content_text,
+                message_type,
+                media_url,
+                sent_by,
+                total_recipients,
+            )
         if not row:
             raise ValueError("Failed to create broadcast campaign")
         return row
+
+    insert_payload: Dict[str, Any] = {
+        "group_id": group_id,
+        "account_id": account_id,
+        "content_text": content_text,
+        "message_type": message_type,
+        "media_url": media_url,
+        "sent_by": sent_by,
+        "total_recipients": total_recipients,
+    }
+    if defer_dispatch and scheduled_for is not None:
+        insert_payload["scheduled_for"] = scheduled_for.isoformat()
+        insert_payload["schedule_status"] = "scheduled"
+        insert_payload["sent_at"] = None
+    else:
+        insert_payload["schedule_status"] = "done"
+        insert_payload["sent_at"] = datetime.now(timezone.utc).isoformat()
+
     result = await supabase_execute(
-        supabase.table("broadcast_campaigns")
-        .insert({
-            "group_id": group_id,
-            "account_id": account_id,
-            "content_text": content_text,
-            "message_type": message_type,
-            "media_url": media_url,
-            "sent_by": sent_by,
-            "total_recipients": total_recipients,
-        })
+        supabase.table("broadcast_campaigns").insert(insert_payload)
     )
     if not result.data or len(result.data) == 0:
         raise ValueError("Failed to create broadcast campaign")
@@ -276,20 +586,34 @@ async def get_broadcast_campaigns(group_id: Optional[str] = None, account_id: Op
     if get_pool():
         if group_id and account_id:
             return await fetch_all(
-                "SELECT * FROM broadcast_campaigns WHERE group_id = $1::uuid AND account_id = $2::uuid ORDER BY sent_at DESC NULLS LAST",
+                """
+                SELECT * FROM broadcast_campaigns
+                WHERE group_id = $1::uuid AND account_id = $2::uuid
+                ORDER BY COALESCE(sent_at, scheduled_for) DESC NULLS LAST
+                """,
                 group_id, account_id,
             )
         if group_id:
             return await fetch_all(
-                "SELECT * FROM broadcast_campaigns WHERE group_id = $1::uuid ORDER BY sent_at DESC NULLS LAST",
+                """
+                SELECT * FROM broadcast_campaigns
+                WHERE group_id = $1::uuid
+                ORDER BY COALESCE(sent_at, scheduled_for) DESC NULLS LAST
+                """,
                 group_id,
             )
         if account_id:
             return await fetch_all(
-                "SELECT * FROM broadcast_campaigns WHERE account_id = $1::uuid ORDER BY sent_at DESC NULLS LAST",
+                """
+                SELECT * FROM broadcast_campaigns
+                WHERE account_id = $1::uuid
+                ORDER BY COALESCE(sent_at, scheduled_for) DESC NULLS LAST
+                """,
                 account_id,
             )
-        return await fetch_all("SELECT * FROM broadcast_campaigns ORDER BY sent_at DESC NULLS LAST")
+        return await fetch_all(
+            "SELECT * FROM broadcast_campaigns ORDER BY COALESCE(sent_at, scheduled_for) DESC NULLS LAST"
+        )
     query = supabase.table("broadcast_campaigns").select("*")
     if group_id:
         query = query.eq("group_id", group_id)
@@ -300,32 +624,19 @@ async def get_broadcast_campaigns(group_id: Optional[str] = None, account_id: Op
     return result.data or []
 
 
-async def send_broadcast_campaign(
-    group_id: str,
-    account_id: str,
-    content_text: str,
-    message_type: str = "text",
-    media_url: Optional[str] = None,
-    sent_by: Optional[str] = None,
-) -> Dict[str, Any]:
+async def execute_broadcast_campaign_dispatch(campaign: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Envoie un message à tous les destinataires d'un groupe et crée une campagne de suivi
-    
+    Exécute l'envoi pour une ligne broadcast_campaigns existante (immédiat ou relance planifiée).
+
     Gère trois cas :
     1. Tous gratuits (-24h) : envoi normal immédiat
     2. Tous payants (+24h) : création template puis envoi avec template
     3. Mix : envoi immédiat aux gratuits, création template puis envoi aux payants
     """
-    # 1. Créer la campagne
-    campaign = await create_broadcast_campaign(
-        group_id=group_id,
-        account_id=account_id,
-        content_text=content_text,
-        message_type=message_type,
-        media_url=media_url,
-        sent_by=sent_by,
-    )
-    
+    group_id = str(campaign["group_id"])
+    account_id = str(campaign["account_id"])
+    content_text = campaign["content_text"]
+
     # 2. Récupérer tous les destinataires
     recipients = await get_group_recipients(group_id)
     
@@ -742,8 +1053,145 @@ async def send_broadcast_campaign(
     
     # Mettre à jour les compteurs de la campagne
     await update_campaign_counters(campaign["id"])
-    
+
     return campaign
+
+
+async def send_broadcast_campaign(
+    group_id: str,
+    account_id: str,
+    content_text: str,
+    message_type: str = "text",
+    media_url: Optional[str] = None,
+    sent_by: Optional[str] = None,
+    scheduled_for: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Crée une campagne et envoie tout de suite, ou planifie si scheduled_for est dans le futur."""
+    now = datetime.now(timezone.utc)
+    sched_dt = _parse_scheduled_for_iso(scheduled_for)
+    defer = sched_dt is not None and sched_dt > now + timedelta(seconds=5)
+
+    campaign = await create_broadcast_campaign(
+        group_id=group_id,
+        account_id=account_id,
+        content_text=content_text,
+        message_type=message_type,
+        media_url=media_url,
+        sent_by=sent_by,
+        scheduled_for=sched_dt,
+        defer_dispatch=defer,
+    )
+    if defer:
+        logger.info(
+            "📅 Broadcast campaign %s scheduled for %s (UTC)",
+            campaign.get("id"),
+            sched_dt,
+        )
+        return campaign
+    return await execute_broadcast_campaign_dispatch(campaign)
+
+
+async def _claim_next_due_scheduled_campaign(now_utc: datetime) -> Optional[Dict[str, Any]]:
+    pool = get_pool()
+    if not pool:
+        return None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                WITH cte AS (
+                  SELECT id FROM broadcast_campaigns
+                  WHERE schedule_status = 'scheduled'
+                    AND scheduled_for IS NOT NULL
+                    AND scheduled_for <= $1::timestamptz
+                  ORDER BY scheduled_for ASC
+                  LIMIT 1
+                  FOR UPDATE SKIP LOCKED
+                )
+                UPDATE broadcast_campaigns b
+                SET schedule_status = 'sending'
+                FROM cte
+                WHERE b.id = cte.id AND b.schedule_status = 'scheduled'
+                RETURNING b.*
+                """,
+                now_utc,
+            )
+            return dict(row) if row else None
+
+
+async def _mark_scheduled_campaign_done(campaign_id: str) -> None:
+    if get_pool():
+        await pg_execute(
+            """
+            UPDATE broadcast_campaigns
+            SET schedule_status = 'done', sent_at = COALESCE(sent_at, now())
+            WHERE id = $1::uuid
+            """,
+            campaign_id,
+        )
+        return
+    await supabase_execute(
+        supabase.table("broadcast_campaigns")
+        .update(
+            {
+                "schedule_status": "done",
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        .eq("id", campaign_id)
+    )
+
+
+async def _mark_scheduled_campaign_failed(campaign_id: str) -> None:
+    if get_pool():
+        await pg_execute(
+            "UPDATE broadcast_campaigns SET schedule_status = 'failed' WHERE id = $1::uuid",
+            campaign_id,
+        )
+        return
+    await supabase_execute(
+        supabase.table("broadcast_campaigns")
+        .update({"schedule_status": "failed"})
+        .eq("id", campaign_id)
+    )
+
+
+async def process_due_scheduled_broadcasts_once() -> int:
+    """Traite jusqu'à 15 campagnes dont l'heure d'envoi est dépassée."""
+    if not get_pool():
+        return 0
+
+    now = datetime.now(timezone.utc)
+    n = 0
+    for _ in range(15):
+        claimed = await _claim_next_due_scheduled_campaign(now)
+        if not claimed:
+            break
+        try:
+            await execute_broadcast_campaign_dispatch(claimed)
+            await _mark_scheduled_campaign_done(str(claimed["id"]))
+            n += 1
+        except Exception:
+            logger.exception(
+                "scheduled broadcast dispatch failed campaign_id=%s",
+                claimed.get("id"),
+            )
+            await _mark_scheduled_campaign_failed(str(claimed["id"]))
+            n += 1
+    return n
+
+
+async def periodic_scheduled_broadcasts():
+    import asyncio
+
+    while True:
+        try:
+            await asyncio.sleep(30)
+            await process_due_scheduled_broadcasts_once()
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logger.exception("periodic_scheduled_broadcasts tick failed")
 
 
 # ==================== STATISTIQUES ====================
