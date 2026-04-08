@@ -203,8 +203,8 @@ async def create_thread(
         "created_at": now.isoformat(),
         "updated_at": now.isoformat(),
     }
-    res = await supabase_execute(supabase.table("playground_assist_threads").insert(payload).select("*"))
-    return _row_to_api(dict(res.data[0])) if res.data else None
+    await supabase_execute(supabase.table("playground_assist_threads").insert(payload))
+    return _row_to_api(payload)
 
 
 async def update_thread(

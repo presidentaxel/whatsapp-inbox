@@ -163,9 +163,9 @@ async def create_flow(account_id: str, name: str, graph: Optional[dict] = None) 
         )
         await _invalidate_bot_profile(account_id)
         return dict(row) if row else {}
-    res = await supabase_execute(supabase.table("playground_flows").insert(payload).select("*"))
+    await supabase_execute(supabase.table("playground_flows").insert(payload))
     await _invalidate_bot_profile(account_id)
-    return res.data[0] if res.data else {}
+    return payload
 
 
 async def update_flow(
