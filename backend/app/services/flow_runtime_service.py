@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -312,23 +313,39 @@ def _router_pick(
     return _successor(edges, router_id, "escape")
 
 
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
 def _gemini_pick(
     intents: List[dict],
     edges: List[dict],
     gemini_id: str,
     raw_keyword: str,
 ) -> Optional[str]:
-    word = (raw_keyword or "").strip().upper()
+    word_raw = (raw_keyword or "").strip().upper()
+    word = _strip_accents(word_raw)
+    logger.info(
+        "gemini_pick: raw=%r  normalized=%r  intents=%s",
+        word_raw, word,
+        [r.get("keyword") for r in (intents or [])],
+    )
     if not word:
         return _successor(edges, gemini_id, "intent-unknown")
     for i, row in enumerate(intents or []):
-        kw = (row.get("keyword") or "").strip().upper()
+        kw = _strip_accents((row.get("keyword") or "").strip().upper())
         if kw and kw in word:
+            logger.info("gemini_pick: matched intent-%d (%s)", i, kw)
             return _successor(edges, gemini_id, f"intent-{i}")
     for i, row in enumerate(intents or []):
-        kw = (row.get("keyword") or "").strip().upper()
+        kw = _strip_accents((row.get("keyword") or "").strip().upper())
         if kw and word.startswith(kw):
+            logger.info("gemini_pick: startswith match intent-%d (%s)", i, kw)
             return _successor(edges, gemini_id, f"intent-{i}")
+    logger.warning("gemini_pick: no intent matched for %r", word)
     return _successor(edges, gemini_id, "intent-unknown")
 
 
@@ -880,6 +897,10 @@ async def try_run_playground_flow(
                     "playground flow: gemini keyword CRASHED for node %s: %s",
                     cursor, _kw_exc,
                 )
+            logger.info(
+                "playground flow: gemini keyword for node %s returned %r (inbound=%r)",
+                cursor, keyword, (inbound_text or "")[:60],
+            )
             if not keyword:
                 cursor = (
                     _successor(edges, cursor, "intent-unknown")
