@@ -37,6 +37,16 @@ export function migrateNode(node) {
     data.quickReplyButtons = [];
   }
 
+  if (type === "sendText") {
+    const b = data.body;
+    if (b == null || String(b).trim() === "") {
+      const alt = data.message ?? data.text ?? data.content ?? data.value;
+      if (alt != null && String(alt).trim() !== "") {
+        data.body = String(alt);
+      }
+    }
+  }
+
   if (type === "gemini") {
     if (!Array.isArray(data.intents)) data.intents = [];
     if (data.systemPrompt == null) data.systemPrompt = "";
@@ -55,6 +65,46 @@ export function migrateNode(node) {
     if (data.timeoutUnit == null || data.timeoutUnit === "") data.timeoutUnit = "h";
   }
   if (type === "routerNode") {
+    const normalizeRoutes = (arr) => {
+      if (!Array.isArray(arr) || !arr.length) return null;
+      const out = [];
+      for (const item of arr) {
+        if (typeof item === "string" && item.trim()) {
+          const s = item.trim();
+          out.push({ label: s, match: s });
+          continue;
+        }
+        if (!item || typeof item !== "object") continue;
+        const matchRaw = [
+          item.match,
+          item.keyword,
+          item.value,
+          item.text,
+          item.pattern,
+          item.reply,
+          item.id,
+          item.message,
+        ].find((x) => typeof x === "string" && x.trim());
+        const labelRaw = [item.label, item.title, item.name].find(
+          (x) => typeof x === "string" && x.trim()
+        );
+        const match = (matchRaw && matchRaw.trim()) || (labelRaw && labelRaw.trim()) || "";
+        let label = (labelRaw && labelRaw.trim()) || "";
+        if (!match) continue;
+        if (!label) label = match;
+        out.push({ label, match });
+      }
+      return out.length ? out : null;
+    };
+    const keys = ["routes", "branches", "options", "conditions"];
+    let fixed = null;
+    for (const k of keys) {
+      fixed = normalizeRoutes(data[k]);
+      if (fixed) {
+        data.routes = fixed;
+        break;
+      }
+    }
     if (!Array.isArray(data.routes) || !data.routes.length) {
       data.routes = [
         { label: "Option A", match: "Option A" },

@@ -30,7 +30,7 @@
   flex-direction: column;
 }
 
-/* Assistant IA — style « composer » (panneau fixe à droite) */
+/* Assistant IA - style « composer » (panneau fixe à droite) */
 .playground-assist {
   --pa-bg: #1e1e1e;
   --pa-bg-elev: #252526;
@@ -186,6 +186,43 @@
 .playground-assist__empty-text strong {
   color: var(--pa-text);
   font-weight: 600;
+}
+
+.playground-assist__starters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.playground-assist__starter-chip {
+  padding: 6px 12px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.35;
+  border-radius: 18px;
+  border: 1px solid var(--pa-border-soft);
+  background: var(--pa-bg-elev);
+  color: var(--pa-text);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.playground-assist__starter-chip:hover:not(:disabled) {
+  background: #2a2a2a;
+  border-color: var(--pa-accent-agent);
+}
+
+.playground-assist__starter-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.playground-assist__graph-summary {
+  font-size: 0.67rem;
+  line-height: 1.4;
+  color: var(--pa-muted);
+  padding: 2px 0;
 }
 
 .playground-assist__bubble {

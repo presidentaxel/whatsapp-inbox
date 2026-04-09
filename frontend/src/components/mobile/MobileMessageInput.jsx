@@ -745,7 +745,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         </div>
       )}
 
-      {/* Menu pièce jointe — au-dessus de l'input, pas par-dessus */}
+      {/* Menu pièce jointe - au-dessus de l'input, pas par-dessus */}
       {showMenu && (
         <>
           <div className="mobile-attach-overlay" onClick={() => setShowMenu(false)} aria-hidden />
@@ -787,7 +787,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
             <span>En attente d'une réponse client</span>
             {freeWindowDetail?.hoursElapsed != null && (
               <span className="mobile-input-waiting-hint" title="La fenêtre gratuite WhatsApp = 24h après le dernier message reçu du client (pas après votre dernier envoi).">
-                — Dernier message client il y a {freeWindowDetail.hoursElapsed}h
+                - Dernier message client il y a {freeWindowDetail.hoursElapsed}h
               </span>
             )}
             <button
@@ -813,7 +813,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         <div className="mobile-input-bar">
           {isOutsideFreeWindow && freeWindowDetail?.hoursElapsed != null && (
             <div className="mobile-input-free-window-hint" title="La fenêtre gratuite = 24h après le dernier message reçu du client.">
-              Envoi en template — dernier message client il y a {freeWindowDetail.hoursElapsed}h
+              Envoi en template - dernier message client il y a {freeWindowDetail.hoursElapsed}h
             </div>
           )}
           {renderInputBar()}

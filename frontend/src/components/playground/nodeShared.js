@@ -81,7 +81,7 @@ export function toggleDay(activeDays, day) {
 
 export function truncate(str, max) {
   const s = (str || "").trim();
-  if (s.length <= max) return s || "—";
+  if (s.length <= max) return s || "-";
   return `${s.slice(0, max)}…`;
 }
 

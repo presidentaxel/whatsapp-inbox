@@ -128,14 +128,14 @@ for le in ['\r\n', '\n']:
         print("FIX 1 (gemini gen block): OK")
         break
 else:
-    print("FIX 1: NOT FOUND — dumping context around 'if sys_raw:'")
+    print("FIX 1: NOT FOUND - dumping context around 'if sys_raw:'")
     idx = src.find("if sys_raw:")
     if idx >= 0:
         print(repr(src[idx-20:idx+200]))
     else:
         print("'if sys_raw:' not found at all!")
 
-# ── FIX 2: safety net in interactiveNode — strip unresolved {{…}} ──
+# ── FIX 2: safety net in interactiveNode - strip unresolved {{…}} ──
 old_interactive = '            body = _subst_vars(data.get("body") or "", variables)\n            _warn_unresolved_vars(body, cursor)'
 new_interactive = (
     '            body = _subst_vars(data.get("body") or "", variables)\n'
@@ -154,7 +154,7 @@ for le in ['\r\n', '\n']:
 else:
     print("FIX 2: NOT FOUND")
 
-# ── FIX 3: safety net in sendText — strip unresolved {{…}} ──
+# ── FIX 3: safety net in sendText - strip unresolved {{…}} ──
 old_sendtext = '            body = _subst_vars(data.get("body") or "", variables)\n            _warn_unresolved_vars(body, cursor)\n            if body:'
 new_sendtext = (
     '            body = _subst_vars(data.get("body") or "", variables)\n'
@@ -215,4 +215,4 @@ else:
     print("FIX 4: NOT FOUND")
 
 fp.write_text(src, encoding="utf-8")
-print("Done — file saved.")
+print("Done - file saved.")

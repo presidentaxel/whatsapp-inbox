@@ -6,13 +6,13 @@ export const OpenNodeSettingsContext = createContext((_nodeId) => {});
 /** (nodeId, partialData) => void */
 export const PatchNodeContext = createContext(() => {});
 
-/** (nodeId) => void — supprime le nœud et ses arêtes */
+/** (nodeId) => void - supprime le nœud et ses arêtes */
 export const DeleteNodeContext = createContext(() => {});
 
 /** { templates: array, loading: boolean } */
 export const TemplatesContext = createContext({ templates: [], loading: false });
 
-/** { items: { id, label, varKey }[] } — varKey utilisable dans l’expression SI */
+/** { items: { id, label, varKey }[] } - varKey utilisable dans l’expression SI */
 export const VarListContext = createContext({ items: [] });
 
 /** Liste des nœuds du graphe (pour lister les templates dans le SI) */

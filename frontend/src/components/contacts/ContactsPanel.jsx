@@ -94,7 +94,7 @@ export default function ContactsPanel({
                         minute: "2-digit"
                       });
                     })()
-                  : "—"}
+                  : "-"}
               </strong>
             </div>
           </>

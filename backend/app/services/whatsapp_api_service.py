@@ -789,7 +789,7 @@ async def get_template_named_body_parameter_names(
     """
     Si le BODY du template utilise des variables nommées (example.body_text_named_params),
     retourne les param_name dans l'ordre attendu par Meta.
-    Sinon None (variables positionnelles {{1}}, {{2}} — pas de parameter_name sur l'envoi).
+    Sinon None (variables positionnelles {{1}}, {{2}} - pas de parameter_name sur l'envoi).
     """
     if not waba_id or not access_token or not (template_name or "").strip():
         return None

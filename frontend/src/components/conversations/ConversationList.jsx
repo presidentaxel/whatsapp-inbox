@@ -135,7 +135,7 @@ export default function ConversationList({
                   {formatPhoneNumber(c.client_number)}
                 </span>
                 <span className="conversation-meta__preview" title={c.last_message || ""}>
-                  {c.last_message || "—"}
+                  {c.last_message || "-"}
                 </span>
               </div>
               {c.unread_count > 0 && <span className="badge">{c.unread_count}</span>}

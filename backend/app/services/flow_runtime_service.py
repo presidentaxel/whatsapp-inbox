@@ -390,8 +390,8 @@ async def try_run_playground_flow(
     Si un flux playground est publié pour le compte, exécute une étape du graphe.
     Retourne True si le message a été traité par le flux (ne pas appeler le bot Gemini classique).
 
-    scheduled_delay_wake: appel interne quand le délai (delayNode) est échu — pas de message entrant.
-    scheduled_flow_launch: lancement programmé depuis un nœud Entrée « campagne » — enchaîne le graphe
+    scheduled_delay_wake: appel interne quand le délai (delayNode) est échu - pas de message entrant.
+    scheduled_flow_launch: lancement programmé depuis un nœud Entrée « campagne » - enchaîne le graphe
     sans message entrant (première étape = successeur du start).
     """
     from app.services.bot_service import (
@@ -1011,7 +1011,7 @@ async def fetch_due_playground_delay_conversation_ids() -> List[str]:
 async def periodic_playground_flow_delays() -> None:
     """
     Boucle asyncio : réveille les flux playground après un delayNode.
-    Pas de Celery — s’appuie sur l’horloge du processus API (comme les autres tâches périodiques).
+    Pas de Celery - s’appuie sur l’horloge du processus API (comme les autres tâches périodiques).
     """
     import asyncio
 

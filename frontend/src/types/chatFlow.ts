@@ -18,7 +18,7 @@ export interface ChatSessionVariables {
 /** Session persistée (Supabase `conversations.bot_flow_state`) */
 export interface ChatSession {
   phoneNumber: string;
-  /** Nœud où l’utilisateur est en attente (ex. interactif) — null si on enchaîne via `continueFromNodeId` */
+  /** Nœud où l’utilisateur est en attente (ex. interactif) - null si on enchaîne via `continueFromNodeId` */
   currentNodeId: string | null;
   lastInteractionAt: string | null;
   wabaOptIn: boolean;
@@ -80,7 +80,7 @@ export interface GeminiNode extends BaseNode {
   unrecognizedTargetNodeId: string;
 }
 
-/** Exemple payload Meta — boutons (documenté pour l’équipe / tests) */
+/** Exemple payload Meta - boutons (documenté pour l’équipe / tests) */
 export const META_INTERACTIVE_BUTTONS_EXAMPLE = {
   messaging_product: "whatsapp",
   recipient_type: "individual",

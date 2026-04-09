@@ -49,7 +49,7 @@ async def init_pool() -> None:
         logger.warning(
             "Failed to create PostgreSQL pool: %s (%s): %s. Falling back to Supabase API.",
             exc_type,
-            getattr(e, "errno", "—"),
+            getattr(e, "errno", "-"),
             exc_msg,
         )
         if "getaddrinfo failed" in exc_msg or (getattr(e, "errno", None) == 11001):

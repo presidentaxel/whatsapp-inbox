@@ -1,20 +1,20 @@
 {
   "$comment": "Référence alignée sur flow_runtime_service.py (try_run_playground_flow), playground_flow_service.py, flowMigrate.js, flowNodes.jsx. Vérifier ui_backend_mismatches après toute évolution du moteur.",
   "ui_backend_mismatches": {
-    "description": "L’UI dessine des branches ou comportements que le moteur playground n’implémente pas — risque de scénarios qui semblent corrects sur le canevas mais ne se comportent pas ainsi en production.",
+    "description": "L’UI dessine des branches ou comportements que le moteur playground n’implémente pas - risque de scénarios qui semblent corrects sur le canevas mais ne se comportent pas ainsi en production.",
     "items": [
       {
         "id": "timeWindowNode",
         "title": "Routage horaire (timeWindowNode)",
         "ui": "Poignées source inside / outside (pendant vs hors plage).",
-        "backend": "_successor(edges, cursor) sans handle — premier successeur ou arête sans sourceHandle ; branches inside/outside non distinguées (bloc waitUntilNode/timeWindowNode/logicNode hors mode « si » : passthrough, voir flow_runtime_service.py ~686-691).",
+        "backend": "_successor(edges, cursor) sans handle - premier successeur ou arête sans sourceHandle ; branches inside/outside non distinguées (bloc waitUntilNode/timeWindowNode/logicNode hors mode « si » : passthrough, voir flow_runtime_service.py ~686-691).",
         "impact": "Ex. message « bureaux fermés » sur branche outside ne s’exécute pas à 2h : le flux suit un seul chemin comme si les deux branches étaient équivalentes."
       },
       {
         "id": "waitUntilNode",
         "title": "Attente calendaire (waitUntilNode)",
         "ui": "Champ date / intention « attendre jusqu’à ».",
-        "backend": "Passthrough immédiat — aucune attente calendaire serveur (même branche que timeWindowNode).",
+        "backend": "Passthrough immédiat - aucune attente calendaire serveur (même branche que timeWindowNode).",
         "impact": "Un nœud « jusqu’au 1er janvier » n’attend pas : l’enchaînement continue tout de suite. Seul delayNode applique une vraie pause (durée relative en s/m/h/d, voir delayScheduling)."
       },
       {
@@ -51,7 +51,7 @@
       {
         "id": "tags_without_handoff",
         "title": "Tags conversation sans handoff",
-        "gap": "Champ tagsText présent sur handoffNode dans l’UI du graphe ; le runtime handoff (flow_runtime_service) appelle set_conversation_bot_mode(False) et _escalate_to_human avec internalMessage / message entrant — tagsText n’est pas lu côté serveur playground. Effet produit : toute intention « taguer pour le suivi » reste liée au bloc Handoff qui coupe le bot.",
+        "gap": "Champ tagsText présent sur handoffNode dans l’UI du graphe ; le runtime handoff (flow_runtime_service) appelle set_conversation_bot_mode(False) et _escalate_to_human avec internalMessage / message entrant - tagsText n’est pas lu côté serveur playground. Effet produit : toute intention « taguer pour le suivi » reste liée au bloc Handoff qui coupe le bot.",
         "impact": "Pas de chemin documenté pour taguer « Lead froid » tout en laissant le bot actif ; en plus, la persistance des tags depuis le graphe n’est pas implémentée dans le moteur actuel."
       },
       {
@@ -84,7 +84,7 @@
     "id": "string recommandé",
     "source": "id nœud source",
     "target": "id nœud cible",
-    "sourceHandle": "string | null — ids des poignées source pour le routage",
+    "sourceHandle": "string | null - ids des poignées source pour le routage",
     "targetHandle": "optionnel"
   },
   "variableSubstitution": {
@@ -111,16 +111,16 @@
     "description": "Session JSON sur conversations.bot_flow_state",
     "fields": {
       "phoneNumber": "string",
-      "currentNodeId": "string | null — en attente réponse interactiveNode",
+      "currentNodeId": "string | null - en attente réponse interactiveNode",
       "lastInteractionAt": "ISO UTC",
       "wabaOptIn": "boolean",
       "variables": "dict",
-      "continueFromNodeId": "string | null — reprise du parcours",
+      "continueFromNodeId": "string | null - reprise du parcours",
       "afterInteractiveTarget": "string | null",
-      "entryStartNodeId": "string | null — start choisi pour la session",
-      "activeFlowId": "string | legacy — id flux résolu ou mot legacy",
-      "flowDelayUntil": "ISO UTC | null — réveil après delayNode ou timeout interactif",
-      "flowDelayResumeNodeId": "string | null — nœud à exécuter après le délai (delayNode ou branche timeout)"
+      "entryStartNodeId": "string | null - start choisi pour la session",
+      "activeFlowId": "string | legacy - id flux résolu ou mot legacy",
+      "flowDelayUntil": "ISO UTC | null - réveil après delayNode ou timeout interactif",
+      "flowDelayResumeNodeId": "string | null - nœud à exécuter après le délai (delayNode ou branche timeout)"
     },
     "reset_when_flow_changes": "Si activeFlowId change : variables, currentNodeId, continueFromNodeId, afterInteractiveTarget, entryStartNodeId, flowDelayUntil, flowDelayResumeNodeId sont remis à zéro."
   },
@@ -128,7 +128,7 @@
     "description": "Nœud delayNode : attente réelle, pas un passthrough.",
     "implementation": "Boucle asyncio periodic_playground_flow_delays (~45s) + fetch_due_playground_delay_conversation_ids ; pas Celery.",
     "maxDelaySeconds": 2592000,
-    "maxDelayNote": "30 jours — _FLOW_DELAY_MAX_SECONDS",
+    "maxDelayNote": "30 jours - _FLOW_DELAY_MAX_SECONDS",
     "onDelayNode": [
       "Calcule secondes depuis duration (nombre > 0) et unit s|m|h|d",
       "Si durée invalide ou ≤ 0 : enchaîne comme avant (successeur immédiat)",
@@ -152,9 +152,9 @@
         "scheduleAt": "string",
         "scheduleRepeat": ["none", "daily", "weekly", "monthly"],
         "webhookSecretRef": "string",
-        "audienceBroadcastGroupId": "string — groupe de diffusion (persisté) pour type playground_audience",
-        "campaignScheduledFor": "string — datetime-local brouillon date/heure de lancement (persisté)",
-        "entryPriority": "number — priorité décroissante entre starts qui matchent",
+        "audienceBroadcastGroupId": "string - groupe de diffusion (persisté) pour type playground_audience",
+        "campaignScheduledFor": "string - datetime-local brouillon date/heure de lancement (persisté)",
+        "entryPriority": "number - priorité décroissante entre starts qui matchent",
         "playground_audience_note": "Pas de message sur ce nœud : à l’heure planifiée le moteur enchaîne depuis ce start vers le successeur (organigramme)."
       },
       "handles": { "source": [null], "target": [] }
@@ -162,7 +162,7 @@
     "sendText": {
       "data": { "body": "string", "varKey": "string" },
       "handles": { "target": [null], "source": [null] },
-      "outbound": "Message texte WhatsApp uniquement — pas de pièce jointe via ce nœud."
+      "outbound": "Message texte WhatsApp uniquement - pas de pièce jointe via ce nœud."
     },
     "sendTemplate": {
       "data": {
@@ -183,7 +183,7 @@
         "choices": [{ "id": "string", "title": "string", "description": "string", "saveToVariable": "string", "saveValue": "any" }],
         "listButtonText": "string",
         "timeoutDuration": "number optionnel (ex. 48)",
-        "timeoutUnit": "string optionnel s|m|h|d — défaut h",
+        "timeoutUnit": "string optionnel s|m|h|d - défaut h",
         "varKey": "string"
       },
       "handles": { "target": [null], "source": [null, "timeout"] },
@@ -209,9 +209,9 @@
     "handoffNode": {
       "description": "Type UI ; backend accepte aussi l’alias legacy \"handoff\".",
       "data": {
-        "tagsText": "string — présent dans le graphe UI ; non consommé par flow_runtime_service au moment de la doc",
+        "tagsText": "string - présent dans le graphe UI ; non consommé par flow_runtime_service au moment de la doc",
         "assignAgent": "string",
-        "internalMessage": "string — utilisé comme note si non vide, sinon message entrant",
+        "internalMessage": "string - utilisé comme note si non vide, sinon message entrant",
         "varKey": "string"
       },
       "handles": { "target": [null], "source": [null] },
@@ -224,12 +224,12 @@
         "varKey": "string"
       },
       "handles": { "target": [null], "source": [null] },
-      "runtime": "Voir section delayScheduling — attente réelle jusqu’à flowDelayUntil puis reprise."
+      "runtime": "Voir section delayScheduling - attente réelle jusqu’à flowDelayUntil puis reprise."
     },
     "waitUntilNode": {
       "data": { "until": "string", "timezoneNote": "string", "varKey": "string" },
       "handles": { "target": [null], "source": [null] },
-      "runtime": "passthrough immédiat (pas d’attente calendaire côté serveur) — voir ui_backend_mismatches.waitUntilNode",
+      "runtime": "passthrough immédiat (pas d’attente calendaire côté serveur) - voir ui_backend_mismatches.waitUntilNode",
       "workaround": "Utiliser delayNode pour une attente réelle relative (max 30 jours)."
     },
     "timeWindowNode": {
@@ -240,7 +240,7 @@
         "varKey": "string"
       },
       "handles_UI": { "source": ["inside", "outside"] },
-      "runtime": "passthrough : _successor sans handle — branches inside/outside non distinguées par le moteur — voir ui_backend_mismatches.timeWindowNode"
+      "runtime": "passthrough : _successor sans handle - branches inside/outside non distinguées par le moteur - voir ui_backend_mismatches.timeWindowNode"
     },
     "logicNode": {
       "data": { "logicMode": ["si", "ou", "et"], "condition": "string", "varKey": "string" },
@@ -250,8 +250,8 @@
         "et": { "target": ["inA", "inB"], "source": [null] }
       },
       "runtime": {
-        "si": "Non conditionnel : data.condition ignoré ; _successor(..., \"true\") puis repli _successor(...) — voir ui_backend_mismatches.logicNode_si",
-        "ou_et": "passthrough simple — pas de routage multi-sortie — voir ui_backend_mismatches.logicNode_et_ou"
+        "si": "Non conditionnel : data.condition ignoré ; _successor(..., \"true\") puis repli _successor(...) - voir ui_backend_mismatches.logicNode_si",
+        "ou_et": "passthrough simple - pas de routage multi-sortie - voir ui_backend_mismatches.logicNode_et_ou"
       }
     }
   },

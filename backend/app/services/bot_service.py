@@ -186,7 +186,7 @@ async def _call_gemini_api(
 
     read_s = float(read_timeout) if read_timeout else _GEMINI_DEFAULT_READ_TIMEOUT_S
     if read_s > _GEMINI_DEFAULT_READ_TIMEOUT_S:
-        # Assistant Playground : gros prompt / réponse JSON — laisser plus de marge réseau.
+        # Assistant Playground : gros prompt / réponse JSON - laisser plus de marge réseau.
         timeout = httpx.Timeout(
             connect=10.0,
             read=read_s,
@@ -1208,6 +1208,95 @@ def _validate_playground_assist_graph(g: Dict[str, Any]) -> bool:
     return True
 
 
+def _coerce_send_text_node_data(data: Dict[str, Any]) -> None:
+    """Le LLM met souvent le texte dans message/text/content au lieu de body (requis UI + moteur)."""
+    body = data.get("body")
+    if isinstance(body, str) and body.strip():
+        return
+    for key in ("message", "text", "content", "value"):
+        v = data.get(key)
+        if isinstance(v, str) and v.strip():
+            data["body"] = v.strip()
+            return
+
+
+def _first_nonempty_str(*vals: Any) -> str:
+    for v in vals:
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return ""
+
+
+def _coerce_router_route_item(item: Any) -> Optional[Dict[str, str]]:
+    if isinstance(item, str) and item.strip():
+        s = item.strip()
+        return {"label": s, "match": s}
+    if not isinstance(item, dict):
+        return None
+    match = _first_nonempty_str(
+        item.get("match"),
+        item.get("keyword"),
+        item.get("value"),
+        item.get("text"),
+        item.get("pattern"),
+        item.get("reply"),
+        item.get("id"),
+        item.get("message"),
+    )
+    label = _first_nonempty_str(
+        item.get("label"),
+        item.get("title"),
+        item.get("name"),
+    )
+    if not match:
+        match = label
+    if not match:
+        return None
+    if not label:
+        label = match
+    return {"label": label, "match": match}
+
+
+def _coerce_routes_list(raw: List[Any]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for item in raw:
+        row = _coerce_router_route_item(item)
+        if row:
+            out.append(row)
+    return out
+
+
+def _coerce_router_node_data(data: Dict[str, Any]) -> None:
+    """Normalise branches/options/conditions vers data.routes [{label, match}]."""
+    for key in ("routes", "branches", "options", "conditions"):
+        raw = data.get(key)
+        if not isinstance(raw, list) or not raw:
+            continue
+        fixed = _coerce_routes_list(raw)
+        if fixed:
+            data["routes"] = fixed
+            return
+
+
+def _coerce_playground_assist_graph_data(g: Dict[str, Any]) -> None:
+    """Post-traitement des graphes proposés par l’assistant (noms de champs fréquemment erronés)."""
+    nodes = g.get("nodes")
+    if not isinstance(nodes, list):
+        return
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        ntype = n.get("type")
+        data = n.get("data")
+        if not isinstance(data, dict):
+            data = {}
+            n["data"] = data
+        if ntype == "sendText":
+            _coerce_send_text_node_data(data)
+        elif ntype == "routerNode":
+            _coerce_router_node_data(data)
+
+
 async def generate_playground_assist_reply(
     *,
     account_id: str,
@@ -1245,7 +1334,7 @@ async def generate_playground_assist_reply(
         return {"reply": "Envoie un message pour commencer.", "graph": None}
 
     fn = (flow_name or "").strip() or "(sans nom)"
-    fid = flow_id or "—"
+    fid = flow_id or "-"
 
     assist_mode = (mode or "agent").strip().lower()
     if assist_mode not in ("ask", "agent"):
@@ -1259,7 +1348,7 @@ Graphe JSON actuel (React Flow, v=2) :
 {graph_json}
 
 Types de nœuds autorisés : start, sendText, sendTemplate, gemini, interactiveNode, routerNode, handoffNode, delayNode, waitUntilNode, timeWindowNode, logicNode.
-Chaque nœud a id (string unique), type, position {{x,y}}, data (objet selon le type — préserve varKey quand il existe).
+Chaque nœud a id (string unique), type, position {{x,y}}, data (objet selon le type - préserve varKey quand il existe).
 
 Limites importantes du moteur en production (à mentionner si pertinent) :
 - timeWindowNode / waitUntilNode : le serveur ne distingue pas toutes les branches ni l’attente calendaire comme dans l’UI ; seul delayNode fait une vraie pause relative.
@@ -1270,6 +1359,23 @@ Historique de discussion : les entrées « contents » reprennent la conversatio
 Variables utiles pour les champs « variableValues » des nœuds sendTemplate (substitution côté serveur au moment de l’envoi, d’après le contact) :
 {{prenom_client}}, {{contact_first_name}}, {{contact.firstName}}, {{nom_client}}, {{contact.name}}, {{numero_client}}, {{contact.phone}}.
 Il n’y a pas de civilité automatique (M./Mme) en base : pour « M. Dupont » mets par ex. le texte fixe « M. {{nom_client}} » ou « M. {{prenom_client}} » dans la valeur du slot Meta (ex. variable « nom » du template).
+
+CONTRAT DATA (obligatoire pour que le canevas et le moteur WhatsApp fonctionnent) :
+- sendText : le texte à envoyer est TOUJOURS dans data.body (string). Ne pas seulement remplir message, text, content ou value - utiliser body.
+- routerNode : data.routes est un tableau d’objets { "label": "…", "match": "…" }. « match » est comparé au message texte entrant (égalité, insensible à la casse). Ordre des branches = indices 0,1,2… Les arêtes sortantes doivent avoir sourceHandle "route-0", "route-1", … pour chaque entrée de routes, et sourceHandle "escape" pour la branche par défaut si le texte ne correspond à aucun match.
+- start (message entrant) : pour accepter n’importe quel premier message, data.messageMatch = "any". Sinon "contains" / "equals" / "regex" avec data.messageKeyword rempli.
+
+INTERPRÉTATION DES DEMANDES UTILISATEUR (important quand le canevas est vide) :
+- Quand l’utilisateur donne une instruction du type « texte message: Bonjour », « message: Bonjour », « envoie Bonjour », « réponds Bonjour » : crée/édite un nœud sendText et mets EXACTEMENT ce texte dans data.body.
+- Quand l’utilisateur décrit des cas de texte (« si dit salut => salut, sinon => Bonjour »), mappe vers routerNode.routes + branche escape, puis des sendText avec data.body non vide.
+- Si la demande est ambiguë, privilégie un graphe simple mais exécutable (start -> router/sendText -> sendText) avec contenus explicites plutôt qu’un graphe complexe avec champs vides.
+
+EXEMPLES DE MAPPING RAPIDE :
+- « texte message: Bonjour » => sendText.data.body = "Bonjour"
+- « si message = salut alors salut sinon Bonjour » =>
+  routerNode.data.routes = [{{"label":"salut","match":"salut"}}]
+  edge sourceHandle "route-0" -> sendText("salut")
+  edge sourceHandle "escape" -> sendText("Bonjour")
 """
 
     if is_ask:
@@ -1279,7 +1385,7 @@ Il n’y a pas de civilité automatique (M./Mme) en base : pour « M. Dupont » 
 
 MODE ACTUEL : ASK (questions / explications uniquement).
 - Réponds en français, de façon claire ; reste concis sauf si l’utilisateur demande le détail.
-- Tu n’appliques pas de changements : le champ JSON "graph" doit TOUJOURS être null (aucun graphe exporté, même si on te demande de « modifier » — décris plutôt les étapes ou le JSON à construire à la main).
+- Tu n’appliques pas de changements : le champ JSON "graph" doit TOUJOURS être null (aucun graphe exporté, même si on te demande de « modifier » - décris plutôt les étapes ou le JSON à construire à la main).
 - Tu peux expliquer le parcours, les branches, les risques (UI vs moteur), et suggérer des améliorations en langage naturel.
 
 FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
@@ -1294,7 +1400,7 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
 MODE ACTUEL : AGENT (édition du scénario).
 - Réponds en français. Tu peux expliquer, puis si l’utilisateur veut une modification concrète du canevas, renvoie le graphe COMPLET mis à jour dans "graph".
 - Si tu ne modifies pas le graphe, mets "graph": null. Si tu modifies, fournis nodes + edges + v:2, au moins un start, ids stables pour les nœuds conservés, arêtes cohérentes.
-- Si la demande est surtout explicative ou le canevas ne change pas : mets toujours "graph": null (évite de renvoyer tout le JSON du graphe pour rien — limite de taille).
+- Si la demande est surtout explicative ou le canevas ne change pas : mets toujours "graph": null (évite de renvoyer tout le JSON du graphe pour rien - limite de taille).
 - Dans "reply", message court pour l’humain uniquement : ne jamais y coller l’objet JSON complet ni le graphe (le graphe est uniquement dans "graph").
 
 FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, de la forme :
@@ -1461,7 +1567,7 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, 
 
     if partial_json:
         reply_str += (
-            "\n\n_(Le JSON de réponse était incomplet — souvent parce que le graphe a été coupé en cours de génération. "
+            "\n\n_(Le JSON de réponse était incomplet - souvent parce que le graphe a été coupé en cours de génération. "
             "Tu peux relire le texte ci-dessus ; le bouton « Appliquer sur le canevas » n’est pas disponible pour ce tour. "
             "Réessaie avec une modification plus cible ou en mode Ask.)_"
         )
@@ -1472,10 +1578,11 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, 
         if g is not None and isinstance(g, dict):
             merged = _normalize_graph(g)
             if _validate_playground_assist_graph(merged):
+                _coerce_playground_assist_graph_data(merged)
                 out_graph = merged
             else:
                 reply_str += (
-                    "\n\n_(Un graphe proposé était présent mais invalide — il n’a pas été renvoyé pour application.)_"
+                    "\n\n_(Un graphe proposé était présent mais invalide - il n’a pas été renvoyé pour application.)_"
                 )
 
     return {"reply": reply_str, "graph": out_graph}

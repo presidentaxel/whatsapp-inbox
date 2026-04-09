@@ -262,7 +262,7 @@ export default function BroadcastCampaignStats({ campaignId }) {
                     <td>
                       {recipient.replied_at
                         ? formatRelativeDateTime(recipient.replied_at)
-                        : "—"}
+                        : "-"}
                     </td>
                     <td>
                       {recipient.time_to_read && (

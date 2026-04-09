@@ -288,7 +288,7 @@ async def get_conversation_by_id(conversation_id: str) -> Optional[dict]:
 
 async def get_conversation_by_id_fresh(conversation_id: str) -> Optional[dict]:
     """
-    Même chose que get_conversation_by_id mais sans cache — évite bot_reply_mode
+    Même chose que get_conversation_by_id mais sans cache - évite bot_reply_mode
     ou playground_flow_id obsolètes (TTL 60s, ou autre worker sans invalidation partagée).
     """
     return await _fetch_conversation_by_id(conversation_id)

@@ -9,6 +9,6 @@ async def reset():
         .update({"bot_flow_state": None})
         .eq("id", CONV_ID)
     )
-    print(f"Reset bot_flow_state for {CONV_ID} — done.")
+    print(f"Reset bot_flow_state for {CONV_ID} - done.")
 
 asyncio.run(reset())

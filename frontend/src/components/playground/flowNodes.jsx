@@ -172,7 +172,7 @@ function SendTemplateNode({ id, data, selected }) {
   const name =
     data.templateName ||
     (data.selectedTemplateKey || "").split("||")[0] ||
-    "—";
+    "-";
   const nBtn = data.quickReplyButtons?.length || 0;
   const sub = nBtn ? `${truncate(name, 28)} · ${nBtn} btn` : truncate(name, 36);
   return (
@@ -324,7 +324,7 @@ function WaitUntilNode({ id, data, selected }) {
       className="pg-node--waituntil"
       badge="📅"
       title="Jusqu’à"
-      subtitle={data.until ? data.until.replace("T", " ") : "—"}
+      subtitle={data.until ? data.until.replace("T", " ") : "-"}
       codeShort={data.varKey ? `{{${data.varKey}}}` : null}
       top={
         <DetachableHandle nodeId={id}

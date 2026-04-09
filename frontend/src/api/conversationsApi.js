@@ -20,7 +20,7 @@ export const toggleConversationFavorite = (conversationId, favorite) =>
 /**
  * @param {object} opts
  * @param {boolean} opts.enabled
- * @param {'gemini'|'playground'|undefined} [opts.reply_mode] — si omis, le mode en base est conservé
+ * @param {'gemini'|'playground'|undefined} [opts.reply_mode] - si omis, le mode en base est conservé
  */
 export const toggleConversationBotMode = (conversationId, opts) =>
   api.post(`/conversations/${conversationId}/bot`, opts);

@@ -112,7 +112,7 @@ function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
     if (!flowId) {
       setFeedback({
         ok: false,
-        text: "Scénario non chargé — enregistre ou sélectionne un flux.",
+        text: "Scénario non chargé - enregistre ou sélectionne un flux.",
       });
       return;
     }
@@ -175,7 +175,7 @@ function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
           }
           disabled={busy || !accountId}
         >
-          <option value="">— Choisir un groupe —</option>
+          <option value="">- Choisir un groupe -</option>
           {groups.map((g) => (
             <option key={g.id} value={g.id}>
               {g.name || g.id}
@@ -241,10 +241,10 @@ function VarInsertSelect({ onInsert, excludeId }) {
           e.target.value = "";
         }}
       >
-        <option value="">—</option>
+        <option value="">-</option>
         {filtered.map((it) => (
           <option key={it.id} value={it.varKey}>
-            {it.label} — {`{{${it.varKey}}}`}
+            {it.label} - {`{{${it.varKey}}}`}
           </option>
         ))}
       </select>
@@ -514,11 +514,11 @@ export function SendTemplateSettingsForm({ id, data, patch }) {
           <p className="pg-modal__hint">
             Texte fixe ou placeholders du <strong>client</strong> (remplis à l’envoi) :{" "}
             <code>{"{{prenom_client}}"}</code>, <code>{"{{nom_client}}"}</code>,{" "}
-            <code>{"{{numero_client}}"}</code> — ou en anglais{" "}
+            <code>{"{{numero_client}}"}</code> - ou en anglais{" "}
             <code>{"{{contact_first_name}}"}</code>, <code>{"{{contact_name}}"}</code>,{" "}
-            <code>{"{{contact_phone}}"}</code> — alias courants{" "}
+            <code>{"{{contact_phone}}"}</code> - alias courants{" "}
             <code>{"{{contact.firstName}}"}</code>, <code>{"{{contact.name}}"}</code>,{" "}
-            <code>{"{{contact.phone}}"}</code>. Civilité (M./Mme) : pas de variable dédiée — préfixe fixe, ex.{" "}
+            <code>{"{{contact.phone}}"}</code>. Civilité (M./Mme) : pas de variable dédiée - préfixe fixe, ex.{" "}
             <code>{"M. {{nom_client}}"}</code>.{" "}
             <strong>Syntaxe :</strong> privilégier <code>{"{{…}}"}</code> ; la forme à une seule paire{" "}
             <code>{"{prenom_client}"}</code> / <code>{"{contact.firstName}"}</code> est aussi remplacée à l’envoi.
@@ -936,7 +936,7 @@ export function LogicSettingsForm({ id, data, patch }) {
       {mode === "si" && (
         <>
           <p className="pg-modal__hint">
-            Variables <code>réponse_*</code> — pour un template, réponse client
+            Variables <code>réponse_*</code> - pour un template, réponse client
             après envoi.
           </p>
           {templateNodes.length > 0 && (
@@ -951,7 +951,7 @@ export function LogicSettingsForm({ id, data, patch }) {
                   value={tplCondNodeId}
                   onChange={(e) => setTplCondNodeId(e.target.value)}
                 >
-                  <option value="">—</option>
+                  <option value="">-</option>
                   {templateNodes.map((n) => {
                     const name =
                       n.data?.templateName ||
@@ -1188,7 +1188,7 @@ export function InteractiveSettingsForm({ id, data, patch }) {
         {choices.map((c, i) => (
           <div key={i} className="pg-modal__row2">
             <label className="pg-modal__label">
-              {kind === "buttons" ? `Bouton ${i + 1}` : `Ligne ${i + 1}`} — titre
+              {kind === "buttons" ? `Bouton ${i + 1}` : `Ligne ${i + 1}`} - titre
               <input
                 className="pg-modal__input"
                 type="text"

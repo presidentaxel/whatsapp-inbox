@@ -257,7 +257,7 @@ function buildPlaybookCorePreview(form) {
       lines.push(pitch);
     } else {
       lines.push(
-        "(Mode pitch — ce bloc est vide. Remplis le texte ci-dessus : tant qu’il est vide, l’IA utilise le playbook structuré enregistré comme secours.)"
+        "(Mode pitch - ce bloc est vide. Remplis le texte ci-dessus : tant qu’il est vide, l’IA utilise le playbook structuré enregistré comme secours.)"
       );
     }
   } else {

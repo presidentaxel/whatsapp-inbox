@@ -361,7 +361,7 @@ function FlowEditorInner({ accountId }) {
         .then(() => saveFlow(accountId, g))
         .catch((err) => {
           console.error("playground autosave failed", err);
-          setPublishStatus("Erreur sauvegarde — vérifiez la connexion");
+          setPublishStatus("Erreur sauvegarde - vérifiez la connexion");
           setTimeout(() => setPublishStatus(null), 5000);
         });
     }, 450);
@@ -728,7 +728,7 @@ function FlowEditorInner({ accountId }) {
               setTimeout(() => setPublishStatus(null), 4000);
             } else if (accountId && !activeFlowId) {
               setPublishStatus(
-                "Import affiché — enregistrement serveur dès qu’un scénario est chargé"
+                "Import affiché - enregistrement serveur dès qu’un scénario est chargé"
               );
               setTimeout(() => setPublishStatus(null), 4000);
             }
@@ -917,11 +917,11 @@ function FlowEditorInner({ accountId }) {
                 peux utiliser{" "}
                 <code className="playground-help-pop__code">{"{{prenom_client}}"}</code>,{" "}
                 <code className="playground-help-pop__code">{"{{nom_client}}"}</code>,{" "}
-                <code className="playground-help-pop__code">{"{{numero_client}}"}</code> — remplis
+                <code className="playground-help-pop__code">{"{{numero_client}}"}</code> - remplis
                 automatiquement avec le contact WhatsApp de la conversation.
               </p>
               <p className="playground-help-pop__p playground-help-pop__p--warn">
-                <strong>Limites moteur (UI vs production)</strong> — certains blocs dessinent des
+                <strong>Limites moteur (UI vs production)</strong> - certains blocs dessinent des
                 branches que le serveur ne distingue pas : <strong>Horaires</strong> (inside/outside)
                 enchaîne comme un seul chemin ; <strong>Date</strong> (attente calendaire) ne fait pas
                 attendre (seul <strong>Délai</strong> pause réellement en relatif) ; <strong>Logique</strong>{" "}

@@ -1226,7 +1226,7 @@ async def _maybe_trigger_bot_reply(
                 return
             logger.warning(
                 "playground mode: flux non exécuté (graphe absent, start non match, compte WABA, …) "
-                "— pas de fallback Gemini. conversation_id=%s account_id=%s playground_flow_id=%s",
+                "- pas de fallback Gemini. conversation_id=%s account_id=%s playground_flow_id=%s",
                 conversation_id,
                 conversation.get("account_id"),
                 conversation.get("playground_flow_id"),
