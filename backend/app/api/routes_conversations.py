@@ -1,6 +1,10 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services.conversation_service import (
     get_all_conversations,
@@ -58,9 +62,6 @@ async def mark_read(conversation_id: str, current_user: CurrentUser = Depends(ge
         # Re-raise les HTTPException (404, 403, etc.)
         raise
     except Exception as e:
-        # Logger l'erreur mais retourner un succès pour éviter ECONNRESET
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Unexpected error marking conversation {conversation_id} as read: {e}", exc_info=True)
         return {"status": "ok"}  # Retourner ok même en cas d'erreur pour éviter ECONNRESET
 
