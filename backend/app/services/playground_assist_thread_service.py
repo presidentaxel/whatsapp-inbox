@@ -276,7 +276,6 @@ async def soft_hide_thread(thread_id: str, user_id: str) -> bool:
         .eq("id", thread_id)
         .eq("user_id", user_id)
         .is_("hidden_at", "null")
-        .select("id")
     )
     return bool(res.data)
 
@@ -302,6 +301,5 @@ async def restore_thread(thread_id: str, user_id: str) -> bool:
         .eq("id", thread_id)
         .eq("user_id", user_id)
         .not_.is_("hidden_at", "null")
-        .select("id")
     )
     return bool(res.data)
