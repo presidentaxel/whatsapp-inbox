@@ -1362,7 +1362,7 @@ Il n’y a pas de civilité automatique (M./Mme) en base : pour « M. Dupont » 
 
 CONTRAT DATA (obligatoire pour que le canevas et le moteur WhatsApp fonctionnent) :
 - sendText : le texte à envoyer est TOUJOURS dans data.body (string). Ne pas seulement remplir message, text, content ou value - utiliser body.
-- routerNode : data.routes est un tableau d’objets { "label": "…", "match": "…" }. « match » est comparé au message texte entrant (égalité, insensible à la casse). Ordre des branches = indices 0,1,2… Les arêtes sortantes doivent avoir sourceHandle "route-0", "route-1", … pour chaque entrée de routes, et sourceHandle "escape" pour la branche par défaut si le texte ne correspond à aucun match.
+- routerNode : data.routes est un tableau d’objets {{ "label": "…", "match": "…" }}. « match » est comparé au message texte entrant (égalité, insensible à la casse). Ordre des branches = indices 0,1,2… Les arêtes sortantes doivent avoir sourceHandle "route-0", "route-1", … pour chaque entrée de routes, et sourceHandle "escape" pour la branche par défaut si le texte ne correspond à aucun match.
 - start (message entrant) : pour accepter n’importe quel premier message, data.messageMatch = "any". Sinon "contains" / "equals" / "regex" avec data.messageKeyword rempli.
 
 INTERPRÉTATION DES DEMANDES UTILISATEUR (important quand le canevas est vide) :
