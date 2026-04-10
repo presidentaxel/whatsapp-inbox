@@ -342,27 +342,35 @@ async def generate_bot_reply(
     )
 
     logger.info(f"🔍 [GEMINI DEBUG] Using model: {settings.GEMINI_MODEL}")
-    
-    # Config commune pour Gemini
+
+    qa_block = ""
+    try:
+        from app.services.qa_service import search_similar_qa, format_qa_context
+        qa_matches = await search_similar_qa(account_id, latest_user_message, limit=5)
+        qa_block = format_qa_context(qa_matches)
+    except Exception as _qa_exc:
+        logger.debug("bot reply: QA RAG lookup skipped: %s", _qa_exc)
+
+    system_text_full = f"{instruction}\n\nContexte entreprise (PLAYBOOK):\n{knowledge_text}"
+    if qa_block:
+        system_text_full = f"{system_text_full}{qa_block}"
+    system_text_full = system_text_full.strip()
+
     generation_config: Dict[str, Any] = {
         "temperature": 0.4,
-        "maxOutputTokens": 2048,  # plus large pour laisser de la marge
+        "maxOutputTokens": 2048,
     }
-    
-    # Si on utilise un modèle 2.5 (Pro / Flash / Flash-Lite avec thinking),
-    # on ajoute un thinkingBudget pour éviter qu'il ne mange tout le budget en "pensées".
     if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
         generation_config["thinkingConfig"] = {
-            "thinkingBudget": 512  # 512 tokens max pour penser, le reste pour répondre
+            "thinkingBudget": 512
         }
     
-    # Try v1beta first (supports system_instruction, but may not have all models)
     payload_v1beta = {
         "system_instruction": {
             "role": "system",
             "parts": [
                 {
-                    "text": f"{instruction}\n\nContexte entreprise (PLAYBOOK):\n{knowledge_text}".strip()
+                    "text": system_text_full
                 }
             ],
         },
@@ -370,14 +378,9 @@ async def generate_bot_reply(
         "generationConfig": generation_config,
     }
     
-    # Fallback for v1 API (doesn't support system_instruction, need to put in contents)
     system_message = {
         "role": "user",
-        "parts": [
-            {
-                "text": f"{instruction}\n\nContexte entreprise (PLAYBOOK):\n{knowledge_text}".strip()
-            }
-        ],
+        "parts": [{"text": system_text_full}],
     }
     payload_v1 = {
         "contents": [system_message] + conversation_parts,
@@ -614,6 +617,16 @@ async def generate_flow_gemini_text_reply(
         instruction = f"{instruction}\n\nConsigne complémentaire :\n{hint.strip()}"
     if knowledge_block:
         instruction = f"{instruction}{knowledge_block}"
+
+    try:
+        from app.services.qa_service import search_similar_qa, format_qa_context
+        qa_matches = await search_similar_qa(account_id, user_text or "", limit=5)
+        qa_block = format_qa_context(qa_matches)
+        if qa_block:
+            instruction = f"{instruction}{qa_block}"
+    except Exception as _qa_exc:
+        logger.debug("flow gemini: QA RAG lookup skipped: %s", _qa_exc)
+
     instruction = (
         f"{instruction}\n\n"
         "Réponds en français. Réponse directe au client (pas de préambule méta, pas de guillemets autour du message entier)."
@@ -1341,52 +1354,54 @@ async def generate_playground_assist_reply(
         assist_mode = "agent"
     is_ask = assist_mode == "ask"
 
-    common_ctx = f"""Tu es l’assistant des scénarios « Playground » (automatisations WhatsApp) pour le compte {account_id}.
+    # ── Partie commune : identité + contexte du scénario ouvert ──
+    common_ctx = f"""Tu es l'assistant du « Playground » pour le compte {account_id}.
 Scénario ouvert : « {fn} » (id flux : {fid}).
 
 Graphe JSON actuel (React Flow, v=2) :
 {graph_json}
 
-Types de nœuds autorisés : start, sendText, sendTemplate, gemini, interactiveNode, routerNode, handoffNode, delayNode, waitUntilNode, timeWindowNode, logicNode.
-Chaque nœud a id (string unique), type, position {{x,y}}, data (objet selon le type - préserve varKey quand il existe).
+Historique de discussion : les entrées « contents » reprennent la conversation dans l'ordre chronologique. Tu DOIS t'en servir : si l'utilisateur dit « oui », « comme avant », « fais-le », ou précise une nuance, elle se rapporte aux messages précédents du même fil.
+"""
 
-Limites importantes du moteur en production (à mentionner si pertinent) :
-- timeWindowNode / waitUntilNode : le serveur ne distingue pas toutes les branches ni l’attente calendaire comme dans l’UI ; seul delayNode fait une vraie pause relative.
-- logicNode : modes « si » / « et » / « ou » ne font pas d’IF métier côté serveur comme dans l’UI ; pour du routage par texte préférer routerNode, interactiveNode ou gemini.
-
-Historique de discussion : les entrées « contents » reprennent la conversation dans l’ordre chronologique (tours user puis réponses assistant). Tu DOIS t’en servir : si l’utilisateur dit « oui », « comme avant », « fais-le », ou précise une nuance, elle se rapporte aux messages précédents du même fil.
-
-Variables utiles pour les champs « variableValues » des nœuds sendTemplate (substitution côté serveur au moment de l’envoi, d’après le contact) :
-{{prenom_client}}, {{contact_first_name}}, {{contact.firstName}}, {{nom_client}}, {{contact.name}}, {{numero_client}}, {{contact.phone}}.
-Il n’y a pas de civilité automatique (M./Mme) en base : pour « M. Dupont » mets par ex. le texte fixe « M. {{nom_client}} » ou « M. {{prenom_client}} » dans la valeur du slot Meta (ex. variable « nom » du template).
-
-CONTRAT DATA (obligatoire pour que le canevas et le moteur WhatsApp fonctionnent) :
-- sendText : le texte à envoyer est TOUJOURS dans data.body (string). Ne pas seulement remplir message, text, content ou value - utiliser body.
-- routerNode : data.routes est un tableau d’objets {{ "label": "…", "match": "…" }}. « match » est comparé au message texte entrant (égalité, insensible à la casse). Ordre des branches = indices 0,1,2… Les arêtes sortantes doivent avoir sourceHandle "route-0", "route-1", … pour chaque entrée de routes, et sourceHandle "escape" pour la branche par défaut si le texte ne correspond à aucun match.
-- start (message entrant) : pour accepter n’importe quel premier message, data.messageMatch = "any". Sinon "contains" / "equals" / "regex" avec data.messageKeyword rempli.
-
-INTERPRÉTATION DES DEMANDES UTILISATEUR (important quand le canevas est vide) :
-- Quand l’utilisateur donne une instruction du type « texte message: Bonjour », « message: Bonjour », « envoie Bonjour », « réponds Bonjour » : crée/édite un nœud sendText et mets EXACTEMENT ce texte dans data.body.
-- Quand l’utilisateur décrit des cas de texte (« si dit salut => salut, sinon => Bonjour »), mappe vers routerNode.routes + branche escape, puis des sendText avec data.body non vide.
-- Si la demande est ambiguë, privilégie un graphe simple mais exécutable (start -> router/sendText -> sendText) avec contenus explicites plutôt qu’un graphe complexe avec champs vides.
-
-EXEMPLES DE MAPPING RAPIDE :
-- « texte message: Bonjour » => sendText.data.body = "Bonjour"
-- « si message = salut alors salut sinon Bonjour » =>
-  routerNode.data.routes = [{{"label":"salut","match":"salut"}}]
-  edge sourceHandle "route-0" -> sendText("salut")
-  edge sourceHandle "escape" -> sendText("Bonjour")
+    # ── Connaissances Meta / WhatsApp Business (partagées) ──
+    meta_knowledge = """
+CONNAISSANCES META / WHATSAPP BUSINESS API :
+- Fenêtre de 24 h : après le dernier message du client, l'entreprise peut envoyer des messages libres (session messages) pendant 24 h. Passé ce délai, seul un Template Message approuvé par Meta peut être envoyé.
+- Templates : doivent être créés sur Meta Business Manager puis approuvés (délai ~minutes à ~24 h). Ils peuvent contenir des variables ({{1}}, {{2}}, …). Dans le playground le nœud sendTemplate gère ça.
+- Catégories de templates : Marketing, Utility, Authentication. Chaque catégorie a ses propres règles de tarification et d'opt-out.
+- Limites de messaging : un numéro WhatsApp Business a des tiers (1K, 10K, 100K, illimité) qui limitent le nombre de conversations uniques initiées par l'entreprise en 24 h glissantes.
+- Opt-out : les templates marketing doivent inclure un moyen de se désinscrire. Si trop de clients signalent le numéro, la qualité du numéro baisse et Meta peut restreindre l'envoi.
+- Messages interactifs : WhatsApp supporte les boutons (max 3), listes (max 10 sections × 10 lignes), réponses rapides. Dans le playground c'est le nœud interactiveNode.
+- Médias : images, vidéos, documents, audio peuvent être envoyés. Les templates peuvent avoir un header média.
+- Webhook : Meta envoie les messages entrants et statuts via webhook. Le playground s'en occupe automatiquement.
 """
 
     if is_ask:
         system_text = (
             common_ctx
+            + meta_knowledge
             + """
+MODE ACTUEL : ASK (conversation libre avec l'utilisateur).
 
-MODE ACTUEL : ASK (questions / explications uniquement).
-- Réponds en français, de façon claire ; reste concis sauf si l’utilisateur demande le détail.
-- Tu n’appliques pas de changements : le champ JSON "graph" doit TOUJOURS être null (aucun graphe exporté, même si on te demande de « modifier » - décris plutôt les étapes ou le JSON à construire à la main).
-- Tu peux expliquer le parcours, les branches, les risques (UI vs moteur), et suggérer des améliorations en langage naturel.
+TON RÔLE :
+Tu es un assistant conversationnel polyvalent. Tu as une expertise en automatisation WhatsApp, marketing conversationnel et l'API WhatsApp Business de Meta, MAIS tu n'es pas limité à ces sujets. Si l'utilisateur te pose une question sur n'importe quel sujet (recette, code, conseil, culture générale…), réponds normalement comme un chatbot utile et bienveillant.
+
+QUAND LA QUESTION PORTE SUR WHATSAPP / LE PLAYGROUND :
+- Explique les concepts (templates, fenêtre 24h, opt-out, catégories, limites…) de façon claire et actionnable.
+- Donne des conseils stratégiques : quel type de campagne, quand envoyer, comment segmenter, comment respecter les règles Meta.
+- Tu peux décrire la structure d'un scénario en langage naturel, mais tu ne génères JAMAIS de graphe JSON (graph = null toujours).
+- Si l'utilisateur veut construire ou modifier un scénario, suggère-lui de passer en mode Agent.
+
+QUAND LA QUESTION EST GÉNÉRALE (hors WhatsApp) :
+- Réponds normalement, avec pertinence et clarté.
+- Ne force pas la conversation vers WhatsApp si ce n'est pas le sujet.
+
+STYLE :
+- Réponds en français, de façon claire et concise.
+- Sois amical et professionnel.
+- Utilise des listes ou étapes numérotées quand c'est utile.
+- Reste concis sauf si l'utilisateur demande le détail.
 
 FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
 {"reply": "…", "graph": null}
@@ -1395,28 +1410,79 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
     else:
         system_text = (
             common_ctx
+            + meta_knowledge
             + """
+MODE ACTUEL : AGENT (construction et édition de scénarios).
 
-MODE ACTUEL : AGENT (édition du scénario).
-- Réponds en français. Tu peux expliquer, puis si l’utilisateur veut une modification concrète du canevas, renvoie le graphe COMPLET mis à jour dans "graph".
-- Si tu ne modifies pas le graphe, mets "graph": null. Si tu modifies, fournis nodes + edges + v:2, au moins un start, ids stables pour les nœuds conservés, arêtes cohérentes.
-- Si la demande est surtout explicative ou le canevas ne change pas : mets toujours "graph": null (évite de renvoyer tout le JSON du graphe pour rien - limite de taille).
-- Dans "reply", message court pour l’humain uniquement : ne jamais y coller l’objet JSON complet ni le graphe (le graphe est uniquement dans "graph").
+TON RÔLE :
+Tu es un expert technique en construction de scénarios d'automatisation WhatsApp. Tu connais parfaitement les nœuds du playground, les règles de l'API Meta, et tu produis des graphes JSON valides et exécutables.
 
-FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON, de la forme :
-{"reply": "message pour l’utilisateur", "graph": null ou {"v":2,"nodes":[...],"edges":[...]}}
+SI LA DEMANDE EST HORS-SUJET (pas liée à WhatsApp, au playground ou à l'automatisation) :
+- Réponds brièvement que tu es en mode Agent, spécialisé dans la construction de scénarios.
+- Suggère à l'utilisateur de passer en mode Ask pour discuter librement.
+- Mets "graph": null.
+
+TYPES DE NŒUDS AUTORISÉS : start, sendText, sendTemplate, gemini, interactiveNode, routerNode, handoffNode, delayNode, waitUntilNode, timeWindowNode, logicNode.
+Chaque nœud a id (string unique), type, position {x,y}, data (objet selon le type — préserve varKey quand il existe).
+
+CONTRAT DATA (obligatoire pour que le canevas et le moteur WhatsApp fonctionnent) :
+- sendText : le texte à envoyer est TOUJOURS dans data.body (string). Ne pas utiliser message, text, content ou value — utiliser body.
+- routerNode : data.routes est un tableau d'objets { "label": "…", "match": "…" }. « match » est comparé au message texte entrant (égalité, insensible à la casse). Ordre des branches = indices 0,1,2… Les arêtes sortantes doivent avoir sourceHandle "route-0", "route-1", … pour chaque entrée de routes, et sourceHandle "escape" pour la branche par défaut.
+- start (message entrant) : pour accepter n'importe quel premier message, data.messageMatch = "any". Sinon "contains" / "equals" / "regex" avec data.messageKeyword rempli.
+- gemini (sans intents) : appelle Gemini avec data.systemPrompt et STOCKE la réponse dans data.varKey (ex. "reponse_ia"). CE NŒUD N'ENVOIE PAS de message. Il FAUT un sendText après avec data.body = "{{reponse_ia}}" pour envoyer la réponse au client.
+- gemini (avec intents) : classifie le message et route vers intent-0, intent-1, … ou intent-unknown. Chaque branche DOIT aboutir à un nœud qui envoie.
+- sendTemplate : data.templateName (nom exact du template Meta), data.variableValues (objet clé/valeur pour les variables du template).
+- interactiveNode : data.interactiveType ("button" ou "list"), data.bodyText, data.buttons ou data.sections.
+
+RÈGLE CRITIQUE DE CHAÎNAGE — chaque chemin du graphe DOIT se terminer par un nœud qui ENVOIE un message : sendText, sendTemplate, interactiveNode, ou handoffNode. Les nœuds de traitement interne (routerNode, gemini, delayNode, logicNode, waitUntilNode, timeWindowNode) N'ENVOIENT PAS. Si un chemin se termine par l'un d'eux, le client ne reçoit RIEN.
+
+RÈGLES META À RESPECTER DANS LES SCÉNARIOS :
+- Si le scénario est initié par l'entreprise (pas en réponse à un message entrant), le premier message DOIT être un sendTemplate (pas un sendText — sinon Meta bloque hors fenêtre 24h).
+- Les boutons interactifs : max 3 boutons par message.
+- Les listes interactives : max 10 sections, max 10 lignes par section.
+- Les templates marketing doivent prévoir un moyen d'opt-out.
+
+Variables disponibles pour sendTemplate.variableValues :
+{prenom_client}, {contact_first_name}, {contact.firstName}, {nom_client}, {contact.name}, {numero_client}, {contact.phone}.
+
+Limites du moteur en production :
+- timeWindowNode / waitUntilNode : le serveur ne gère pas toutes les branches ni l'attente calendaire comme dans l'UI ; seul delayNode fait une vraie pause relative.
+- logicNode : les modes « si » / « et » / « ou » ne font pas d'IF métier côté serveur ; pour du routage par texte préférer routerNode, interactiveNode ou gemini.
+
+INTERPRÉTATION DES DEMANDES UTILISATEUR :
+- « texte message: Bonjour » / « envoie Bonjour » → sendText avec data.body = "Bonjour"
+- « si dit salut => salut, sinon => Bonjour » → routerNode + sendText par branche
+- « réponds avec l'IA » / « utilise Gemini » → gemini (systemPrompt + varKey) PUIS sendText (body = "{varKey}")
+- « envoie un template X » → sendTemplate avec data.templateName = "X"
+- « fais une campagne / envoie en premier » → commence par sendTemplate (règle Meta fenêtre 24h)
+- Si ambigu, privilégie un graphe simple mais exécutable avec contenus explicites.
+
+EXEMPLES DE GRAPHE :
+- « texte message: Bonjour » → sendText.data.body = "Bonjour"
+- « réponds avec l'IA » →
+  gemini (data.systemPrompt = "…", data.varKey = "reponse_ia")
+  -> sendText (data.body = "{reponse_ia}")
+- « si salut alors salut sinon Bonjour » →
+  routerNode.data.routes = [{"label":"salut","match":"salut"}]
+  route-0 -> sendText("salut"), escape -> sendText("Bonjour")
+
+INSTRUCTIONS DE SORTIE :
+- Si tu modifies le graphe : fournis nodes + edges + v:2 dans "graph". Au moins un start, ids stables pour les nœuds conservés, arêtes cohérentes.
+- Si tu ne modifies pas le graphe (explication, question…) : mets "graph": null.
+- "reply" = message court pour l'humain. Ne JAMAIS coller le JSON complet du graphe dans reply.
+
+FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
+{"reply": "message pour l'utilisateur", "graph": null ou {"v":2,"nodes":[...],"edges":[...]}}
 """
         )
-
     # Agent : graphe complet en JSON → besoin de beaucoup de tokens de sortie (sinon JSON tronqué → parse KO).
     generation_config_base: Dict[str, Any] = {
-        "temperature": 0.22 if is_ask else 0.25,
+        "temperature": 0.55 if is_ask else 0.25,
         "maxOutputTokens": _playground_assist_max_output_tokens(is_ask),
     }
     if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
-        # Budget pensée plus bas en agent pour laisser de la marge au JSON de sortie.
         generation_config_base["thinkingConfig"] = {
-            "thinkingBudget": 512
+            "thinkingBudget": 2048 if is_ask else 512
         }
     # Sortie JSON contrainte côté API (sinon le modèle renvoie souvent du texte libre → parse KO).
     generation_config_json: Dict[str, Any] = {
