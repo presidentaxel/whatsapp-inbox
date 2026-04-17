@@ -996,6 +996,7 @@ async def try_run_playground_flow(
         generate_bot_reply,
         generate_flow_gemini_keyword,
         generate_flow_gemini_text_reply,
+        conversation_transcript_for_flow_variables,
     )
     from app.services.message_service import (
         send_message,
@@ -1135,8 +1136,17 @@ async def try_run_playground_flow(
             lum = []
             session["flowLastUserMessages"] = lum
         if inbound_text:
-            lum.append((inbound_text or "")[:400])
-            session["flowLastUserMessages"] = lum[-5:]
+            lum.append((inbound_text or "")[:2000])
+            session["flowLastUserMessages"] = lum[-30:]
+    try:
+        variables["flow_recent_user_text"] = await conversation_transcript_for_flow_variables(
+            conversation_id
+        )
+    except Exception as exc:
+        logger.warning(
+            "playground flow: flow_recent_user_text depuis la DB impossible (%s), fallback session",
+            exc,
+        )
         variables["flow_recent_user_text"] = " | ".join(
             str(x) for x in (session.get("flowLastUserMessages") or []) if x
         )

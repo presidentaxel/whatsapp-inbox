@@ -5,6 +5,7 @@ from typing import Dict, Optional, Union
 import httpx
 from httpx import Timeout
 from postgrest._sync.client import SyncPostgrestClient
+from postgrest.exceptions import APIError
 from postgrest.utils import SyncClient as PostgrestHttpxClient
 from supabase import create_client
 from starlette.concurrency import run_in_threadpool
@@ -43,6 +44,33 @@ def _patch_postgrest_use_http11() -> None:
 
 
 _patch_postgrest_use_http11()
+
+
+def _is_transient_supabase_edge_response(exc: BaseException) -> bool:
+    """
+    PostgREST attend du JSON ; Cloudflare (ou l'edge) peut renvoyer du HTML 400/502,
+    ce qui remonte comme APIError « JSON could not be generated » avec du HTML dans details.
+    Souvent transitoire ou lié à une requête trop longue / WAF — on retente.
+    """
+    if isinstance(exc, APIError):
+        det = str(exc.details or "")
+        msg = str(exc.message or "")
+        if "<html" in det.lower() or "cloudflare" in det.lower():
+            try:
+                c = int(exc.code) if exc.code is not None else None
+            except (TypeError, ValueError):
+                c = None
+            # Edge / WAF : souvent 400 avec corps HTML ; parfois autre code.
+            return c is None or c in (400, 403, 404, 429, 502, 503, 504)
+        if "json could not be generated" in msg.lower() and (
+            "<html" in det.lower() or "cloudflare" in det.lower()
+        ):
+            return True
+    low = str(exc).lower()
+    return "json could not be generated" in low and (
+        "<html" in low or "cloudflare" in low
+    )
+
 
 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
@@ -83,6 +111,8 @@ async def supabase_execute(query_builder, timeout: float = 30.0, retries: int = 
             error_type = type(e).__name__
             
             # Détecter les erreurs de connexion récupérables
+            is_edge_html = _is_transient_supabase_edge_response(e)
+
             is_network_error = any(keyword in error_str for keyword in [
                 "readerror",
                 "connecterror",
@@ -112,10 +142,17 @@ async def supabase_execute(query_builder, timeout: float = 30.0, retries: int = 
                 error_type == "ConnectionTerminated"
             )
             
-            if is_network_error and attempt < retries:
+            if (is_network_error or is_edge_html) and attempt < retries:
                 # ConnectionTerminated est une reconnexion normale, on log en DEBUG
                 if is_connection_terminated:
                     logger.debug(f"Supabase connection terminated (attempt {attempt + 1}/{retries + 1}), reconnecting...")
+                elif is_edge_html:
+                    logger.warning(
+                        "Supabase edge returned non-JSON (often Cloudflare HTML); retrying "
+                        f"(attempt {attempt + 1}/{retries + 1}). "
+                        "If this persists: check SUPABASE_URL, shorten filters / reduce .in_() size, "
+                        "or inspect Supabase project status."
+                    )
                 else:
                     logger.warning(f"Supabase network error (attempt {attempt + 1}/{retries + 1}): {e}")
                 await asyncio.sleep(0.5 * (attempt + 1))  # Backoff exponentiel

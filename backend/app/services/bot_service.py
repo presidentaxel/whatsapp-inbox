@@ -31,6 +31,39 @@ logger.setLevel(logging.INFO)
 _BOT_CONFIDENCE_MIN_THRESHOLD = 0.72
 
 
+async def fetch_message_history_rows_for_ai(conversation_id: str) -> List[Dict[str, Any]]:
+    """Derniers messages de la conversation (ordre chronologique), pour Gemini."""
+    lim = max(1, int(getattr(settings, "GEMINI_CONVERSATION_HISTORY_LIMIT", 200) or 200))
+    res = await supabase_execute(
+        supabase.table("messages")
+        .select("direction, content_text")
+        .eq("conversation_id", conversation_id)
+        .order("timestamp", desc=True)
+        .limit(lim)
+    )
+    return list(reversed(res.data or []))
+
+
+def _truncate_ai_context_text(text: str) -> str:
+    max_c = int(getattr(settings, "GEMINI_CONVERSATION_HISTORY_MAX_CHARS", 0) or 0)
+    if max_c <= 0 or len(text) <= max_c:
+        return text
+    return "…(début tronqué)\n" + text[-(max_c - 24) :]
+
+
+async def conversation_transcript_for_flow_variables(conversation_id: str) -> str:
+    """Transcript multiligne pour {{flow_recent_user_text}} et prompts du graphe."""
+    rows = await fetch_message_history_rows_for_ai(conversation_id)
+    lines: List[str] = []
+    for row in rows:
+        content = (row.get("content_text") or "").strip()
+        if not content:
+            continue
+        role = "Client" if row.get("direction") == "inbound" else "Entreprise"
+        lines.append(f"{role}: {content}")
+    return _truncate_ai_context_text("\n".join(lines))
+
+
 def _normalize_profile(row: Dict[str, Any], account_id: str) -> Dict[str, Any]:
     custom_fields = row.get("custom_fields") or []
     normalized_fields = []
@@ -305,17 +338,7 @@ async def generate_bot_reply_with_confidence(
         _trim_for_log(knowledge_text),
     )
 
-    # Récupérer l'historique
-    history_rows = (
-        await supabase_execute(
-            supabase.table("messages")
-            .select("direction, content_text")
-            .eq("conversation_id", conversation_id)
-            .order("timestamp", desc=True)
-            .limit(10)
-        )
-    ).data
-    history_rows.reverse()
+    history_rows = await fetch_message_history_rows_for_ai(conversation_id)
 
     conversation_parts: List[Dict[str, Any]] = []
     for row in history_rows:
@@ -738,11 +761,12 @@ async def generate_flow_gemini_keyword(
     if hint:
         instruction = f"{instruction}\n\nConsigne complémentaire :\n{hint.strip()}"
     rc = (recent_user_context or "").strip()
+    rc_max = max(1200, int(getattr(settings, "GEMINI_FLOW_RECENT_CONTEXT_CHARS", 32000) or 32000))
     if rc:
         instruction = (
             f"{instruction}\n\n"
             "Messages utilisateur récents sur ce fil (contexte, ne pas citer mot pour mot) :\n"
-            f"{rc[:1200]}"
+            f"{rc[:rc_max]}"
         )
 
     generation_config: Dict[str, Any] = {
@@ -888,16 +912,7 @@ async def generate_flow_gemini_text_reply(
 
     conversation_parts: List[Dict[str, Any]] = []
     try:
-        history_rows = (
-            await supabase_execute(
-                supabase.table("messages")
-                .select("direction, content_text")
-                .eq("conversation_id", conversation_id)
-                .order("timestamp", desc=True)
-                .limit(8)
-            )
-        ).data
-        history_rows.reverse()
+        history_rows = await fetch_message_history_rows_for_ai(conversation_id)
         for row in history_rows:
             content = (row.get("content_text") or "").strip()
             if not content:
@@ -1020,7 +1035,7 @@ def _trim_for_log(text: str, limit: int = 500) -> str:
     return text[:limit] + "\n... (truncated)"
 
 
-def _format_conversation_preview(parts: List[Dict[str, Any]], limit: int = 8) -> str:
+def _format_conversation_preview(parts: List[Dict[str, Any]], limit: int = 24) -> str:
     preview_lines = []
     for entry in parts[-limit:]:
         role = entry.get("role")

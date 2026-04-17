@@ -43,6 +43,20 @@ class Settings:
     GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
     GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
     HUMAN_BACKUP_NUMBER: str | None = os.getenv("HUMAN_BACKUP_NUMBER")
+    # Contexte conversation : messages chargés depuis la DB (bot + nœuds flow / {{flow_recent_user_text}})
+    GEMINI_CONVERSATION_HISTORY_LIMIT: int = max(
+        1,
+        int(os.getenv("GEMINI_CONVERSATION_HISTORY_LIMIT", "200") or "200"),
+    )
+    # 0 = pas de troncature après assemblage du transcript (sinon coupe le début, garde la fin)
+    GEMINI_CONVERSATION_HISTORY_MAX_CHARS: int = int(
+        os.getenv("GEMINI_CONVERSATION_HISTORY_MAX_CHARS", "0") or "0"
+    )
+    # Contexte « messages récents » injecté dans generate_flow_gemini_keyword (en plus du dernier message)
+    GEMINI_FLOW_RECENT_CONTEXT_CHARS: int = max(
+        1200,
+        int(os.getenv("GEMINI_FLOW_RECENT_CONTEXT_CHARS", "32000") or "32000"),
+    )
 
     # Prometheus
     PROMETHEUS_ENABLED: bool = os.getenv("PROMETHEUS_ENABLED", "true").lower() == "true"
