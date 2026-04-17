@@ -1,9 +1,9 @@
 import logging
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_user
+from app.core.datetime_parse import parse_optional_iso_datetime
 
 logger = logging.getLogger(__name__)
 from app.core.permissions import CurrentUser, PermissionCodes
@@ -26,11 +26,13 @@ router = APIRouter()
 async def list_conversations(
     account_id: str = Query(..., description="WhatsApp account ID"),
     limit: int = Query(200, ge=1, le=200, description="Nombre max de conversations"),
-    cursor: datetime | None = Query(
-        None, description="ISO timestamp cursor: retourne les conversations avant cette date"
+    cursor: str | None = Query(
+        None,
+        description="ISO timestamp cursor: retourne les conversations avant cette date",
     ),
-    updated_since: datetime | None = Query(
-        None, description="ISO timestamp: retourne uniquement les conversations mises à jour après cette date (delta refresh)"
+    updated_since: str | None = Query(
+        None,
+        description="ISO timestamp: retourne uniquement les conversations mises à jour après cette date (delta refresh)",
     ),
     current_user: CurrentUser = Depends(get_current_user),
 ):
@@ -38,8 +40,10 @@ async def list_conversations(
         raise HTTPException(status_code=403, detail="account_access_denied")
     
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
+    cursor_dt = parse_optional_iso_datetime(cursor, param_name="cursor")
+    updated_since_dt = parse_optional_iso_datetime(updated_since, param_name="updated_since")
     conversations = await get_all_conversations(
-        account_id, limit=limit, cursor=cursor, updated_since=updated_since
+        account_id, limit=limit, cursor=cursor_dt, updated_since=updated_since_dt
     )
     if conversations is None:
         raise HTTPException(status_code=404, detail="account_not_found")

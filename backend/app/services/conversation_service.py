@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import HTTPException
 
 from app.core.cache import cached, invalidate_cache_pattern
+from app.core.datetime_parse import parse_optional_iso_datetime
 from app.core.db import supabase, supabase_execute, SUPABASE_IN_CLAUSE_CHUNK_SIZE
 from app.core.pg import fetch_all, fetch_one, execute, get_pool
 from app.services.account_service import get_account_by_id
@@ -13,26 +14,6 @@ logger = logging.getLogger(__name__)
 
 # Numéro réservé : conversation test Playground uniquement (exclue de la liste inbox principale).
 SANDBOX_PLAYGROUND_CLIENT_NUMBER = "33999999901"
-
-
-def _coerce_query_datetime(value: datetime | str | None) -> datetime | None:
-    """
-    FastAPI peut laisser cursor/updated_since en str selon le format ISO ;
-    asyncpg exige datetime pour les binds timestamptz.
-    """
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value
-    s = str(value).strip()
-    if not s:
-        return None
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        return datetime.fromisoformat(s)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="invalid_datetime_parameter") from None
 
 
 def _format_last_message(last_message_type: Optional[str], last_content_text: Optional[str]) -> str:
@@ -70,8 +51,8 @@ async def get_all_conversations(
     if not account:
         return None
 
-    cursor = _coerce_query_datetime(cursor)
-    updated_since = _coerce_query_datetime(updated_since)
+    cursor = parse_optional_iso_datetime(cursor, param_name="cursor")
+    updated_since = parse_optional_iso_datetime(updated_since, param_name="updated_since")
 
     pool = get_pool()
     if pool:

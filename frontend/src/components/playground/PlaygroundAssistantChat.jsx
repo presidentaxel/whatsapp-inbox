@@ -1081,7 +1081,7 @@ export default function PlaygroundAssistantChat({
   if (!accountId || !flowId) {
     return null;
   }
--
+
   return (
     <aside
       className="playground-assist"
