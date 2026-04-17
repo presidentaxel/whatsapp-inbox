@@ -15,6 +15,26 @@ logger = logging.getLogger(__name__)
 SANDBOX_PLAYGROUND_CLIENT_NUMBER = "33999999901"
 
 
+def _coerce_query_datetime(value: datetime | str | None) -> datetime | None:
+    """
+    FastAPI peut laisser cursor/updated_since en str selon le format ISO ;
+    asyncpg exige datetime pour les binds timestamptz.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid_datetime_parameter") from None
+
+
 def _format_last_message(last_message_type: Optional[str], last_content_text: Optional[str]) -> str:
     """Formate le dernier message pour l'affichage liste."""
     if not last_message_type:
@@ -43,12 +63,15 @@ def _format_last_message(last_message_type: Optional[str], last_content_text: Op
 async def get_all_conversations(
     account_id: str,
     limit: int = 200,
-    cursor: Optional[datetime] = None,
-    updated_since: Optional[datetime] = None,
+    cursor: datetime | str | None = None,
+    updated_since: datetime | str | None = None,
 ) -> Optional[list]:
     account = await get_account_by_id(account_id)
     if not account:
         return None
+
+    cursor = _coerce_query_datetime(cursor)
+    updated_since = _coerce_query_datetime(updated_since)
 
     pool = get_pool()
     if pool:
