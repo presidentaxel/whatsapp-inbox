@@ -1,5 +1,11 @@
 import asyncio
 import logging
+from typing import Dict, Optional, Union
+
+import httpx
+from httpx import Timeout
+from postgrest._sync.client import SyncPostgrestClient
+from postgrest.utils import SyncClient as PostgrestHttpxClient
 from supabase import create_client
 from starlette.concurrency import run_in_threadpool
 from fastapi import HTTPException
@@ -7,6 +13,36 @@ from fastapi import HTTPException
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _patch_postgrest_use_http11() -> None:
+    """
+    postgrest-py uses HTTP/2 by default. Supabase/edge occasionally drops HTTP/2
+    streams (httpx.RemoteProtocolError: Server disconnected). HTTP/1.1 avoids that.
+    """
+
+    def create_session(
+        self,
+        base_url: str,
+        headers: Dict[str, str],
+        timeout: Union[int, float, Timeout],
+        verify: bool = True,
+        proxy: Optional[str] = None,
+    ) -> PostgrestHttpxClient:
+        return PostgrestHttpxClient(
+            base_url=base_url,
+            headers=headers,
+            timeout=timeout,
+            verify=verify,
+            proxy=proxy,
+            follow_redirects=True,
+            http2=False,
+        )
+
+    SyncPostgrestClient.create_session = create_session  # type: ignore[method-assign]
+
+
+_patch_postgrest_use_http11()
 
 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
@@ -48,8 +84,25 @@ async def supabase_execute(query_builder, timeout: float = 30.0, retries: int = 
             
             # Détecter les erreurs de connexion récupérables
             is_network_error = any(keyword in error_str for keyword in [
-                "readerror", "connecterror", "timeout", "10035", "socket", "connection"
-            ])
+                "readerror",
+                "connecterror",
+                "timeout",
+                "10035",
+                "socket",
+                "connection",
+                "disconnected",
+                "remoteprotocol",
+                "server disconnected",
+            ]) or isinstance(
+                e,
+                (
+                    httpx.RemoteProtocolError,
+                    httpx.ReadError,
+                    httpx.ConnectError,
+                    httpx.ConnectTimeout,
+                    httpx.ReadTimeout,
+                ),
+            )
             
             # ConnectionTerminated est une erreur gRPC normale lors des reconnexions Supabase
             # On la traite comme récupérable et on la log en DEBUG pour éviter le bruit

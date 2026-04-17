@@ -52,7 +52,15 @@ async def init_pool() -> None:
             getattr(e, "errno", "-"),
             exc_msg,
         )
-        if "getaddrinfo failed" in exc_msg or (getattr(e, "errno", None) == 11001):
+        if "tenant/user" in exc_msg and "not found" in exc_msg.lower():
+            logger.warning(
+                "Supabase pooler rejected the database user/tenant. Usually: wrong project ref in "
+                "the username (must be postgres.<project_ref> from the same project as the password), "
+                "credentials copied from another project, or project paused/deleted. "
+                "Regenerate: Dashboard → Project Settings → Database → Connection string → "
+                "Connection pooling (Session or Transaction)."
+            )
+        elif "getaddrinfo failed" in exc_msg or (getattr(e, "errno", None) == 11001):
             host = urlparse(settings.DATABASE_URL).hostname if settings.DATABASE_URL else "?"
             logger.warning(
                 "DNS resolution failed for host %r.",
