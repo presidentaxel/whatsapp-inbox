@@ -479,7 +479,9 @@ async def _process_incoming_message(
             message_payload["reply_to_message_id"] = reply_to_message_id
         
         logger.info(f"💾 [MESSAGE INSERT] Attempting to upsert message: wa_message_id={message.get('id')}, conversation_id={conversation['id']}, direction=inbound")
-        logger.info(f"💾 [MESSAGE INSERT] Payload: {json.dumps({k: v for k, v in message_payload.items() if k != 'content_text'}, indent=2)}")
+        logger.info(
+            f"💾 [MESSAGE INSERT] Payload: {json.dumps({k: v for k, v in message_payload.items() if k != 'content_text'}, indent=2, default=str)}"
+        )
         
         message_db_id = None
         try:
