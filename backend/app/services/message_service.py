@@ -506,7 +506,7 @@ async def _process_incoming_message(
                     message_payload["conversation_id"],
                     message_payload["direction"],
                     message_payload["content_text"],
-                    message_payload["timestamp"],
+                    _parse_timestamp_iso(message_payload["timestamp"]),
                     message_payload["wa_message_id"],
                     message_payload["message_type"],
                     message_payload["status"],

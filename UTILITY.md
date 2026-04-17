@@ -53,6 +53,13 @@ cd /opt/whatsapp-inbox/deploy
 docker compose -f docker-compose.prod.yml stop frontend
 docker compose -f docker-compose.prod.yml build --no-cache frontend
 docker compose -f docker-compose.prod.yml up -d frontend
+
+#backend
+ssh ubuntu@217.182.65.32
+cd /opt/whatsapp-inbox/deploy
+docker compose -f docker-compose.prod.yml stop backend
+docker compose -f docker-compose.prod.yml build --no-cache backend
+docker compose -f docker-compose.prod.yml up -d backend
 ```
 
 ## Grafana reset
