@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, memo } from "react";
 import { formatRelativeDateTime } from "../../utils/date";
 import {
   FiHeadphones,
@@ -24,6 +24,108 @@ import MessageStatus from "./MessageStatus";
 import PDFThumbnail from "../gallery/PDFThumbnail";
 
 const FETCHABLE_MEDIA = new Set(["audio", "voice", "image", "video", "document", "sticker"]);
+
+const _mediaBlobCache = new Map();
+const MEDIA_CACHE_MAX = 200;
+
+function getCachedBlobUrl(messageId) {
+  const entry = _mediaBlobCache.get(messageId);
+  if (!entry) return null;
+  entry.refs++;
+  _mediaBlobCache.delete(messageId);
+  _mediaBlobCache.set(messageId, entry);
+  return entry.url;
+}
+
+function setCachedBlobUrl(messageId, url) {
+  if (_mediaBlobCache.has(messageId)) {
+    const entry = _mediaBlobCache.get(messageId);
+    entry.refs++;
+    return;
+  }
+  if (_mediaBlobCache.size >= MEDIA_CACHE_MAX) {
+    for (const [key, entry] of _mediaBlobCache) {
+      if (entry.refs <= 0) {
+        URL.revokeObjectURL(entry.url);
+        _mediaBlobCache.delete(key);
+        break;
+      }
+    }
+  }
+  _mediaBlobCache.set(messageId, { url, refs: 1 });
+}
+
+function releaseCachedBlobUrl(messageId) {
+  const entry = _mediaBlobCache.get(messageId);
+  if (entry) entry.refs = Math.max(0, entry.refs - 1);
+}
+
+function parseOutboundMeta(raw) {
+  if (raw == null) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Ligne discrète : origine du message sortant (équipe, scénario, assistant IA). */
+function OutboundAttribution({ message }) {
+  if (message.direction !== "outbound" || message.is_system) return null;
+  const meta = parseOutboundMeta(message.outbound_meta);
+  if (message.sent_by_user_id) {
+    return (
+      <div className="bubble__source" title="Envoyé manuellement depuis l’app">
+        Équipe
+      </div>
+    );
+  }
+  if (!meta && (!message.sent_via || message.sent_via === "ui")) return null;
+  const sv = message.sent_via || "";
+  let label = "";
+  let title = "";
+  if (meta?.source === "gemini_bot") {
+    label = "IA · Assistant";
+    title = "Réponse générée par l’assistant Gemini (mode conversation).";
+  } else if (meta?.source === "flow") {
+    const nt = meta.node_type || "";
+    const mode = meta.gemini_mode || "";
+    const kind = meta.ui_kind || "";
+    if (nt === "sendText") {
+      label = "Scénario · texte";
+      title = `Message issu du scénario (nœud ${meta.node_id || "?"})`;
+    } else if (nt === "interactiveNode") {
+      label = kind === "list" ? "Scénario · liste" : "Scénario · boutons";
+      title = `Message interactif du scénario (nœud ${meta.node_id || "?"})`;
+    } else if (nt === "gemini") {
+      label = mode === "playbook_fallback" ? "Scénario · IA (playbook)" : "Scénario · IA";
+      title = `Réponse générée dans un nœud IA du scénario (${meta.node_id || "?"})`;
+    } else {
+      label = "Scénario";
+      title = meta.node_id ? `Nœud ${meta.node_id}` : "Message issu du scénario";
+    }
+  } else if (sv === "bot") {
+    label = "IA · Assistant";
+    title = "Réponse automatique (assistant).";
+  } else if (sv === "flow") {
+    label = "Scénario";
+    title = "Envoyé par le scénario automatisé.";
+  } else if (sv === "broadcast") {
+    label = "Campagne";
+    title = "Diffusion / campagne.";
+  } else {
+    return null;
+  }
+  return (
+    <div className="bubble__source" title={title}>
+      {label}
+    </div>
+  );
+}
 
 const TYPE_MAP = {
   audio: { icon: <FiHeadphones />, label: "Message audio" },
@@ -75,19 +177,23 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
       return;
     }
 
-    console.log(`📥 [FRONTEND MEDIA] Fetching media from API for message ${message.id} (media_id: ${message.media_id})`);
+    const cached = getCachedBlobUrl(message.id);
+    if (cached) {
+      setSource(cached);
+      setLoading(false);
+      setError(false);
+      onLoadingChange?.(false, false);
+      return () => { releaseCachedBlobUrl(message.id); };
+    }
+
     let cancelled = false;
-    let objectUrl = null;
 
     api
       .get(`/messages/media/${message.id}`, { responseType: "blob" })
       .then((res) => {
-        if (cancelled) {
-          console.log(`🚫 [FRONTEND MEDIA] Request cancelled for message ${message.id}`);
-          return;
-        }
-        console.log(`✅ [FRONTEND MEDIA] Media fetched successfully for message ${message.id}, size: ${res.data.size} bytes`);
-        objectUrl = URL.createObjectURL(res.data);
+        if (cancelled) return;
+        const objectUrl = URL.createObjectURL(res.data);
+        setCachedBlobUrl(message.id, objectUrl);
         setSource(objectUrl);
         setError(false);
         onLoadingChange?.(false, false);
@@ -101,16 +207,12 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
         }
       })
       .finally(() => {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       });
 
     return () => {
       cancelled = true;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
+      releaseCachedBlobUrl(message.id);
     };
   }, [message.id, message.media_id, messageType, message._localPreview, message.storage_url]);
 
@@ -475,7 +577,7 @@ function renderBody(message) {
   };
 }
 
-export default function MessageBubble({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend, onReply, onCopy, onPin, onUnpin, onDelete, onOpenMenu }) {
+function MessageBubbleInner({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend, onReply, onCopy, onPin, onUnpin, onDelete, onOpenMenu }) {
   const mine = message.direction === "outbound";
   const timestamp = message.timestamp ? formatRelativeDateTime(message.timestamp) : "";
 
@@ -879,6 +981,7 @@ export default function MessageBubble({ message, conversation, onReactionChange,
           </span>
         ) : (
           <>
+            <OutboundAttribution message={message} />
             {quotedMessage && renderQuotedMessage(quotedMessage)}
             {bodyContent}
             {buttons && (
@@ -918,3 +1021,22 @@ export default function MessageBubble({ message, conversation, onReactionChange,
     </div>
   );
 }
+
+const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
+  return (
+    prev.message.id === next.message.id &&
+    prev.message.status === next.message.status &&
+    prev.message.content_text === next.message.content_text &&
+    prev.message.storage_url === next.message.storage_url &&
+    prev.message.is_pinned === next.message.is_pinned &&
+    prev.message.reactions === next.message.reactions &&
+    prev.message.sent_via === next.message.sent_via &&
+    prev.message.sent_by_user_id === next.message.sent_by_user_id &&
+    JSON.stringify(prev.message.outbound_meta ?? null) ===
+      JSON.stringify(next.message.outbound_meta ?? null) &&
+    prev.forceReactionOpen === next.forceReactionOpen &&
+    prev.conversation?.id === next.conversation?.id
+  );
+});
+
+export default MessageBubble;

@@ -69,4 +69,8 @@ class Settings:
     # Peut être configurée via la variable d'environnement MAX_MEDIA_UPLOAD_SIZE
     MAX_MEDIA_UPLOAD_SIZE: int = int(os.getenv("MAX_MEDIA_UPLOAD_SIZE", "209715200"))  # 200MB par défaut
 
+    # CORS: comma-separated list of allowed origins. Defaults to "*" (all) if not set.
+    # Whitespace around commas is trimmed. Example: "https://a.com, http://localhost:3000"
+    CORS_ORIGINS: str | None = os.getenv("CORS_ORIGINS")
+
 settings = Settings()

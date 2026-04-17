@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import NodeSettingsModal from "./NodeSettingsModal";
+import PlaygroundSandboxTestModal from "./PlaygroundSandboxTestModal";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -34,11 +35,13 @@ import {
   PlaygroundGraphContext,
   OpenNodeSettingsContext,
   DetachHandleContext,
+  FlushSaveContext,
 } from "./flowContext";
 import { playgroundNodeTypes } from "./flowNodes";
 import { loadFlow, saveFlow } from "./flowStorage";
 import { migrateFlowPayload, makeVarKeyFromId } from "./flowMigrate";
 import PlaygroundAssistantChat from "./PlaygroundAssistantChat";
+import { validatePlaygroundGraph } from "./playgroundGraphValidation";
 
 import "./playground.css";
 
@@ -61,11 +64,44 @@ const initialNodes = () => [
       scheduleRepeat: "none",
       webhookSecretRef: "",
       entryPriority: 0,
+      playgroundAudienceScope: "all",
+      playgroundAudiencePhones: [],
       audienceBroadcastGroupId: "",
       campaignScheduledFor: "",
     },
   },
 ];
+
+function normalizeTemplateMetaStatus(rawStatus) {
+  const status = String(rawStatus || "").trim().toLowerCase();
+  if (!status) return "unknown";
+  if (status === "approved") return "approved";
+  if (status === "rejected") return "rejected";
+  if (
+    status === "pending" ||
+    status === "pending_review" ||
+    status === "in_review"
+  ) {
+    return "pending_review";
+  }
+  return "unknown";
+}
+
+function templateIdentityKey(template) {
+  const name = String(template?.name || "").trim();
+  const language = String(template?.language || "").trim();
+  if (!name || !language) return "";
+  return `${name}||${language}`;
+}
+
+function templateIdentityKeyFromNode(node) {
+  const selected = String(node?.data?.selectedTemplateKey || "").trim();
+  if (selected) return selected;
+  const name = String(node?.data?.templateName || "").trim();
+  const language = String(node?.data?.templateLanguage || "").trim();
+  if (!name || !language) return "";
+  return `${name}||${language}`;
+}
 
 function defaultDataForType(type) {
   switch (type) {
@@ -78,6 +114,8 @@ function defaultDataForType(type) {
         scheduleRepeat: "none",
         webhookSecretRef: "",
         entryPriority: 0,
+        playgroundAudienceScope: "all",
+        playgroundAudiencePhones: [],
         audienceBroadcastGroupId: "",
         campaignScheduledFor: "",
       };
@@ -89,9 +127,19 @@ function defaultDataForType(type) {
         templateName: "",
         templateLanguage: "",
         variableValues: {},
+        templateStatus: "unknown",
       };
     case "gemini":
-      return { hint: "", systemPrompt: "", intents: [] };
+      return {
+        hint: "",
+        systemPrompt: "",
+        intents: [],
+        clarifyOnUnknown: true,
+        maxClarifyAttempts: 3,
+        useEmbeddingSimilarity: false,
+        embeddingSimilarityThreshold: 0.62,
+        structuredMemory: true,
+      };
     case "interactiveNode":
       return {
         body: "",
@@ -118,7 +166,11 @@ function defaultDataForType(type) {
     case "delayNode":
       return { duration: "5", unit: "s" };
     case "waitUntilNode":
-      return { until: "", timezoneNote: "" };
+      return {
+        until: "",
+        untilFromVarKey: "",
+        timezoneNote: "Europe/Paris",
+      };
     case "timeWindowNode":
       return {
         activeDays: ["1", "2", "3", "4", "5"],
@@ -162,6 +214,7 @@ function FlowEditorInner({ accountId }) {
   const [flowsLoading, setFlowsLoading] = useState(true);
   const [clipboardBlocks, setClipboardBlocks] = useState(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
+  const [showSandboxTest, setShowSandboxTest] = useState(false);
   const [copyTargetAccount, setCopyTargetAccount] = useState("");
   const [copySubgraphOnly, setCopySubgraphOnly] = useState(false);
   const [accountsList, setAccountsList] = useState([]);
@@ -186,10 +239,39 @@ function FlowEditorInner({ accountId }) {
     accountIdRef.current = accountId;
   }, [accountId]);
 
+  // Empreinte du contenu logique (data) par nœud — pas la position. Sinon les champs hors
+  // varKey/template (condition, routes, intents, body, etc.) ne font pas évoluer les dérivés
+  // (liste de variables, etc.) alors que le texte sur le canevas peut sembler à jour.
+  // Réutilise la même chaîne si seules les positions changent (glisser-déposer).
+  const nodeDataFingerprintRef = useRef("");
+  const nodeDataFingerprint = useMemo(() => {
+    let next;
+    try {
+      next = nodes
+        .map((n) => `${n.id}|${JSON.stringify(n.data ?? {})}`)
+        .join("\n");
+    } catch {
+      next = nodes
+        .map(
+          (n) =>
+            `${n.id}|${n.type}|${n.data?.varKey || ""}|${n.data?.templateName || ""}|${n.data?.selectedTemplateKey || ""}`
+        )
+        .join("\n");
+    }
+    if (next === nodeDataFingerprintRef.current) {
+      return nodeDataFingerprintRef.current;
+    }
+    nodeDataFingerprintRef.current = next;
+    return next;
+  }, [nodes]);
+
   const openNodeSettings = useCallback((nodeId) => {
     if (nodeId && typeof nodeId === "string") setSettingsNodeId(nodeId);
   }, []);
 
+  // Dépendre de `nodes` (pas seulement du fingerprint) : le fingerprint n’inclut pas les champs
+  // du formulaire (dates, textes, etc.). Sinon le modal garde une référence de nœud périmée et
+  // les inputs contrôlés « sautent » à chaque frappe.
   const settingsNode = useMemo(
     () =>
       settingsNodeId
@@ -198,32 +280,16 @@ function FlowEditorInner({ accountId }) {
     [nodes, settingsNodeId]
   );
 
+  const graphIssues = useMemo(
+    () => validatePlaygroundGraph(nodes, edges),
+    [nodes, edges]
+  );
+
   useEffect(() => {
-    if (settingsNodeId && !nodes.some((n) => n.id === settingsNodeId)) {
+    if (settingsNodeId && !nodesRef.current.some((n) => n.id === settingsNodeId)) {
       setSettingsNodeId(null);
     }
   }, [nodes, settingsNodeId]);
-
-  useEffect(() => {
-    if (!accountId) return;
-    let cancelled = false;
-    setTemplatesLoading(true);
-    listTemplates(accountId)
-      .then((res) => {
-        if (cancelled) return;
-        const list = res?.data?.data ?? res?.data ?? [];
-        setTemplates(Array.isArray(list) ? list : []);
-      })
-      .catch(() => {
-        if (!cancelled) setTemplates([]);
-      })
-      .finally(() => {
-        if (!cancelled) setTemplatesLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accountId]);
 
   const applyGraph = useCallback(
     (g) => {
@@ -239,7 +305,8 @@ function FlowEditorInner({ accountId }) {
       const migrated = migrateFlowPayload(raw);
       const hasNodeList = Array.isArray(migrated.nodes);
       setNodes(hasNodeList ? migrated.nodes : initialNodes());
-      setEdges(Array.isArray(migrated.edges) ? migrated.edges : []);
+      const rawEdges = Array.isArray(migrated.edges) ? migrated.edges : [];
+      setEdges(rawEdges.map(({ animated: _a, ...e }) => e));
     },
     [setNodes, setEdges]
   );
@@ -345,28 +412,82 @@ function FlowEditorInner({ accountId }) {
     return () => window.removeEventListener("pagehide", onUnload);
   }, [flushPlaygroundSave]);
 
-  useEffect(() => {
-    if (
-      !accountId ||
-      !activeFlowId ||
-      !hydratedRef.current ||
-      flowsLoading ||
-      !allowSaveRef.current
-    )
-      return;
+  const scheduleSave = useCallback(() => {
+    const aid = accountIdRef.current;
+    const fid = activeFlowIdRef.current;
+    if (!aid || !fid || !hydratedRef.current || !allowSaveRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      const g = { nodes, edges, v: 2 };
-      updatePlaygroundFlow(activeFlowId, { graph: g })
-        .then(() => saveFlow(accountId, g))
+      const g = { nodes: nodesRef.current, edges: edgesRef.current, v: 2 };
+      updatePlaygroundFlow(fid, { graph: g })
+        .then(() => saveFlow(aid, g))
         .catch((err) => {
           console.error("playground autosave failed", err);
           setPublishStatus("Erreur sauvegarde - vérifiez la connexion");
           setTimeout(() => setPublishStatus(null), 5000);
         });
-    }, 450);
-    return () => clearTimeout(saveTimerRef.current);
-  }, [nodes, edges, activeFlowId, accountId, flowsLoading]);
+    }, 600);
+  }, []);
+
+  useEffect(() => {
+    if (!accountId) return;
+    let cancelled = false;
+
+    const syncTemplateStatuses = async () => {
+      try {
+        const res = await listTemplates(accountId, { limit: 500 });
+        if (cancelled) return;
+        const raw = res?.data?.data ?? res?.data ?? [];
+        const allTemplates = Array.isArray(raw) ? raw : [];
+        setTemplates(allTemplates);
+
+        const statusByKey = new Map();
+        allTemplates.forEach((tpl) => {
+          const key = templateIdentityKey(tpl);
+          if (!key) return;
+          statusByKey.set(key, normalizeTemplateMetaStatus(tpl.status));
+        });
+
+        let changed = false;
+        setNodes((prev) =>
+          prev.map((node) => {
+            if (node.type !== "sendTemplate") return node;
+            const key = templateIdentityKeyFromNode(node);
+            if (!key) return node;
+            const currentStatus = node.data?.templateStatus || "unknown";
+            const fromMeta = statusByKey.get(key);
+            // Ne pas rétrograder un template "en revue" vers "missing" si Meta n'a
+            // pas encore renvoyé son état (latence / cache / propagation API).
+            const nextStatus =
+              fromMeta ||
+              (currentStatus === "pending_review" ? "pending_review" : "missing");
+            if (currentStatus === nextStatus) return node;
+            changed = true;
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                templateStatus: nextStatus,
+              },
+            };
+          })
+        );
+        if (changed) scheduleSave();
+      } catch (_) {
+        // Silent: keep last known statuses if Meta is temporarily unreachable.
+      } finally {
+        if (!cancelled) setTemplatesLoading(false);
+      }
+    };
+
+    setTemplatesLoading(true);
+    void syncTemplateStatuses();
+    const intervalId = window.setInterval(syncTemplateStatuses, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [accountId, setNodes, scheduleSave]);
 
   const switchFlow = useCallback(
     async (newId) => {
@@ -417,8 +538,9 @@ function FlowEditorInner({ accountId }) {
             : node
         )
       );
+      scheduleSave();
     },
-    [setNodes]
+    [setNodes, scheduleSave]
   );
 
   const deleteNode = useCallback(
@@ -434,8 +556,9 @@ function FlowEditorInner({ accountId }) {
       setEdges((eds) =>
         eds.filter((e) => e.source !== id && e.target !== id)
       );
+      scheduleSave();
     },
-    [setNodes, setEdges]
+    [setNodes, setEdges, scheduleSave]
   );
 
   const varListItems = useMemo(() => {
@@ -473,27 +596,53 @@ function FlowEditorInner({ accountId }) {
         };
       })
       .filter(Boolean);
-  }, [nodes]);
+    // `nodes` vient du rendu courant ; on se fie à nodeDataFingerprint pour ne pas recalculer au drag.
+  }, [nodeDataFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps -- nodes aligné quand l’empreinte data change
+
+  const handleNodesChange = useCallback(
+    (changes) => {
+      onNodesChange(changes);
+      const hasNonPositionChange = changes.some((c) => c.type !== "position");
+      if (hasNonPositionChange) scheduleSave();
+    },
+    [onNodesChange, scheduleSave]
+  );
+
+  const handleEdgesChange = useCallback(
+    (changes) => {
+      onEdgesChange(changes);
+      scheduleSave();
+    },
+    [onEdgesChange, scheduleSave]
+  );
+
+  const onNodeDragStop = useCallback(() => {
+    scheduleSave();
+  }, [scheduleSave]);
 
   const onConnect = useCallback(
-    (params) =>
-      setEdges((eds) => addEdge({ ...params, animated: true }, eds)),
-    [setEdges]
+    (params) => {
+      setEdges((eds) => addEdge(params, eds));
+      scheduleSave();
+    },
+    [setEdges, scheduleSave]
   );
 
   const onReconnect = useCallback(
     (oldEdge, newConnection) => {
       setEdges((eds) => reconnectEdge(oldEdge, newConnection, eds));
+      scheduleSave();
     },
-    [setEdges]
+    [setEdges, scheduleSave]
   );
 
   const onReconnectEnd = useCallback(
     (_evt, edge, _handleType, connectionState) => {
       if (connectionState?.isValid === true) return;
       setEdges((eds) => eds.filter((e) => e.id !== edge.id));
+      scheduleSave();
     },
-    [setEdges]
+    [setEdges, scheduleSave]
   );
 
   const detachAtHandle = useCallback(
@@ -509,8 +658,9 @@ function FlowEditorInner({ accountId }) {
           return !(e.source === nodeId && sh === hid);
         })
       );
+      scheduleSave();
     },
-    [setEdges]
+    [setEdges, scheduleSave]
   );
 
   const addNode = useCallback(
@@ -529,8 +679,9 @@ function FlowEditorInner({ accountId }) {
           data: { varKey, ...defaultDataForType(type) },
         },
       ]);
+      scheduleSave();
     },
-    [setNodes]
+    [setNodes, scheduleSave]
   );
 
   const exportJson = useCallback(() => {
@@ -548,6 +699,7 @@ function FlowEditorInner({ accountId }) {
     if (!accountId || !activeFlowId) return;
     setPublishStatus("…");
     try {
+      await flushPlaygroundSave();
       await setPlaygroundFlowDefault(activeFlowId);
       await saveBotProfile(accountId, {
         published_playground_flow: { nodes, edges, v: 2 },
@@ -561,7 +713,7 @@ function FlowEditorInner({ accountId }) {
         e?.response?.data?.detail || e?.message || "Erreur publication"
       );
     }
-  }, [accountId, activeFlowId, nodes, edges, refreshFlowsList]);
+  }, [accountId, activeFlowId, nodes, edges, refreshFlowsList, flushPlaygroundSave]);
 
   const persistFlowName = useCallback(async () => {
     if (!activeFlowId || !flowName.trim()) return;
@@ -711,9 +863,9 @@ function FlowEditorInner({ accountId }) {
             const nextNodes = Array.isArray(migrated.nodes)
               ? migrated.nodes
               : initialNodes();
-            const nextEdges = Array.isArray(migrated.edges)
+            const nextEdges = (Array.isArray(migrated.edges)
               ? migrated.edges
-              : [];
+              : []).map(({ animated: _a, ...e }) => e);
             setNodes(nextNodes);
             setEdges(nextEdges);
             if (saveTimerRef.current) {
@@ -748,7 +900,8 @@ function FlowEditorInner({ accountId }) {
   const resetFlow = useCallback(() => {
     setNodes(initialNodes());
     setEdges([]);
-  }, [setNodes, setEdges]);
+    scheduleSave();
+  }, [setNodes, setEdges, scheduleSave]);
 
   const templatesValue = useMemo(
     () => ({ templates, loading: templatesLoading }),
@@ -814,6 +967,18 @@ function FlowEditorInner({ accountId }) {
             title="Définir ce scénario comme défaut du compte pour les réponses automatiques (webhook, mode Playground)."
           >
             Par défaut
+          </button>
+          <button
+            type="button"
+            className="playground-btn playground-btn--compact"
+            disabled={flowsLoading || !activeFlowId}
+            onClick={async () => {
+              await flushPlaygroundSave();
+              setShowSandboxTest(true);
+            }}
+            title="Ouvrir le bac à sable : messages simulés, hors inbox"
+          >
+            Tester le scénario
           </button>
           {publishStatus ? (
             <span
@@ -903,37 +1068,15 @@ function FlowEditorInner({ accountId }) {
             </summary>
             <div className="playground-help-pop__panel">
               <p className="playground-help-pop__p">
-                Reliez les blocs sur le canevas. Le scénario <strong>par défaut</strong> est utilisé
-                par le webhook (mode Playground), sauf si une conversation a un autre scénario
-                choisi dans le chat.
+                Utilisez les nodes en mode minimal: configurez l'essentiel, testez, puis affinez si besoin.
               </p>
               <p className="playground-help-pop__p muted">
-                Plusieurs blocs <strong>Entrée</strong> : ouvrez un bloc pour mots-clés, priorité, ou type{" "}
-                <strong>Campagne planifiée</strong> (groupe + date de lancement du scénario, sans message sur le
-                déclencheur). Molette ou clic droit sur le canevas pour déplacer la vue.
+                Guide complet setup nodes:{" "}
+                <code className="playground-help-pop__code">frontend/docs/playground-node-setup.md</code>
               </p>
               <p className="playground-help-pop__p muted">
-                <strong>Templates &amp; texte</strong> : dans les champs (y compris variables Meta), tu
-                peux utiliser{" "}
-                <code className="playground-help-pop__code">{"{{prenom_client}}"}</code>,{" "}
-                <code className="playground-help-pop__code">{"{{nom_client}}"}</code>,{" "}
-                <code className="playground-help-pop__code">{"{{numero_client}}"}</code> - remplis
-                automatiquement avec le contact WhatsApp de la conversation.
-              </p>
-              <p className="playground-help-pop__p playground-help-pop__p--warn">
-                <strong>Limites moteur (UI vs production)</strong> - certains blocs dessinent des
-                branches que le serveur ne distingue pas : <strong>Horaires</strong> (inside/outside)
-                enchaîne comme un seul chemin ; <strong>Date</strong> (attente calendaire) ne fait pas
-                attendre (seul <strong>Délai</strong> pause réellement en relatif) ; <strong>Logique</strong>{" "}
-                en modes ET/OU ne route pas, et le mode « si » ne lit pas la condition (pas d’IF métier :
-                préférer Routeur, Interactif ou Gemini). Détail :{" "}
+                Référence technique moteur:{" "}
                 <code className="playground-help-pop__code">backend/docs/playground_flow_reference.json</code>.
-              </p>
-              <p className="playground-help-pop__p muted">
-                <strong>Absents aujourd’hui</strong> (vs outils type Make / chatbots classiques) : appel
-                HTTP sortant, nœud « définir variable » hors choix interactif, tags sans handoff (le
-                handoff coupe le bot ; <code className="playground-help-pop__code">tagsText</code> n’est
-                pas appliqué côté serveur), envoi média natif (hors contenu prévu par un template Meta).
               </p>
             </div>
           </details>
@@ -989,6 +1132,30 @@ function FlowEditorInner({ accountId }) {
             Si / sinon
           </button>
         </div>
+
+        {graphIssues.length > 0 ? (
+          <div
+            className="playground-graph-validation"
+            role="region"
+            aria-label="Contrôles du graphe"
+          >
+            <span className="playground-graph-validation__title">
+              {graphIssues.some((x) => x.severity === "error")
+                ? "Problèmes à corriger"
+                : "Suggestions"}
+            </span>
+            <ul className="playground-graph-validation__list">
+              {graphIssues.slice(0, 10).map((issue, i) => (
+                <li
+                  key={i}
+                  className={`playground-graph-validation__item is-${issue.severity}`}
+                >
+                  {issue.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
 
       {showCopyModal ? (
@@ -1041,8 +1208,9 @@ function FlowEditorInner({ accountId }) {
                         <ReactFlow
                           nodes={nodes}
                           edges={edges}
-                          onNodesChange={onNodesChange}
-                          onEdgesChange={onEdgesChange}
+                          onNodesChange={handleNodesChange}
+                          onEdgesChange={handleEdgesChange}
+                          onNodeDragStop={onNodeDragStop}
                           onConnect={onConnect}
                           onReconnect={onReconnect}
                           onReconnectEnd={onReconnectEnd}
@@ -1056,24 +1224,28 @@ function FlowEditorInner({ accountId }) {
                           proOptions={{ hideAttribution: true }}
                           selectionOnDrag
                           panOnDrag={[1, 2]}
+                          nodeDragThreshold={2}
+                          edgesFocusable={false}
                         >
                           <Background gap={18} size={1} />
                           <Controls showZoom showFitView showInteractive={false} />
                           <MiniMap
                             className="playground-minimap"
-                            zoomable
-                            pannable
+                            zoomable={false}
+                            pannable={false}
                           />
                         </ReactFlow>
                       </div>
-                      <NodeSettingsModal
-                        node={settingsNode}
-                        open={Boolean(settingsNodeId && settingsNode)}
-                        onClose={() => setSettingsNodeId(null)}
-                        patchNode={patchNode}
-                        accountId={accountId}
-                        flowId={activeFlowId}
-                      />
+                      <FlushSaveContext.Provider value={flushPlaygroundSave}>
+                        <NodeSettingsModal
+                          node={settingsNode}
+                          open={Boolean(settingsNodeId && settingsNode)}
+                          onClose={() => setSettingsNodeId(null)}
+                          patchNode={patchNode}
+                          accountId={accountId}
+                          flowId={activeFlowId}
+                        />
+                      </FlushSaveContext.Provider>
                     </VarListContext.Provider>
                   </TemplatesContext.Provider>
                 </DeleteNodeContext.Provider>
@@ -1090,6 +1262,15 @@ function FlowEditorInner({ accountId }) {
         disabled={flowsLoading || !activeFlowId}
         getGraphSnapshot={getGraphSnapshot}
         onApplyGraph={applyGraph}
+      />
+      <PlaygroundSandboxTestModal
+        open={showSandboxTest}
+        onClose={() => setShowSandboxTest(false)}
+        accountId={accountId}
+        flowId={activeFlowId}
+        flowName={flowName}
+        graphNodes={nodes}
+        onBeforeOpen={flushPlaygroundSave}
       />
     </div>
   );

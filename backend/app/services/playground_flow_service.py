@@ -34,6 +34,39 @@ def _normalize_graph(g: Any) -> Dict[str, Any]:
     return {"nodes": nodes, "edges": edges, "v": g.get("v", 2)}
 
 
+def find_playground_audience_start_node_id(graph: Any) -> Optional[str]:
+    """Premier nœud start en mode « Campagne planifiée » (playground_audience), ou None."""
+    g = _normalize_graph(graph)
+    for n in g.get("nodes") or []:
+        if not isinstance(n, dict):
+            continue
+        if n.get("type") != "start":
+            continue
+        data = n.get("data") or {}
+        if data.get("triggerType") == "playground_audience":
+            nid = n.get("id")
+            if nid:
+                return str(nid)
+    return None
+
+
+def is_playground_audience_start_node(graph: Any, entry_node_id: str) -> bool:
+    """Vérifie que l'id est un start playground_audience (pour lancement campagne sandbox)."""
+    g = _normalize_graph(graph)
+    nid = str(entry_node_id or "").strip()
+    if not nid:
+        return False
+    nodes_by_id = {
+        str(n["id"]): n
+        for n in g.get("nodes") or []
+        if isinstance(n, dict) and n.get("id")
+    }
+    n = nodes_by_id.get(nid)
+    if not n or n.get("type") != "start":
+        return False
+    return (n.get("data") or {}).get("triggerType") == "playground_audience"
+
+
 async def _invalidate_bot_profile(account_id: str) -> None:
     await invalidate_cache_pattern(f"bot_profile:{account_id}")
 
@@ -440,6 +473,30 @@ async def import_playground_flow_audience(
     }
 
 
+def _resolve_playground_audience_scope(data: dict) -> str:
+    raw = (data.get("playgroundAudienceScope") or "").strip().lower()
+    if raw in ("all", "group", "phones"):
+        return raw
+    if (data.get("audienceBroadcastGroupId") or "").strip():
+        return "group"
+    return "all"
+
+
+def _normalize_playground_audience_phones(raw: Any) -> List[str]:
+    from app.services.conversation_service import normalize_phone_number
+
+    out: List[str] = []
+    if not isinstance(raw, list):
+        return out
+    seen: set = set()
+    for x in raw:
+        n = normalize_phone_number(str(x or "").strip())
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
 def _parse_schedule_datetime(raw: Optional[str]) -> Optional[datetime]:
     if not raw or not str(raw).strip():
         return None
@@ -456,21 +513,21 @@ def _parse_schedule_datetime(raw: Optional[str]) -> Optional[datetime]:
 async def create_scheduled_flow_launch(
     flow_id: str,
     account_id: str,
-    broadcast_group_id: str,
     entry_node_id: str,
     scheduled_for_raw: str,
     created_by: Optional[str] = None,
+    broadcast_group_id_override: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Enregistre un lancement de graphe à une date/heure pour tous les membres du groupe."""
+    """
+    Enregistre un lancement à l’heure indiquée. Cible : groupe, liste de numéros (nœud), ou toutes les conv. (nœud).
+    broadcast_group_id_override : compat API (prioritaire sur le graphe pour le mode groupe).
+    """
     from app.services.broadcast_service import get_broadcast_group
+    from app.services.conversation_service import list_conversation_phones_for_account
 
     flow = await get_flow_by_id(flow_id)
     if not flow or str(flow["account_id"]) != str(account_id):
         raise ValueError("flow_not_found")
-
-    grp = await get_broadcast_group(broadcast_group_id)
-    if not grp or str(grp["account_id"]) != str(account_id):
-        raise ValueError("invalid_broadcast_group")
 
     g = _normalize_graph(flow.get("graph"))
     nodes_by_id = {n["id"]: n for n in g.get("nodes") or [] if n.get("id")}
@@ -491,14 +548,39 @@ async def create_scheduled_flow_launch(
     if sched <= now + timedelta(seconds=5):
         raise ValueError("schedule_time_must_be_future")
 
+    scope = _resolve_playground_audience_scope(data)
+    broadcast_group_id: Optional[str] = None
+    schedule_recipient_phones: Optional[List[str]] = None
+
+    if scope == "group":
+        bg = (broadcast_group_id_override or data.get("audienceBroadcastGroupId") or "").strip()
+        if not bg:
+            raise ValueError("broadcast_group_required")
+        grp = await get_broadcast_group(bg)
+        if not grp or str(grp["account_id"]) != str(account_id):
+            raise ValueError("invalid_broadcast_group")
+        broadcast_group_id = bg
+    elif scope == "phones":
+        schedule_recipient_phones = _normalize_playground_audience_phones(
+            data.get("playgroundAudiencePhones")
+        )
+        if not schedule_recipient_phones:
+            raise ValueError("audience_phones_required")
+    elif scope == "all":
+        schedule_recipient_phones = await list_conversation_phones_for_account(
+            account_id, limit=2000
+        )
+        if not schedule_recipient_phones:
+            raise ValueError("no_conversations_for_account")
+
     if get_pool():
         row = await fetch_one(
             """
             INSERT INTO playground_scheduled_flow_launches (
                 account_id, playground_flow_id, broadcast_group_id, entry_node_id,
-                scheduled_for, schedule_status, created_by
+                scheduled_for, schedule_status, created_by, schedule_recipient_phones
             )
-            VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::timestamptz, 'scheduled', $6::uuid)
+            VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5::timestamptz, 'scheduled', $6::uuid, $7::jsonb)
             RETURNING *
             """,
             account_id,
@@ -507,12 +589,13 @@ async def create_scheduled_flow_launch(
             eid,
             sched,
             created_by,
+            schedule_recipient_phones,
         )
         if not row:
             raise ValueError("insert_failed")
         return dict(row)
 
-    ins = {
+    ins: Dict[str, Any] = {
         "account_id": account_id,
         "playground_flow_id": flow_id,
         "broadcast_group_id": broadcast_group_id,
@@ -520,6 +603,7 @@ async def create_scheduled_flow_launch(
         "scheduled_for": sched.isoformat(),
         "schedule_status": "scheduled",
         "created_by": created_by,
+        "schedule_recipient_phones": schedule_recipient_phones,
     }
     res = await supabase_execute(
         supabase.table("playground_scheduled_flow_launches").insert(ins)
@@ -531,33 +615,70 @@ async def create_scheduled_flow_launch(
 
 async def _claim_next_scheduled_flow_launch(now_utc: datetime) -> Optional[Dict[str, Any]]:
     pool = get_pool()
-    if not pool:
-        return None
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            row = await conn.fetchrow(
-                """
-                WITH cte AS (
-                  SELECT id FROM playground_scheduled_flow_launches
-                  WHERE schedule_status = 'scheduled'
-                    AND scheduled_for <= $1::timestamptz
-                  ORDER BY scheduled_for ASC
-                  LIMIT 1
-                  FOR UPDATE SKIP LOCKED
+    if pool:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    WITH cte AS (
+                      SELECT id FROM playground_scheduled_flow_launches
+                      WHERE schedule_status = 'scheduled'
+                        AND scheduled_for <= $1::timestamptz
+                      ORDER BY scheduled_for ASC
+                      LIMIT 1
+                      FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE playground_scheduled_flow_launches b
+                    SET schedule_status = 'sending'
+                    FROM cte
+                    WHERE b.id = cte.id AND b.schedule_status = 'scheduled'
+                    RETURNING b.*
+                    """,
+                    now_utc,
                 )
-                UPDATE playground_scheduled_flow_launches b
-                SET schedule_status = 'sending'
-                FROM cte
-                WHERE b.id = cte.id AND b.schedule_status = 'scheduled'
-                RETURNING b.*
-                """,
-                now_utc,
-            )
-            return dict(row) if row else None
+                return dict(row) if row else None
+
+    res = await supabase_execute(
+        supabase.table("playground_scheduled_flow_launches")
+        .select("*")
+        .eq("schedule_status", "scheduled")
+        .lte("scheduled_for", now_utc.isoformat())
+        .order("scheduled_for")
+        .limit(1)
+    )
+    if not res.data:
+        return None
+    row = res.data[0]
+    await supabase_execute(
+        supabase.table("playground_scheduled_flow_launches")
+        .update({"schedule_status": "sending"})
+        .eq("id", row["id"])
+        .eq("schedule_status", "scheduled")
+    )
+    return row
+
+
+async def _update_launch_status(launch_id: str, status: str) -> None:
+    if get_pool():
+        await execute(
+            """
+            UPDATE playground_scheduled_flow_launches
+            SET schedule_status = $2
+            WHERE id = $1::uuid
+            """,
+            launch_id,
+            status,
+        )
+    else:
+        await supabase_execute(
+            supabase.table("playground_scheduled_flow_launches")
+            .update({"schedule_status": status})
+            .eq("id", launch_id)
+        )
 
 
 async def process_due_playground_scheduled_launches_once() -> int:
-    """Traite jusqu'à 15 lancements planifiés (pool PG requis)."""
+    """Traite jusqu'à 15 lancements planifiés."""
     from app.services.broadcast_service import get_group_recipients
     from app.services.conversation_service import (
         find_or_create_conversation,
@@ -568,9 +689,6 @@ async def process_due_playground_scheduled_launches_once() -> int:
     )
     from app.services.flow_runtime_service import try_run_playground_flow
 
-    if not get_pool():
-        return 0
-
     now = datetime.now(timezone.utc)
     n = 0
     for _ in range(15):
@@ -580,10 +698,23 @@ async def process_due_playground_scheduled_launches_once() -> int:
         launch_id = str(row["id"])
         flow_id = str(row["playground_flow_id"])
         account_id = str(row["account_id"])
-        group_id = str(row["broadcast_group_id"])
+        group_id = row.get("broadcast_group_id")
+        extra_phones = row.get("schedule_recipient_phones")
         entry_node_id = str(row["entry_node_id"])
         try:
-            recipients = await get_group_recipients(group_id)
+            recipients: List[Dict[str, Any]]
+            if extra_phones:
+                if isinstance(extra_phones, str):
+                    extra_phones = json.loads(extra_phones)
+                if not isinstance(extra_phones, list):
+                    extra_phones = []
+                recipients = [{"phone_number": p} for p in extra_phones if p]
+            elif group_id:
+                recipients = await get_group_recipients(str(group_id))
+            else:
+                await _update_launch_status(launch_id, "failed")
+                n += 1
+                continue
             for rec in recipients:
                 phone = (rec.get("phone_number") or "").strip()
                 if not phone:
@@ -613,25 +744,11 @@ async def process_due_playground_scheduled_launches_once() -> int:
                     scheduled_flow_launch=True,
                     launch_entry_node_id=entry_node_id,
                 )
-            await execute(
-                """
-                UPDATE playground_scheduled_flow_launches
-                SET schedule_status = 'done'
-                WHERE id = $1::uuid
-                """,
-                launch_id,
-            )
+            await _update_launch_status(launch_id, "done")
             n += 1
         except Exception:
             logger.exception("playground scheduled flow launch failed id=%s", launch_id)
-            await execute(
-                """
-                UPDATE playground_scheduled_flow_launches
-                SET schedule_status = 'failed'
-                WHERE id = $1::uuid
-                """,
-                launch_id,
-            )
+            await _update_launch_status(launch_id, "failed")
             n += 1
     return n
 

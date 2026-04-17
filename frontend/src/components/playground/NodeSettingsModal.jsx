@@ -19,7 +19,7 @@ const TITLES = {
   start: "Déclencheur",
   sendText: "Message",
   sendTemplate: "Template",
-  gemini: "Gemini",
+  gemini: "Bloc IA (Gemini)",
   interactiveNode: "Interactif",
   routerNode: "Routeur",
   handoffNode: "Handoff",

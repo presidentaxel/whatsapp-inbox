@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,6 +27,8 @@ from app.core.retry import retry_on_gemini_transient
 
 logger = logging.getLogger("uvicorn.error").getChild("bot.gemini")
 logger.setLevel(logging.INFO)
+
+_BOT_CONFIDENCE_MIN_THRESHOLD = 0.72
 
 
 def _normalize_profile(row: Dict[str, Any], account_id: str) -> Dict[str, Any]:
@@ -254,6 +257,37 @@ async def generate_bot_reply(
         logger.info("Gemini skip: empty user message for %s", conversation_id)
         return None
 
+    payload = await generate_bot_reply_with_confidence(
+        conversation_id=conversation_id,
+        account_id=account_id,
+        latest_user_message=latest_user_message,
+        contact_name=contact_name,
+    )
+    return payload.get("reply")
+
+
+async def generate_bot_reply_with_confidence(
+    conversation_id: str,
+    account_id: str,
+    latest_user_message: str,
+    contact_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not settings.GEMINI_API_KEY:
+        return {
+            "reply": None,
+            "confidence": 0.0,
+            "confidence_reasons": ["GEMINI_API_KEY absent côté serveur."],
+            "qa_queries_used": [],
+        }
+    latest_user_message = (latest_user_message or "").strip()
+    if not latest_user_message:
+        return {
+            "reply": None,
+            "confidence": 0.0,
+            "confidence_reasons": ["Message utilisateur vide."],
+            "qa_queries_used": [],
+        }
+
     # Récupérer le profil (avec cache)
     profile = await get_bot_profile(account_id)
     knowledge_text = _build_knowledge_text(profile, contact_name)
@@ -317,10 +351,9 @@ async def generate_bot_reply(
         "- Tu n'inventes jamais de données, même si la question est proche de sujets couverts.\n"
         "\n"
         "Gestion des informations manquantes :\n"
-        "- Si la question de l'utilisateur nécessite une information absente ou insuffisante dans le PLAYBOOK, "
-        "tu ne réponds pas à la question et tu réponds uniquement : "
-        "\"Je me renseigne auprès d'un collègue et je reviens vers vous au plus vite\".\n"
-        "- Tu ne dis jamais que tu ne sais pas ou que l'information n'existe pas.\n"
+        "- Si des informations sont manquantes, réponds de manière prudente, factuelle et concise.\n"
+        "- Si les données semblent contradictoires, signale sobrement qu'une vérification humaine est utile.\n"
+        "- N'invente jamais de prix, délais, disponibilités ou conditions absents des sources.\n"
         "\n"
         "Contenus non textuels :\n"
         "- Si l'utilisateur envoie une image, une vidéo, un audio ou tout contenu non textuel, tu réponds : "
@@ -344,9 +377,12 @@ async def generate_bot_reply(
     logger.info(f"🔍 [GEMINI DEBUG] Using model: {settings.GEMINI_MODEL}")
 
     qa_block = ""
+    qa_matches: List[Dict[str, Any]] = []
+    qa_queries_used: List[str] = []
     try:
-        from app.services.qa_service import search_similar_qa, format_qa_context
-        qa_matches = await search_similar_qa(account_id, latest_user_message, limit=5)
+        from app.services.qa_service import format_qa_context
+        qa_queries_used = await _build_related_qa_queries(account_id, latest_user_message)
+        qa_matches = await _search_similar_qa_multi_query(account_id, qa_queries_used, per_query_limit=5, final_limit=8)
         qa_block = format_qa_context(qa_matches)
     except Exception as _qa_exc:
         logger.debug("bot reply: QA RAG lookup skipped: %s", _qa_exc)
@@ -468,12 +504,212 @@ async def generate_bot_reply(
                     conversation_id,
                     len(text),
                 )
-                return text
+                confidence, reasons = _compute_bot_confidence(
+                    knowledge_text=knowledge_text,
+                    qa_matches=qa_matches,
+                    user_message=latest_user_message,
+                    generated_reply=text,
+                )
+                logger.info(
+                    "🔍 [BOT CONFIDENCE] conversation=%s confidence=%.2f reasons=%s qa_queries=%s qa_count=%d",
+                    conversation_id,
+                    confidence,
+                    reasons,
+                    qa_queries_used,
+                    len(qa_matches),
+                )
+                return {
+                    "reply": text,
+                    "confidence": confidence,
+                    "confidence_reasons": reasons,
+                    "qa_queries_used": qa_queries_used,
+                }
             else:
                 logger.warning(f"🔍 [GEMINI DEBUG] Candidate {idx} part {part_idx} has no text: {part}")
 
     logger.warning(f"❌ Gemini returned no usable candidates for conversation {conversation_id}. Full response: {json.dumps(data, indent=2)[:1000]}")
-    return None
+    return {
+        "reply": None,
+        "confidence": 0.0,
+        "confidence_reasons": ["Gemini n'a pas renvoyé de texte exploitable."],
+        "qa_queries_used": qa_queries_used,
+    }
+
+
+async def _build_related_qa_queries(account_id: str, user_message: str) -> List[str]:
+    base = (user_message or "").strip()
+    if not base:
+        return []
+    seen = set()
+    queries: List[str] = []
+    for item in [base, _normalize_short_query(base)]:
+        t = (item or "").strip()
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            queries.append(t)
+    gemini_queries = await _generate_related_queries_with_gemini(account_id, base)
+    for q in gemini_queries:
+        k = q.lower().strip()
+        if k and k not in seen:
+            seen.add(k)
+            queries.append(q.strip())
+    return queries[:6]
+
+
+async def _generate_related_queries_with_gemini(account_id: str, user_message: str) -> List[str]:
+    if not settings.GEMINI_API_KEY:
+        return []
+    model = settings.GEMINI_MODEL
+    endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    instruction = (
+        "Tu reçois une question client WhatsApp en français.\n"
+        "Génère 4 reformulations de recherche Q&A, courtes, orientées base de connaissances.\n"
+        "Contraintes:\n"
+        "- une reformulation par ligne\n"
+        "- pas de numérotation\n"
+        "- pas de guillemets\n"
+        "- français uniquement\n"
+        "- garder les entités (marque, modèle, produit)\n"
+        "Retourne uniquement les lignes de requêtes."
+    )
+    payload = {
+        "system_instruction": {"role": "system", "parts": [{"text": instruction}]},
+        "contents": [{"role": "user", "parts": [{"text": user_message}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 256,
+        },
+    }
+    try:
+        data = await gemini_circuit_breaker.call_async(
+            _call_gemini_api, endpoint, payload, f"qa-expand-{account_id}"
+        )
+    except Exception as exc:
+        logger.debug("QA query expansion skipped: %s", exc)
+        return []
+    out: List[str] = []
+    for c in data.get("candidates") or []:
+        for part in (c.get("content") or {}).get("parts") or []:
+            txt = (part.get("text") or "").strip()
+            if not txt:
+                continue
+            for line in txt.splitlines():
+                q = line.strip(" -\t\r\n")
+                if len(q) >= 3:
+                    out.append(q)
+    return out[:4]
+
+
+def _normalize_short_query(text: str) -> str:
+    t = " ".join((text or "").split())
+    if not t:
+        return ""
+    t = re.sub(r"\bmodel\s*([0-9]+)\b", r"model \1", t, flags=re.IGNORECASE)
+    t = t.replace("tesla 3", "tesla model 3")
+    return t
+
+
+async def _search_similar_qa_multi_query(
+    account_id: str,
+    queries: List[str],
+    *,
+    per_query_limit: int = 5,
+    final_limit: int = 8,
+) -> List[Dict[str, Any]]:
+    from app.services.qa_service import search_similar_qa
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for q in queries:
+        if not q.strip():
+            continue
+        rows = await search_similar_qa(account_id, q, limit=per_query_limit)
+        for row in rows:
+            rid = str(row.get("id") or "")
+            if not rid:
+                continue
+            existing = by_id.get(rid)
+            sim_new = float(row.get("similarity") or 0.0)
+            sim_old = float(existing.get("similarity") or 0.0) if existing else -1.0
+            if not existing or sim_new > sim_old:
+                by_id[rid] = row
+    merged = list(by_id.values())
+    merged.sort(key=lambda x: float(x.get("similarity") or 0.0), reverse=True)
+    return merged[:final_limit]
+
+
+def _extract_prices_eur(text: str) -> List[float]:
+    vals: List[float] = []
+    for m in re.finditer(r"(\d+(?:[.,]\d+)?)\s*€", text or "", flags=re.IGNORECASE):
+        raw = m.group(1).replace(",", ".")
+        try:
+            vals.append(float(raw))
+        except ValueError:
+            continue
+    return vals
+
+
+def _compute_bot_confidence(
+    *,
+    knowledge_text: str,
+    qa_matches: List[Dict[str, Any]],
+    user_message: str,
+    generated_reply: str,
+) -> Tuple[float, List[str]]:
+    reasons: List[str] = []
+    # Base quality
+    kb_body = (knowledge_text or "").replace("```PLAYBOOK", "").replace("```", "").strip()
+    has_kb = kb_body and kb_body.lower() != "aucune information fournie."
+    qa_count = len(qa_matches or [])
+    avg_sim = 0.0
+    if qa_count:
+        sims = [float(x.get("similarity") or 0.0) for x in qa_matches]
+        avg_sim = sum(sims) / len(sims)
+    confidence = 0.2
+    if has_kb:
+        confidence += 0.22
+        reasons.append("Playbook présent.")
+    else:
+        reasons.append("Playbook vide.")
+    if qa_count:
+        confidence += min(0.4, qa_count * 0.09)
+        confidence += min(0.18, max(0.0, avg_sim - 0.3))
+        reasons.append(f"{qa_count} Q&A trouvés (similarité moyenne {avg_sim:.2f}).")
+    else:
+        reasons.append("Aucun Q&A pertinent trouvé.")
+
+    # Data consistency: conflicts between playbook and Q&A prices.
+    kb_prices = _extract_prices_eur(kb_body)
+    qa_prices: List[float] = []
+    for qa in qa_matches:
+        qa_prices.extend(_extract_prices_eur((qa.get("answer") or "")))
+    unique_kb = sorted({round(v, 2) for v in kb_prices})
+    unique_qa = sorted({round(v, 2) for v in qa_prices})
+    if unique_qa and len(unique_qa) > 1:
+        confidence -= 0.18
+        reasons.append(f"Q&A contradictoires sur les prix ({unique_qa}).")
+    if unique_kb and unique_qa:
+        if set(unique_kb) != set(unique_qa):
+            confidence -= 0.22
+            reasons.append(f"Incohérence prix Playbook {unique_kb} vs Q&A {unique_qa}.")
+    # Penalize generic fallback-like answer.
+    low_info_markers = (
+        "je me renseigne auprès d'un collègue",
+        "je reviens vers vous",
+    )
+    if any(m in (generated_reply or "").lower() for m in low_info_markers):
+        confidence -= 0.2
+        reasons.append("Réponse générée peu informative.")
+    # Mention coverage: if user asks price and answer has no euro amount, lower confidence.
+    asks_price = any(k in (user_message or "").lower() for k in ("prix", "coût", "combien", "tarif"))
+    if asks_price and not _extract_prices_eur(generated_reply or ""):
+        confidence -= 0.18
+        reasons.append("Question tarifaire sans prix explicite dans la réponse.")
+    confidence = max(0.0, min(1.0, confidence))
+    if confidence >= _BOT_CONFIDENCE_MIN_THRESHOLD:
+        reasons.append("Confiance suffisante pour envoi automatique.")
+    else:
+        reasons.append("Confiance insuffisante, escalade humain recommandée.")
+    return confidence, reasons
 
 
 async def generate_flow_gemini_keyword(
@@ -482,6 +718,8 @@ async def generate_flow_gemini_keyword(
     user_text: str,
     system_prompt: str,
     hint: Optional[str] = None,
+    *,
+    recent_user_context: Optional[str] = None,
 ) -> Optional[str]:
     """
     Appel Gemini « routeur » : une seule réponse courte (mot-clé), pour les nœuds Gemini du playground.
@@ -499,6 +737,13 @@ async def generate_flow_gemini_keyword(
         instruction = f"{base}\n\nTexte de l'utilisateur :\n{user_text}"
     if hint:
         instruction = f"{instruction}\n\nConsigne complémentaire :\n{hint.strip()}"
+    rc = (recent_user_context or "").strip()
+    if rc:
+        instruction = (
+            f"{instruction}\n\n"
+            "Messages utilisateur récents sur ce fil (contexte, ne pas citer mot pour mot) :\n"
+            f"{rc[:1200]}"
+        )
 
     generation_config: Dict[str, Any] = {
         "temperature": 0.1,
@@ -557,7 +802,9 @@ async def generate_flow_gemini_keyword(
         for part in parts:
             text = (part.get("text") or "").strip()
             if text:
-                return text.split()[0] if text else None
+                # Toute la réponse (pas seul le 1er mot) : le routeur peut renvoyer une phrase ;
+                # _gemini_pick fait une correspondance par sous-chaîne sur les intentions.
+                return text
     return None
 
 
@@ -1202,6 +1449,12 @@ def _validate_playground_assist_graph(g: Dict[str, Any]) -> bool:
         seen.add(nid)
         if ntype not in _PLAYGROUND_ASSIST_NODE_TYPES:
             return False
+        if ntype == "interactiveNode":
+            idata = n.get("data") or {}
+            if not isinstance(idata, dict):
+                return False
+            if _interactive_node_illegal_meta_template_fields(idata):
+                return False
         pos = n.get("position")
         if not isinstance(pos, dict):
             return False
@@ -1219,6 +1472,59 @@ def _validate_playground_assist_graph(g: Dict[str, Any]) -> bool:
         if not s or not t or s not in seen or t not in seen:
             return False
     return True
+
+
+def _interactive_node_illegal_meta_template_fields(data: Dict[str, Any]) -> bool:
+    """
+    True si interactiveNode abuse des champs réservés aux templates Meta.
+    Le moteur n'envoie PAS de template depuis interactiveNode : il faut sendTemplate.
+    """
+    if not isinstance(data, dict):
+        return False
+    if data.get("templateName") or data.get("templateLanguage") or data.get("selectedTemplateKey"):
+        return True
+    uk = str(data.get("uiKind") or "").strip().lower()
+    if uk in ("template", "sendtemplate", "meta_template"):
+        return True
+    return False
+
+
+def _coerce_send_template_node_data(data: Dict[str, Any]) -> None:
+    """Normalise timeout et quick replies pour sendTemplate (souvent mal nommés par le LLM)."""
+    if not isinstance(data, dict):
+        return
+    ts = data.pop("timeoutSeconds", None)
+    if ts is not None and ts != "":
+        try:
+            sec = float(ts)
+            if sec > 0 and not str(data.get("timeoutDuration") or "").strip():
+                data["timeoutDuration"] = str(int(sec))
+                data["timeoutUnit"] = "s"
+        except (TypeError, ValueError):
+            pass
+    qr = data.get("quickReplyButtons")
+    if not isinstance(qr, list) or not qr:
+        ch = data.get("choices")
+        if isinstance(ch, list) and ch:
+            out: List[Dict[str, Any]] = []
+            for i, c in enumerate(ch):
+                if not isinstance(c, dict):
+                    continue
+                title = _first_nonempty_str(
+                    c.get("title"),
+                    c.get("text"),
+                    c.get("label"),
+                )
+                if title:
+                    out.append(
+                        {
+                            "type": "QUICK_REPLY",
+                            "text": title,
+                            "id": str(c.get("id") or f"qr_{i}"),
+                        }
+                    )
+            if out:
+                data["quickReplyButtons"] = out
 
 
 def _coerce_send_text_node_data(data: Dict[str, Any]) -> None:
@@ -1291,6 +1597,61 @@ def _coerce_router_node_data(data: Dict[str, Any]) -> None:
             return
 
 
+def _coerce_interactive_node_data(data: Dict[str, Any]) -> None:
+    """Normalise les champs interactiveNode que Gemini invente souvent."""
+    if not data.get("body"):
+        for key in ("bodyText", "text", "message", "content"):
+            v = data.get(key)
+            if isinstance(v, str) and v.strip():
+                data["body"] = v.strip()
+                break
+    if not data.get("uiKind"):
+        it = data.get("interactiveType") or data.get("type_interactive") or ""
+        data["uiKind"] = "list" if "list" in str(it).lower() else "buttons"
+    if not isinstance(data.get("choices"), list) or not data["choices"]:
+        for key in ("buttons", "options", "sections", "items"):
+            raw = data.get(key)
+            if isinstance(raw, list) and raw:
+                choices = []
+                for idx, item in enumerate(raw):
+                    if isinstance(item, str) and item.strip():
+                        choices.append({"id": f"btn_{idx}", "title": item.strip()})
+                    elif isinstance(item, dict):
+                        title = ""
+                        for tk in ("title", "text", "label", "name", "value"):
+                            v = item.get(tk)
+                            if isinstance(v, str) and v.strip():
+                                title = v.strip()
+                                break
+                        if title:
+                            choices.append({"id": item.get("id") or f"btn_{idx}", "title": title})
+                if choices:
+                    data["choices"] = choices
+                    break
+
+
+_TEMPLATE_STATUS_ALLOWED = frozenset(
+    {"unknown", "missing", "pending_review", "approved", "rejected"}
+)
+
+
+def _partition_playground_tool_calls(
+    tool_calls: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Sépare les appels create_template (confirmation utilisateur requise) des autres skills."""
+    safe: List[Dict[str, Any]] = []
+    pending_create: List[Dict[str, Any]] = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        name = (tc.get("skill") or tc.get("name") or "").strip()
+        if name == "create_template":
+            pending_create.append(tc)
+        else:
+            safe.append(tc)
+    return safe, pending_create
+
+
 def _coerce_playground_assist_graph_data(g: Dict[str, Any]) -> None:
     """Post-traitement des graphes proposés par l’assistant (noms de champs fréquemment erronés)."""
     nodes = g.get("nodes")
@@ -1306,8 +1667,47 @@ def _coerce_playground_assist_graph_data(g: Dict[str, Any]) -> None:
             n["data"] = data
         if ntype == "sendText":
             _coerce_send_text_node_data(data)
+        elif ntype == "sendTemplate":
+            _coerce_send_template_node_data(data)
+            ts = data.get("templateStatus")
+            if ts not in _TEMPLATE_STATUS_ALLOWED:
+                data["templateStatus"] = "unknown"
         elif ntype == "routerNode":
             _coerce_router_node_data(data)
+        elif ntype == "interactiveNode":
+            _coerce_interactive_node_data(data)
+        elif ntype == "gemini":
+            intents = data.get("intents")
+            if isinstance(intents, list):
+                for intent in intents:
+                    if not isinstance(intent, dict):
+                        continue
+                    if not intent.get("keyword"):
+                        kw = intent.get("match") or intent.get("value") or intent.get("text") or ""
+                        if isinstance(kw, str) and kw.strip():
+                            intent["keyword"] = kw.strip()
+                    if not intent.get("label"):
+                        intent["label"] = intent.get("keyword") or intent.get("match") or ""
+
+    node_map = {n["id"]: n for n in nodes if isinstance(n, dict) and n.get("id")}
+    edges = g.get("edges")
+    if isinstance(edges, list):
+        for e in edges:
+            if not isinstance(e, dict):
+                continue
+            src_id = e.get("source")
+            src_node = node_map.get(src_id) if src_id else None
+            if not src_node:
+                continue
+            sh = e.get("sourceHandle")
+            stype = src_node.get("type")
+            if stype == "interactiveNode" and sh and sh not in (None, "timeout"):
+                e["sourceHandle"] = None
+            elif stype == "sendTemplate" and sh and sh not in (None, "timeout"):
+                e["sourceHandle"] = None
+            elif stype in ("sendText", "delayNode", "waitUntilNode", "start", "handoffNode"):
+                if sh:
+                    e["sourceHandle"] = None
 
 
 async def generate_playground_assist_reply(
@@ -1318,20 +1718,73 @@ async def generate_playground_assist_reply(
     graph: Dict[str, Any],
     messages: List[Dict[str, str]],
     mode: str = "agent",
+    approve_tool_calls: Optional[List[Dict[str, Any]]] = None,
+    execution_phase: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Assistant éditeur Playground : mode « ask » (Q&R / analyse, sans graphe) ou « agent » (peut proposer un graphe complet).
+    Assistant éditeur Playground avec skills (tool_calls) et todo-list.
+    Boucle multi-tour : Gemini peut demander des skills, le backend les exécute et relance.
+    Les appels create_template sont différés jusqu'à confirmation (approve_tool_calls).
     """
     if not settings.GEMINI_API_KEY:
-        return {"reply": "GEMINI_API_KEY n’est pas configurée côté serveur.", "graph": None}
+        return {
+            "reply": "GEMINI_API_KEY n’est pas configurée côté serveur.",
+            "graph": None,
+            "todo": None,
+            "skills_used": None,
+            "pending_tool_calls": None,
+        }
 
     from app.services.playground_flow_service import _normalize_graph
+    from app.services.playground_skills import get_skills_prompt_section, execute_tool_calls
+    from app.services.account_service import get_account_by_id
 
     norm = _normalize_graph(graph)
     graph_json = json.dumps(norm, ensure_ascii=False)
 
+    account = await get_account_by_id(account_id) or {}
+    pre_skills_used: list = []
+
+    messages_work: List[Dict[str, Any]] = [m for m in messages if isinstance(m, dict)]
+    if approve_tool_calls:
+        if not isinstance(approve_tool_calls, list) or not approve_tool_calls:
+            return {
+                "reply": "Aucun outil à exécuter (approve_tool_calls vide).",
+                "graph": None,
+                "todo": None,
+                "skills_used": None,
+                "pending_tool_calls": None,
+            }
+        for tc in approve_tool_calls[:5]:
+            if not isinstance(tc, dict):
+                continue
+            sn = (tc.get("skill") or tc.get("name") or "").strip()
+            if sn != "create_template":
+                return {
+                    "reply": (
+                        "Seule la création de template Meta (create_template) peut être confirmée "
+                        "via ce flux. Utilise l’assistant normalement pour les autres actions."
+                    ),
+                    "graph": None,
+                    "todo": None,
+                    "skills_used": None,
+                    "pending_tool_calls": None,
+                }
+        approve_results = await execute_tool_calls(approve_tool_calls[:5], account)
+        pre_skills_used = [r["skill"] for r in approve_results if r.get("skill")]
+        messages_work.append(
+            {
+                "role": "user",
+                "content": (
+                    "L'utilisateur a confirmé dans l'interface la création du ou des message templates "
+                    "sur Meta. Résultat d'exécution (ne pas re-demander confirmation pour ces créations) :\n"
+                    + json.dumps(approve_results, ensure_ascii=False)
+                ),
+            }
+        )
+
     hist: List[Dict[str, Any]] = []
-    for m in messages[-_PLAYGROUND_ASSIST_MAX_MESSAGES:]:
+    for m in messages_work[-_PLAYGROUND_ASSIST_MAX_MESSAGES:]:
         if not isinstance(m, dict):
             continue
         role = str(m.get("role") or "user").strip().lower()
@@ -1344,7 +1797,13 @@ async def generate_playground_assist_reply(
             hist.append({"role": "user", "parts": [{"text": content}]})
 
     if not hist:
-        return {"reply": "Envoie un message pour commencer.", "graph": None}
+        return {
+            "reply": "Envoie un message pour commencer.",
+            "graph": None,
+            "todo": None,
+            "skills_used": None,
+            "pending_tool_calls": None,
+        }
 
     fn = (flow_name or "").strip() or "(sans nom)"
     fid = flow_id or "-"
@@ -1353,6 +1812,10 @@ async def generate_playground_assist_reply(
     if assist_mode not in ("ask", "agent"):
         assist_mode = "agent"
     is_ask = assist_mode == "ask"
+    phase = (execution_phase or "").strip().lower()
+    if phase not in ("", "plan", "execute_step"):
+        phase = ""
+    skills_section = get_skills_prompt_section()
 
     # ── Partie commune : identité + contexte du scénario ouvert ──
     common_ctx = f"""Tu es l'assistant du « Playground » pour le compte {account_id}.
@@ -1377,6 +1840,27 @@ CONNAISSANCES META / WHATSAPP BUSINESS API :
 - Webhook : Meta envoie les messages entrants et statuts via webhook. Le playground s'en occupe automatiquement.
 """
 
+    phase_directive = ""
+    if not is_ask and phase == "plan":
+        phase_directive = """
+
+PHASE D'EXÉCUTION : PLAN
+- Objectif de ce tour : planifier proprement.
+- Priorité : produire/mettre à jour un todo détaillé, ordonné et réaliste.
+- Si des vérifications externes sont nécessaires (templates, groupes, statuts), déclenche les tool_calls utiles.
+- N'essaie pas d'implémenter tout le graphe d'un coup dans cette phase.
+- Si aucun changement de graphe n'est requis à ce stade, renvoie "graph": null.
+"""
+    elif not is_ask and phase == "execute_step":
+        phase_directive = """
+
+PHASE D'EXÉCUTION : EXECUTE_STEP
+- Objectif de ce tour : traiter UNE étape principale de todo.
+- Mets cette étape à "done" (si terminée) et passe la suivante à "in_progress".
+- Garde le todo complet dans la réponse.
+- Limite-toi au minimum de modifications de graphe nécessaires pour cette étape.
+"""
+
     if is_ask:
         system_text = (
             common_ctx
@@ -1389,9 +1873,13 @@ Tu es un assistant conversationnel polyvalent. Tu as une expertise en automatisa
 
 QUAND LA QUESTION PORTE SUR WHATSAPP / LE PLAYGROUND :
 - Explique les concepts (templates, fenêtre 24h, opt-out, catégories, limites…) de façon claire et actionnable.
+- Topologie du graphe : une même sortie (même poignée sourceHandle) ne peut mener qu’à un seul nœud suivant à l’exécution ; plusieurs arêtes depuis la même sortie = seule la première est suivie. Plusieurs arêtes qui arrivent sur un même nœud (chemins qui se rejoignent) est en revanche correct.
+- Bloc IA (Gemini avec intentions) : augmenter **maxClarifyAttempts** (ex. 2–4) permet plusieurs échanges de clarification sur le **même** nœud avant intent-unknown ; la branche intent-unknown doit mener à un handoff ou un message utile, pas à une impasse. Éviter un router trop strict sur texte libre sans étape de compréhension.
+- Nœud Gemini avec intentions : si le routage par mot-clé est ambigu, le moteur peut envoyer une question de précision avant la branche « inconnu » (champs data.clarifyOnUnknown, data.maxClarifyAttempts sur le nœud ; défaut moteur : jusqu’à 3 précisions puis intent-unknown).
 - Donne des conseils stratégiques : quel type de campagne, quand envoyer, comment segmenter, comment respecter les règles Meta.
 - Tu peux décrire la structure d'un scénario en langage naturel, mais tu ne génères JAMAIS de graphe JSON (graph = null toujours).
-- Si l'utilisateur veut construire ou modifier un scénario, suggère-lui de passer en mode Agent.
+- Si l'utilisateur veut construire ou modifier un scénario, tu peux proposer un plan d'étapes dans "todo" (voir format ci-dessous) ; l'interface affichera un bouton pour passer en mode Agent et exécuter ce plan. Tu peux aussi suggérer explicitement le mode Agent.
+- Tu as accès aux skills (list_templates, list_broadcast_groups, etc.) même en mode Ask. Utilise-les pour vérifier les données réelles du compte au lieu de deviner.
 
 QUAND LA QUESTION EST GÉNÉRALE (hors WhatsApp) :
 - Réponds normalement, avec pertinence et clarté.
@@ -1403,9 +1891,17 @@ STYLE :
 - Utilise des listes ou étapes numérotées quand c'est utile.
 - Reste concis sauf si l'utilisateur demande le détail.
 
-FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
-{"reply": "…", "graph": null}
+FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON.
+Exemple sans plan : {"reply": "…", "graph": null, "todo": null, "tool_calls": []}
+Exemple avec plan d'implémentation (graphe toujours null en Ask) :
+{"reply": "…", "graph": null, "todo": [{"id": "1", "label": "Étape concrète", "status": "pending"}], "tool_calls": []}
+
+Règle "todo" en mode ASK :
+- null si aucun plan n'est pertinent.
+- Sinon tableau {"id": string unique, "label": string, "status": "pending"} - une étape = une action sur le scénario. L'UI propose « Continuer en Agent » pour exécuter le plan sur le graphe.
 """
+            + phase_directive
+            + "\n" + skills_section
         )
     else:
         system_text = (
@@ -1423,21 +1919,46 @@ SI LA DEMANDE EST HORS-SUJET (pas liée à WhatsApp, au playground ou à l'autom
 - Mets "graph": null.
 
 TYPES DE NŒUDS AUTORISÉS : start, sendText, sendTemplate, gemini, interactiveNode, routerNode, handoffNode, delayNode, waitUntilNode, timeWindowNode, logicNode.
-Chaque nœud a id (string unique), type, position {x,y}, data (objet selon le type — préserve varKey quand il existe).
+Chaque nœud a id (string unique), type, position {x,y}, data (objet selon le type - préserve varKey quand il existe).
 
 CONTRAT DATA (obligatoire pour que le canevas et le moteur WhatsApp fonctionnent) :
-- sendText : le texte à envoyer est TOUJOURS dans data.body (string). Ne pas utiliser message, text, content ou value — utiliser body.
+
+▌TEMPLATES META (campagnes, relances, hors fenêtre 24h) - À SÉPARER DES MESSAGES SESSION
+- Pour tout premier message « entreprise → client » (groupe de diffusion, relance, offre) : tu DOIS utiliser le nœud **sendTemplate** relié au **start** (audience / lancement planifié : data.triggerType = \"playground_audience\" sur start si pertinent).
+- **INTERDIT** : mettre un template Meta dans **interactiveNode** (pas de data.templateName, pas de uiKind \"template\", pas de variableValues de template sur interactiveNode). Un tel graphe est **rejeté** par le validateur. Les interactiveNode servent uniquement aux **messages session** (texte + boutons/liste) une fois la fenêtre ouverte.
+- **sendTemplate** obligatoire : data.templateName (nom exact), data.templateLanguage (ex. \"fr\"), data.variableValues (ex. {\"1\": \"{{contact.firstName}}\"} pour {{1}} dans le corps Meta).
+- Si le template a des **quick replies** (boutons) côté Meta : remplis **data.quickReplyButtons** avec au moins un objet par bouton, ex. [{\"type\":\"QUICK_REPLY\",\"text\":\"Louer un SUV\",\"id\":\"qr_louer\"}, …]. Le moteur attend ce tableau pour attendre la réponse du client. Les **match** du routerNode en aval doivent reprendre le **texte exact** du bouton (comme renvoyé par WhatsApp).
+- IMPORTANT robustesse métier : même avec des boutons, le client peut répondre hors sujet en texte libre. Pour CHAQUE routerNode derrière un template / interactiveNode, prévois systématiquement une branche **escape** vers une gestion intelligente (gemini ou handoff) au lieu de bloquer sur du binaire strict.
+- Pattern recommandé : quick-reply router (matches exacts) -> route nominale; et escape -> gemini de qualification (sortie contrôlée ex. INTENT_LOUER / INTENT_SAV / HORS_SUJET) -> second router -> réponse adaptée (clarification, reprise de choix, ou transfert humain).
+- **Timeout** après template + quick replies : utilise **data.timeoutDuration** (nombre) + **data.timeoutUnit** parmi \"s\", \"m\", \"h\", \"d\" (ex. 10 min → duration \"10\", unit \"m\"). Ne pas inventer timeoutSeconds seul sans duration ; le post-traitement tente une conversion mais la bonne forme est duration+unit.
+- Branche **timeout** : arête sortante avec sourceHandle **\"timeout\"** vers logicNode (set variable) ou autre, **sans** sendText si tu veux zéro message au client.
+- **Création d’un nouveau template** : si list_templates ne montre pas le modèle voulu, tu DOIS inclure dans la **même** réponse JSON des **tool_calls** avec **create_template** (paramètres complets) pour déclencher le bouton « Confirmer la création » dans l’UI. Ne te contente pas de décrire le template dans \"reply\" sans tool_calls : l’utilisateur n’aura pas la validation. Tant que la création n’est pas confirmée / approuvée Meta, mets **templateStatus** à **\"missing\"** ou **\"pending_review\"** sur le nœud sendTemplate, **jamais** \"approved\" si le template n’existe pas encore sur le compte.
+
+▌MESSAGES SESSION (réponse libre ou choix après ouverture de session)
+- **interactiveNode** : data.uiKind **uniquement** \"buttons\" ou \"list\", data.body, data.choices {id, title}. Pas de champs template Meta ici.
+
+▌ROUTAGE : NE PAS SE LIMITER AU OU/NON BINAIRE SUR TEXTE-LIBRE
+- **routerNode** fait une **égalité** (ou presque) sur le texte entrant : si l’utilisateur peut formuler autrement (« ma voiture fuit » vs « panne »), prévois une **branche escape** qui mène à un **gemini** (sans intents) dont le systemPrompt impose une **sortie contrôlée** sur une seule ligne (ex. mots-clés FIXES : URGENT, NORMAL, LOUER, SAV) stockée dans varKey, puis un **deuxième routerNode** sur ce varKey ; OU un **gemini avec intents** (keywords élargis) et branche intent-unknown → message de clarification ou handoff.
+- Pour les choix **bouton template** / quick reply, le router sur le texte exact des boutons suffit ; pour le **langage naturel** derrière un sendText, combine router + gemini comme ci-dessus.
+
+- sendText : le texte à envoyer est TOUJOURS dans data.body (string). Ne pas utiliser message, text, content ou value - utiliser body.
 - routerNode : data.routes est un tableau d'objets { "label": "…", "match": "…" }. « match » est comparé au message texte entrant (égalité, insensible à la casse). Ordre des branches = indices 0,1,2… Les arêtes sortantes doivent avoir sourceHandle "route-0", "route-1", … pour chaque entrée de routes, et sourceHandle "escape" pour la branche par défaut.
 - start (message entrant) : pour accepter n'importe quel premier message, data.messageMatch = "any". Sinon "contains" / "equals" / "regex" avec data.messageKeyword rempli.
 - gemini (sans intents) : appelle Gemini avec data.systemPrompt et STOCKE la réponse dans data.varKey (ex. "reponse_ia"). CE NŒUD N'ENVOIE PAS de message. Il FAUT un sendText après avec data.body = "{{reponse_ia}}" pour envoyer la réponse au client.
-- gemini (avec intents) : classifie le message et route vers intent-0, intent-1, … ou intent-unknown. Chaque branche DOIT aboutir à un nœud qui envoie.
-- sendTemplate : data.templateName (nom exact du template Meta), data.variableValues (objet clé/valeur pour les variables du template).
-- interactiveNode : data.interactiveType ("button" ou "list"), data.bodyText, data.buttons ou data.sections.
+- gemini (avec intents) : classifie le message et route vers intent-0, intent-1, … ou intent-unknown. data.intents = [{keyword: "mot_clé", label: "Libellé"}]. IMPORTANT : chaque intent DOIT avoir un champ "keyword" (pas "match"). Chaque branche DOIT aboutir à un nœud qui envoie. Comportement moteur : data.clarifyOnUnknown (bool, défaut true) et data.maxClarifyAttempts (entier 0–5, défaut 3 côté moteur). Optionnel : data.useEmbeddingSimilarity (bool) + data.embeddingSimilarityThreshold (0,35–0,95, défaut 0,62) : si le mot-clé échoue, similarité sémantique (embeddings Gemini, coût API). data.structuredMemory (bool, défaut true) : journal des intentions dans la variable **flow_structured_notes** (utilisable dans les prompts avec {{flow_structured_notes}}). Variable **flow_recent_user_text** : derniers messages utilisateur concaténés. Si le routage par mot-clé échoue et que clarifyOnUnknown est true, le serveur envoie une courte question de clarification, fixe continueFromNodeId sur CE MÊME nœud Gemini : l’utilisateur peut ainsi rester « sur l’étape IA » plusieurs messages d’affilée jusqu’à épuisement des tentatives, puis seulement bascule sur intent-unknown. **Pour du langage naturel, préfère maxClarifyAttempts à 2, 3 ou 4** (pas seulement 1) afin de laisser le temps de comprendre avant de router. clarifyOnUnknown: false uniquement si tu veux aller tout de suite sur intent-unknown sans clarification. data.toneInstructions pour le ton des questions de clarification (courtes, humaines, sans jargon).
+- handoffNode : data.assignAgent (optionnel), data.internalMessage (note interne), data.tagsText (optionnel). Transfert la conversation à un agent humain.
 
-RÈGLE CRITIQUE DE CHAÎNAGE — chaque chemin du graphe DOIT se terminer par un nœud qui ENVOIE un message : sendText, sendTemplate, interactiveNode, ou handoffNode. Les nœuds de traitement interne (routerNode, gemini, delayNode, logicNode, waitUntilNode, timeWindowNode) N'ENVOIENT PAS. Si un chemin se termine par l'un d'eux, le client ne reçoit RIEN.
+▌BLOC IA (GEMINI) — COMPRENDRE AVANT DE ROUTER (RENFORCEMENT)
+- **Ne pas router trop tôt** : un routerNode seul sur une phrase libre échoue dès que le client reformule. Pour toute entrée ambiguë, place plutôt un **gemini avec intentions** en amont (ou une chaîne escape → gemini comme déjà indiqué), avec des **keywords / labels** qui couvrent des formulations variées ; le systemPrompt du nœud doit rappeler le contexte métier pour aider Gemini à extraire le bon mot-clé.
+- **Tours multiples sur le même nœud** : c’est le couple clarifyOnUnknown + maxClarifyAttempts qui permet à l’utilisateur de **rester sur l’étape IA** quelques messages pour clarifier avant intent-unknown. Utilise maxClarifyAttempts ≥ 2 quand le sujet est sensible ou complexe.
+- **Branche intent-unknown = filet de sécurité** : toujours prévoir une suite utile — **handoffNode**, sendText d’excuse + consignes, ou gemini sans intents + sendText. Jamais un intent-unknown qui se termine sans message au client.
+- **Après épuisement des clarifications** : si l’IA ne peut vraiment pas classer, intent-unknown doit mener à une **prise en charge humaine** ou à un message honnête (« je transmets à un conseiller »), pas à un cul-de-sac.
+- **Gemini sans intents** : une passe par message pour produire varKey puis enchaînement ; pour un **dialogue de qualification** avant décision, privilégie **gemini avec intents** + clarification plutôt qu’une suite de plusieurs gemini sans intents mal chaînés.
+
+RÈGLE CRITIQUE DE CHAÎNAGE - chaque chemin du graphe DOIT se terminer par un nœud qui ENVOIE un message : sendText, sendTemplate, interactiveNode, ou handoffNode. Les nœuds de traitement interne (routerNode, gemini, delayNode, logicNode, waitUntilNode, timeWindowNode) N'ENVOIENT PAS. Si un chemin se termine par l'un d'eux, le client ne reçoit RIEN.
 
 RÈGLES META À RESPECTER DANS LES SCÉNARIOS :
-- Si le scénario est initié par l'entreprise (pas en réponse à un message entrant), le premier message DOIT être un sendTemplate (pas un sendText — sinon Meta bloque hors fenêtre 24h).
+- Si le scénario est initié par l'entreprise (pas en réponse à un message entrant), le premier message DOIT être un sendTemplate (pas un sendText - sinon Meta bloque hors fenêtre 24h).
 - Les boutons interactifs : max 3 boutons par message.
 - Les listes interactives : max 10 sections, max 10 lignes par section.
 - Les templates marketing doivent prévoir un moyen d'opt-out.
@@ -1445,9 +1966,13 @@ RÈGLES META À RESPECTER DANS LES SCÉNARIOS :
 Variables disponibles pour sendTemplate.variableValues :
 {prenom_client}, {contact_first_name}, {contact.firstName}, {nom_client}, {contact.name}, {numero_client}, {contact.phone}.
 
-Limites du moteur en production :
-- timeWindowNode / waitUntilNode : le serveur ne gère pas toutes les branches ni l'attente calendaire comme dans l'UI ; seul delayNode fait une vraie pause relative.
-- logicNode : les modes « si » / « et » / « ou » ne font pas d'IF métier côté serveur ; pour du routage par texte préférer routerNode, interactiveNode ou gemini.
+Limites / comportement moteur (production) :
+- UNE SORTIE = UN SUCCESSEUR EFFECTIF : pour un même couple (nœud source, sourceHandle), le moteur ne suit qu’UNE seule arête sortante (la première correspondante). Ne relie JAMAIS deux nœuds différents depuis la même poignée (inside, outside, route-0, escape, intent-0, timeout, etc.) : une seule liaison par sortie nommée. Si tu dois enchaîner deux actions, chaîne-les en série (A → B → C), pas en parallèle depuis la même sortie.
+- CONVERGENCE (plusieurs entrées vers un même nœud) : autorisée — chemins alternatifs qui se rejoignent sur un bloc commun (ex. même Bloc IA après deux branches exclusives) ; ce n’est pas une double exécution du nœud dans un même passage.
+- timeWindowNode : utiliser sourceHandle "inside" / "outside". Si deux arêtes sans poignée, ordre attendu [0] = hors plage, [1] = dans la plage.
+- waitUntilNode : pause réelle jusqu’à la date/heure résolue (sinon enchaînement ou passthrough selon le cas).
+- delayNode : pause relative (voir flowDelayUntil ; plafond ~30 jours).
+- logicNode : mode « si » évalue data.condition ; modes « ou » / « et » = passthrough sans vrai routage multi-sortie.
 
 INTERPRÉTATION DES DEMANDES UTILISATEUR :
 - « texte message: Bonjour » / « envoie Bonjour » → sendText avec data.body = "Bonjour"
@@ -1465,15 +1990,22 @@ EXEMPLES DE GRAPHE :
 - « si salut alors salut sinon Bonjour » →
   routerNode.data.routes = [{"label":"salut","match":"salut"}]
   route-0 -> sendText("salut"), escape -> sendText("Bonjour")
+- « 3 boutons: A, B, C puis réponse différente par choix » →
+  interactiveNode (data.uiKind="buttons", data.body="Choisissez", data.choices=[{id:"btn_0",title:"A"},{id:"btn_1",title:"B"},{id:"btn_2",title:"C"}])
+  -> (handle défaut) routerNode (data.routes=[{label:"A",match:"A"},{label:"B",match:"B"},{label:"C",match:"C"}])
+  route-0 -> sendText("Réponse A"), route-1 -> sendText("Réponse B"), route-2 -> sendText("Réponse C"), escape -> sendText("Autre")
 
 INSTRUCTIONS DE SORTIE :
 - Si tu modifies le graphe : fournis nodes + edges + v:2 dans "graph". Au moins un start, ids stables pour les nœuds conservés, arêtes cohérentes.
 - Si tu ne modifies pas le graphe (explication, question…) : mets "graph": null.
 - "reply" = message court pour l'humain. Ne JAMAIS coller le JSON complet du graphe dans reply.
+- CRÉATION TEMPLATE META : si tu dois appeler create_template dans "tool_calls", le backend N'exécute PAS tant que l'utilisateur n'a pas cliqué « Confirmer » dans l'UI (comme une validation de commande). Explique dans "reply" ce qui sera créé et attends la confirmation. Tu peux combiner create_template avec d'autres skills dans le même tour : les autres s'exécutent, create_template reste en attente jusqu'à confirmation.
 
 FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
-{"reply": "message pour l'utilisateur", "graph": null ou {"v":2,"nodes":[...],"edges":[...]}}
+{"reply": "message pour l'utilisateur", "graph": null ou {"v":2,"nodes":[...],"edges":[...]}, "todo": null ou [...], "tool_calls": []}
 """
+            + phase_directive
+            + "\n" + skills_section
         )
     # Agent : graphe complet en JSON → besoin de beaucoup de tokens de sortie (sinon JSON tronqué → parse KO).
     generation_config_base: Dict[str, Any] = {
@@ -1595,6 +2127,9 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
         return {
             "reply": "Le service IA est temporairement indisponible (circuit ouvert). Réessaie dans quelques instants.",
             "graph": None,
+            "todo": None,
+            "skills_used": None,
+            "pending_tool_calls": None,
         }
     except httpx.TimeoutException:
         logger.warning(
@@ -1608,22 +2143,142 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
                 "Réessaie : si le scénario est très grand, demande une question courte ou un changement ciblé."
             ),
             "graph": None,
+            "todo": None,
+            "skills_used": None,
+            "pending_tool_calls": None,
         }
     except Exception as exc:
         logger.error("Playground assist Gemini failed: %s", exc, exc_info=True)
-        return {"reply": _user_visible_gemini_failure(exc), "graph": None}
-
-    raw_text = _playground_assist_collect_model_text(data)
-    finish_reason = _playground_assist_finish_reason(data)
-
-    parsed, partial_json = _playground_assist_parse_model_payload(raw_text)
-    if not isinstance(parsed, dict):
         return {
-            "reply": _playground_assist_fallback_reply(
-                raw_text, finish_reason=finish_reason
-            ),
+            "reply": _user_visible_gemini_failure(exc),
             "graph": None,
+            "todo": None,
+            "skills_used": None,
+            "pending_tool_calls": None,
         }
+
+    # ── Multi-turn skill loop (max 3 rounds) ──
+    _MAX_SKILL_ROUNDS = 3
+    last_todo: Optional[list] = None
+    skills_used: list = []
+    frozen_pending_create: List[Dict[str, Any]] = []
+    last_skill_results: List[Dict[str, Any]] = []
+
+    for _round in range(_MAX_SKILL_ROUNDS):
+        raw_text = _playground_assist_collect_model_text(data)
+        finish_reason = _playground_assist_finish_reason(data)
+
+        parsed, partial_json = _playground_assist_parse_model_payload(raw_text)
+        if not isinstance(parsed, dict):
+            return {
+                "reply": _playground_assist_fallback_reply(
+                    raw_text, finish_reason=finish_reason
+                ),
+                "graph": None,
+                "todo": last_todo,
+                "skills_used": (pre_skills_used + skills_used) or None,
+                "pending_tool_calls": frozen_pending_create or None,
+            }
+
+        td = parsed.get("todo")
+        if isinstance(td, list) and len(td) > 0:
+            last_todo = td
+
+        tool_calls = parsed.get("tool_calls")
+        if not tool_calls or not isinstance(tool_calls, list) or not tool_calls:
+            break
+
+        safe, p_create = _partition_playground_tool_calls(tool_calls)
+        if p_create:
+            frozen_pending_create = p_create
+
+        logger.info(
+            "Playground assist round %d: tool_calls total=%d safe=%d pending_create=%d",
+            _round + 1,
+            len(tool_calls),
+            len(safe),
+            len(p_create),
+        )
+
+        if p_create and not safe:
+
+            def _early_reply_and_graph() -> tuple[str, Optional[Dict[str, Any]]]:
+                r = parsed.get("reply")
+                rs = r.strip() if isinstance(r, str) else ""
+                rs = _playground_assist_clean_reply_string(rs)
+                if not rs:
+                    rs = _playground_assist_clean_reply_string((raw_text or "").strip()) or "Réponse vide."
+                if partial_json:
+                    rs += (
+                        "\n\n_(Le JSON de réponse était incomplet - souvent parce que le graphe a été coupé en cours de génération. "
+                        "Tu peux relire le texte ci-dessus ; le bouton « Appliquer sur le canevas » n\u2019est pas disponible pour ce tour. "
+                        "Réessaie avec une modification plus cible ou en mode Ask.)_"
+                    )
+                og: Optional[Dict[str, Any]] = None
+                if not is_ask and not partial_json:
+                    g = parsed.get("graph")
+                    if g is not None and isinstance(g, dict):
+                        merged = _normalize_graph(g)
+                        if _validate_playground_assist_graph(merged):
+                            _coerce_playground_assist_graph_data(merged)
+                            og = merged
+                        else:
+                            rs += (
+                                "\n\n_(Un graphe proposé était présent mais invalide - il n\u2019a pas été renvoyé pour application.)_"
+                            )
+                return rs, og
+
+            er, eg = _early_reply_and_graph()
+            merged_skills = [*(pre_skills_used or []), *(skills_used or [])]
+            return {
+                "reply": er,
+                "graph": eg,
+                "todo": last_todo,
+                "skills_used": merged_skills or None,
+                "pending_tool_calls": p_create,
+            }
+
+        skill_results = await execute_tool_calls(safe, account)
+        last_skill_results = skill_results
+        skills_used.extend(r["skill"] for r in skill_results if r.get("skill"))
+
+        tool_result_text = (
+            "Résultats des skills demandés :\n"
+            + json.dumps(skill_results, ensure_ascii=False, indent=2)
+        )
+        hist.append({"role": "model", "parts": [{"text": raw_text}]})
+        hist.append({"role": "user", "parts": [{"text": tool_result_text}]})
+
+        payload_v1beta["contents"] = hist
+        payload_v1["contents"] = [flat_system] + hist
+
+        try:
+            data = await gemini_circuit_breaker.call_async(
+                _call_gemini_api,
+                endpoint_v1beta,
+                payload_v1beta,
+                conv_key,
+                read_timeout=assist_timeout,
+            )
+        except Exception as exc_loop:
+            logger.error("Playground assist skill loop Gemini error: %s", exc_loop, exc_info=True)
+            merged_skills = list(dict.fromkeys([*(pre_skills_used or []), *(skills_used or [])]))
+            fallback_reply = (
+                _user_visible_gemini_failure(exc_loop)
+                + "\n\nLes vérifications demandées ont bien été exécutées avant l'erreur."
+            )
+            if last_skill_results:
+                fallback_reply += (
+                    "\nRésultats skills (résumé JSON) :\n"
+                    + json.dumps(last_skill_results, ensure_ascii=False)
+                )
+            return {
+                "reply": fallback_reply,
+                "graph": None,
+                "todo": last_todo,
+                "skills_used": merged_skills or None,
+                "pending_tool_calls": frozen_pending_create or None,
+            }
 
     reply = parsed.get("reply")
     reply_str = reply.strip() if isinstance(reply, str) else ""
@@ -1631,10 +2286,14 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
     if not reply_str:
         reply_str = _playground_assist_clean_reply_string((raw_text or "").strip()) or "Réponse vide."
 
+    td_final = parsed.get("todo")
+    if isinstance(td_final, list) and len(td_final) > 0:
+        last_todo = td_final
+
     if partial_json:
         reply_str += (
             "\n\n_(Le JSON de réponse était incomplet - souvent parce que le graphe a été coupé en cours de génération. "
-            "Tu peux relire le texte ci-dessus ; le bouton « Appliquer sur le canevas » n’est pas disponible pour ce tour. "
+            "Tu peux relire le texte ci-dessus ; le bouton « Appliquer sur le canevas » n\u2019est pas disponible pour ce tour. "
             "Réessaie avec une modification plus cible ou en mode Ask.)_"
         )
 
@@ -1648,7 +2307,16 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
                 out_graph = merged
             else:
                 reply_str += (
-                    "\n\n_(Un graphe proposé était présent mais invalide - il n’a pas été renvoyé pour application.)_"
+                    "\n\n_(Un graphe proposé était présent mais invalide - il n\u2019a pas été renvoyé pour application. "
+                    "Cause fréquente : utilisation d\u2019un interactiveNode comme template Meta (interdit) - utilise sendTemplate + quickReplyButtons ; "
+                    "ou template inexistant sans tool_calls create_template.)_"
                 )
 
-    return {"reply": reply_str, "graph": out_graph}
+    merged_skills = list(dict.fromkeys([*(pre_skills_used or []), *(skills_used or [])]))
+    return {
+        "reply": reply_str,
+        "graph": out_graph,
+        "todo": last_todo,
+        "skills_used": merged_skills or None,
+        "pending_tool_calls": frozen_pending_create or None,
+    }

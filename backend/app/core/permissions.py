@@ -522,17 +522,22 @@ async def load_current_user_async(supabase_user: Any) -> CurrentUser:
     role_map: Dict[str, Dict[str, Any]] = {}
     perms_by_role: Dict[str, Set[str]] = defaultdict(set)
     if role_ids:
-        roles_rows = await fetch_all(
-            "SELECT id, slug, name FROM app_roles WHERE id = ANY($1::uuid[])",
+        combined = await fetch_all(
+            """
+            SELECT r.id AS role_id, r.slug, r.name,
+                   rp.permission_code
+            FROM app_roles r
+            LEFT JOIN role_permissions rp ON rp.role_id = r.id
+            WHERE r.id = ANY($1::uuid[])
+            """,
             role_ids,
         )
-        role_map = {str(r["id"]): r for r in roles_rows}
-        perms_rows = await fetch_all(
-            "SELECT role_id, permission_code FROM role_permissions WHERE role_id = ANY($1::uuid[])",
-            role_ids,
-        )
-        for p in perms_rows:
-            perms_by_role[str(p["role_id"])].add(p["permission_code"])
+        for row in combined:
+            rid = str(row["role_id"])
+            if rid not in role_map:
+                role_map[rid] = {"id": row["role_id"], "slug": row["slug"], "name": row["name"]}
+            if row["permission_code"]:
+                perms_by_role[rid].add(row["permission_code"])
 
     permissions = PermissionMatrix()
     for row in user_roles:

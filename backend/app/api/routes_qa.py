@@ -99,12 +99,27 @@ async def update_qa(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     await _require_account(account_id, current_user)
-    all_items = await list_qa_pairs(account_id, limit=500, offset=0)
-    found = None
-    for item in all_items:
-        if str(item.get("id")) == qa_id:
-            found = item
-            break
+
+    from app.core.pg import get_pool, fetch_one
+    from app.core.db import supabase, supabase_execute
+
+    pool = get_pool()
+    if pool:
+        found = await fetch_one(
+            "SELECT id, question, answer, category, source FROM qa_pairs WHERE id = $1::uuid AND account_id = $2::uuid",
+            qa_id, account_id,
+        )
+        found = dict(found) if found else None
+    else:
+        res = await supabase_execute(
+            supabase.table("qa_pairs")
+            .select("id, question, answer, category, source")
+            .eq("id", qa_id)
+            .eq("account_id", account_id)
+            .limit(1)
+        )
+        found = res.data[0] if res.data else None
+
     if not found:
         raise HTTPException(status_code=404, detail="qa_pair_not_found")
     result = await upsert_qa_pair(

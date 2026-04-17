@@ -748,6 +748,10 @@ async def get_message_template_by_id(
         raise
 
 
+_templates_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_TEMPLATES_CACHE_TTL = 300.0
+
+
 async def list_message_templates(
     waba_id: str,
     access_token: str,
@@ -757,7 +761,15 @@ async def list_message_templates(
     """
     Liste les templates de messages
     GET /{WABA-ID}/message_templates
+    Cached for 5min when fetching the first page (no cursor).
     """
+    if after is None:
+        cached = _templates_cache.get(waba_id)
+        if cached:
+            expires_at, data = cached
+            if time.monotonic() < expires_at:
+                return data
+
     client = await get_http_client()
     
     params = {
@@ -773,7 +785,19 @@ async def list_message_templates(
         params=params
     )
     response.raise_for_status()
-    return response.json()
+    result = response.json()
+
+    if after is None:
+        _templates_cache[waba_id] = (time.monotonic() + _TEMPLATES_CACHE_TTL, result)
+
+    return result
+
+
+def invalidate_templates_cache(waba_id: str | None = None):
+    if waba_id:
+        _templates_cache.pop(waba_id, None)
+    else:
+        _templates_cache.clear()
 
 
 _named_body_params_cache: Dict[Tuple[str, str, str], Tuple[float, Optional[List[str]]]] = {}
@@ -869,6 +893,7 @@ async def get_template_named_body_parameter_names(
     return result
 
 
+@retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=6.0)
 async def create_message_template(
     waba_id: str,
     access_token: str,
@@ -948,7 +973,8 @@ async def create_message_template(
     response = await client.post(
         f"{GRAPH_API_BASE}/{waba_id}/message_templates",
         headers={"Authorization": f"Bearer {access_token}"},
-        json=payload
+        json=payload,
+        timeout=httpx.Timeout(connect=5.0, read=30.0, write=20.0, pool=5.0),
     )
     
     # Capturer les détails de l'erreur avant de lever l'exception
@@ -966,7 +992,10 @@ async def create_message_template(
         raise parse_whatsapp_error(response)
     
     response.raise_for_status()
-    return response.json()
+    result = response.json()
+    # Évite de garder un cache stale juste après création.
+    invalidate_templates_cache(waba_id)
+    return result
 
 
 async def delete_message_template(

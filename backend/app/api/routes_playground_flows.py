@@ -5,6 +5,17 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services.account_service import get_account_by_id
+from app.services.conversation_service import (
+    ensure_playground_sandbox_conversation,
+    get_conversation_by_id_fresh,
+    reset_playground_sandbox_session,
+    set_conversation_bot_mode,
+    set_conversation_playground_flow,
+)
+from app.services.message_service import (
+    simulate_playground_campaign_launch,
+    simulate_playground_sandbox_inbound,
+)
 from app.services.bot_service import generate_playground_assist_reply
 from app.services.playground_assist_thread_service import (
     assert_flow_belongs_to_account,
@@ -22,14 +33,312 @@ from app.services.playground_flow_service import (
     create_scheduled_flow_launch,
     delete_flow,
     duplicate_flow,
+    find_playground_audience_start_node_id,
     get_flow_by_id,
     import_playground_flow_audience as run_playground_audience_import,
+    is_playground_audience_start_node,
     list_playground_flows_with_default_flag,
     set_default_flow,
     update_flow,
 )
 
 router = APIRouter()
+
+
+@router.post("/{flow_id}/sandbox-session")
+async def playground_sandbox_session(
+    flow_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Crée ou réinitialise la conversation de test (numéro réservé) pour le scénario."""
+    account_id = payload.get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id_required")
+    acc = await get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    _require_flow_account_access(current_user, account_id)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, account_id):
+        raise HTTPException(status_code=403, detail="permission_denied")
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    if str(row["account_id"]) != str(account_id):
+        raise HTTPException(status_code=400, detail="flow_account_mismatch")
+    conv = await ensure_playground_sandbox_conversation(account_id, flow_id)
+    if not conv:
+        raise HTTPException(status_code=500, detail="sandbox_conversation_failed")
+    return {
+        "conversation_id": str(conv["id"]),
+        "client_number": conv.get("client_number"),
+        "conversation": conv,
+    }
+
+
+@router.post("/{flow_id}/sandbox-reset")
+async def playground_sandbox_reset(
+    flow_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Efface les messages et réinitialise l'état du flux sur la conversation bac à sable."""
+    account_id = payload.get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id_required")
+    acc = await get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    _require_flow_account_access(current_user, account_id)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, account_id):
+        raise HTTPException(status_code=403, detail="permission_denied")
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    if str(row["account_id"]) != str(account_id):
+        raise HTTPException(status_code=400, detail="flow_account_mismatch")
+    conv = await reset_playground_sandbox_session(account_id, flow_id)
+    if not conv:
+        raise HTTPException(status_code=500, detail="sandbox_reset_failed")
+    return {
+        "status": "ok",
+        "conversation_id": str(conv["id"]),
+        "conversation": conv,
+    }
+
+
+@router.post("/{flow_id}/simulate-inbound")
+async def playground_simulate_inbound(
+    flow_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Simule un message entrant (client) pour exécuter le scénario Playground.
+    Les réponses sortantes sont envoyées comme d'habitude via l'API WhatsApp.
+    """
+    account_id = payload.get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id_required")
+    acc = await get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    _require_flow_account_access(current_user, account_id)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, account_id):
+        raise HTTPException(status_code=403, detail="permission_denied")
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    if str(row["account_id"]) != str(account_id):
+        raise HTTPException(status_code=400, detail="flow_account_mismatch")
+
+    message_text = (payload.get("message_text") or "").strip()
+    if not message_text:
+        raise HTTPException(status_code=400, detail="message_text_required")
+
+    conversation_id = payload.get("conversation_id")
+    if not conversation_id:
+        conv = await ensure_playground_sandbox_conversation(account_id, flow_id)
+        if not conv:
+            raise HTTPException(status_code=500, detail="sandbox_conversation_failed")
+        conversation_id = str(conv["id"])
+    else:
+        c = await get_conversation_by_id_fresh(str(conversation_id))
+        if not c or str(c["account_id"]) != str(account_id):
+            raise HTTPException(status_code=400, detail="invalid_conversation")
+        await set_conversation_bot_mode(str(conversation_id), True, "playground")
+        await set_conversation_playground_flow(str(conversation_id), flow_id)
+
+    br = payload.get("button_reply")
+    if isinstance(br, dict) and (br.get("id") or br.get("title")):
+        bid = str(br.get("id") or "").strip()
+        title = str(br.get("title") or message_text).strip()
+        wa_message = {
+            "type": "interactive",
+            "interactive": {
+                "type": "button_reply",
+                "button_reply": {"id": bid or title, "title": title},
+            },
+        }
+        mt = "interactive"
+    else:
+        wa_message = {"type": "text", "text": {"body": message_text}}
+        mt = "text"
+
+    flow_trace: list = []
+    try:
+        await simulate_playground_sandbox_inbound(
+            str(conversation_id),
+            message_text,
+            message_type=mt,
+            wa_message=wa_message,
+            flow_trace=flow_trace,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
+
+    return {
+        "status": "ok",
+        "conversation_id": str(conversation_id),
+        "flow_trace": flow_trace,
+    }
+
+
+@router.post("/{flow_id}/simulate-inbound-batch")
+async def playground_simulate_inbound_batch(
+    flow_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Enchaîne plusieurs messages simulés sur la même conversation bac à sable (jeu de phrases de test).
+    """
+    account_id = payload.get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id_required")
+    acc = await get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    _require_flow_account_access(current_user, account_id)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, account_id):
+        raise HTTPException(status_code=403, detail="permission_denied")
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    if str(row["account_id"]) != str(account_id):
+        raise HTTPException(status_code=400, detail="flow_account_mismatch")
+
+    phrases_raw = payload.get("phrases")
+    if not isinstance(phrases_raw, list):
+        raise HTTPException(status_code=400, detail="phrases_required")
+    lines = [str(p).strip() for p in phrases_raw if str(p).strip()][:25]
+    if not lines:
+        raise HTTPException(status_code=400, detail="phrases_empty")
+
+    conversation_id = payload.get("conversation_id")
+    if not conversation_id:
+        conv = await ensure_playground_sandbox_conversation(account_id, flow_id)
+        if not conv:
+            raise HTTPException(status_code=500, detail="sandbox_conversation_failed")
+        conversation_id = str(conv["id"])
+    else:
+        c = await get_conversation_by_id_fresh(str(conversation_id))
+        if not c or str(c["account_id"]) != str(account_id):
+            raise HTTPException(status_code=400, detail="invalid_conversation")
+        await set_conversation_bot_mode(str(conversation_id), True, "playground")
+        await set_conversation_playground_flow(str(conversation_id), flow_id)
+
+    results: List[Dict[str, Any]] = []
+    for line in lines:
+        trace: List[Dict[str, Any]] = []
+        try:
+            await simulate_playground_sandbox_inbound(
+                str(conversation_id),
+                line,
+                message_type="text",
+                wa_message={"type": "text", "text": {"body": line}},
+                flow_trace=trace,
+            )
+            results.append(
+                {"message_text": line, "flow_trace": trace, "ok": True}
+            )
+        except ValueError as ve:
+            results.append(
+                {
+                    "message_text": line,
+                    "flow_trace": trace,
+                    "ok": False,
+                    "error": str(ve),
+                }
+            )
+        except Exception as exc:
+            results.append(
+                {
+                    "message_text": line,
+                    "flow_trace": trace,
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "status": "ok",
+        "conversation_id": str(conversation_id),
+        "results": results,
+    }
+
+
+@router.post("/{flow_id}/simulate-campaign-launch")
+async def playground_simulate_campaign_launch(
+    flow_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Simule un lancement « campagne » (entrée playground_audience) sans message contact,
+    comme process_playground_scheduled_launches / schedule-flow-launch.
+    """
+    account_id = payload.get("account_id")
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id_required")
+    acc = await get_account_by_id(account_id)
+    if not acc:
+        raise HTTPException(status_code=404, detail="account_not_found")
+    _require_flow_account_access(current_user, account_id)
+    if not current_user.permissions.has(PermissionCodes.MESSAGES_SEND, account_id):
+        raise HTTPException(status_code=403, detail="permission_denied")
+    row = await get_flow_by_id(flow_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="flow_not_found")
+    if str(row["account_id"]) != str(account_id):
+        raise HTTPException(status_code=400, detail="flow_account_mismatch")
+
+    graph = row.get("graph")
+    entry_raw = payload.get("entry_node_id")
+    entry_node_id = str(entry_raw).strip() if entry_raw else ""
+    if not entry_node_id:
+        entry_node_id = find_playground_audience_start_node_id(graph) or ""
+    if not entry_node_id:
+        raise HTTPException(
+            status_code=400,
+            detail="no_playground_audience_start",
+        )
+    if not is_playground_audience_start_node(graph, entry_node_id):
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_audience_entry_node",
+        )
+
+    conversation_id = payload.get("conversation_id")
+    if not conversation_id:
+        conv = await ensure_playground_sandbox_conversation(account_id, flow_id)
+        if not conv:
+            raise HTTPException(status_code=500, detail="sandbox_conversation_failed")
+        conversation_id = str(conv["id"])
+    else:
+        c = await get_conversation_by_id_fresh(str(conversation_id))
+        if not c or str(c["account_id"]) != str(account_id):
+            raise HTTPException(status_code=400, detail="invalid_conversation")
+        await set_conversation_bot_mode(str(conversation_id), True, "playground")
+        await set_conversation_playground_flow(str(conversation_id), flow_id)
+
+    flow_trace: list = []
+    try:
+        ok = await simulate_playground_campaign_launch(
+            str(conversation_id),
+            entry_node_id,
+            flow_trace=flow_trace,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
+
+    return {
+        "status": "ok",
+        "conversation_id": str(conversation_id),
+        "entry_node_id": entry_node_id,
+        "flow_ran": bool(ok),
+        "flow_trace": flow_trace,
+    }
 
 
 def _require_flow_account_access(user: CurrentUser, account_id: str) -> None:
@@ -82,6 +391,13 @@ async def playground_flow_assistant(
 
     mode_raw = payload.get("mode")
     mode_str = str(mode_raw).strip().lower() if mode_raw is not None else "agent"
+    phase_raw = payload.get("execution_phase")
+    phase_str = str(phase_raw).strip().lower() if phase_raw is not None else ""
+    if phase_str not in ("", "plan", "execute_step"):
+        raise HTTPException(status_code=400, detail="invalid_execution_phase")
+
+    approve_raw = payload.get("approve_tool_calls")
+    approve_list = approve_raw if isinstance(approve_raw, list) else None
 
     result = await generate_playground_assist_reply(
         account_id=str(account_id),
@@ -90,6 +406,8 @@ async def playground_flow_assistant(
         graph=graph,
         messages=messages,
         mode=mode_str,
+        approve_tool_calls=approve_list,
+        execution_phase=phase_str or None,
     )
     return result
 
@@ -386,21 +704,20 @@ async def post_schedule_flow_launch(
     group_id = payload.get("broadcast_group_id")
     entry_node_id = payload.get("entry_node_id")
     scheduled_for = payload.get("scheduled_for")
-    if not group_id or not str(group_id).strip():
-        raise HTTPException(status_code=400, detail="broadcast_group_id_required")
     if not entry_node_id or not str(entry_node_id).strip():
         raise HTTPException(status_code=400, detail="entry_node_id_required")
     if not scheduled_for or not str(scheduled_for).strip():
         raise HTTPException(status_code=400, detail="scheduled_for_required")
 
     try:
+        gid = str(group_id).strip() if group_id else None
         return await create_scheduled_flow_launch(
             flow_id=flow_id,
             account_id=aid,
-            broadcast_group_id=str(group_id).strip(),
             entry_node_id=str(entry_node_id).strip(),
             scheduled_for_raw=str(scheduled_for).strip(),
             created_by=current_user.id,
+            broadcast_group_id_override=gid or None,
         )
     except ValueError as e:
         code = str(e)

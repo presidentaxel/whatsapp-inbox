@@ -9,13 +9,14 @@ import {
 import {
   summarizeStart,
   summarizeTimeWindow,
+  summarizeWaitUntilCanvas,
   truncate,
   unitLabel,
 } from "./nodeShared";
 
 const handleStyle = { width: 8, height: 8 };
 
-function DetachableHandle({ nodeId, type, id, onDoubleClick, title, ...rest }) {
+const DetachableHandle = memo(function DetachableHandle({ nodeId, type, id, onDoubleClick, title, ...rest }) {
   const detachAt = useContext(DetachHandleContext);
   return (
     <Handle
@@ -38,7 +39,7 @@ function DetachableHandle({ nodeId, type, id, onDoubleClick, title, ...rest }) {
       }}
     />
   );
-}
+});
 
 function NodeDeleteBtn({ id }) {
   const del = useContext(DeleteNodeContext);
@@ -57,7 +58,7 @@ function NodeDeleteBtn({ id }) {
   );
 }
 
-function NodeCompactChrome({
+const NodeCompactChrome = memo(function NodeCompactChrome({
   id,
   selected,
   className,
@@ -110,7 +111,7 @@ function NodeCompactChrome({
       {bottom}
     </div>
   );
-}
+});
 
 function StartNode({ id, data, selected }) {
   const sub = summarizeStart(data);
@@ -168,13 +169,25 @@ function SendTextNode({ id, data, selected }) {
   );
 }
 
+const TEMPLATE_META_LABELS = {
+  unknown: "État Meta ?",
+  missing: "Absent sur Meta",
+  pending_review: "En revue Meta",
+  approved: "Approuvé",
+  rejected: "Rejeté",
+};
+
 function SendTemplateNode({ id, data, selected }) {
   const name =
     data.templateName ||
     (data.selectedTemplateKey || "").split("||")[0] ||
     "-";
   const nBtn = data.quickReplyButtons?.length || 0;
-  const sub = nBtn ? `${truncate(name, 28)} · ${nBtn} btn` : truncate(name, 36);
+  const hasQR = nBtn > 0;
+  const sub = hasQR ? `${truncate(name, 28)} · ${nBtn} btn` : truncate(name, 36);
+  const tStatus = data.templateStatus || "unknown";
+  const metaClass = `pg-node__tpl-meta pg-node__tpl-meta--${tStatus}`;
+  const metaText = TEMPLATE_META_LABELS[tStatus] || tStatus;
   return (
     <NodeCompactChrome
       id={id}
@@ -183,6 +196,24 @@ function SendTemplateNode({ id, data, selected }) {
       badge="Tpl"
       title="Template"
       subtitle={sub}
+      footer={
+        <div className="pg-node__tpl-footer">
+          <span
+            className={metaClass}
+            title="Statut côté WhatsApp / Meta (éditable dans les paramètres du nœud)"
+          >
+            {metaText}
+          </span>
+          {hasQR ? (
+            <div className="pg-node__compact-handles-hint pg-node__compact-handles-hint--split">
+              <span>◀ après réponse</span>
+              <span title="Branche si aucune réponse avant le délai configuré">
+                timeout ▶
+              </span>
+            </div>
+          ) : null}
+        </div>
+      }
       codeShort={data.varKey ? `{{${data.varKey}}}` : null}
       top={
         <DetachableHandle
@@ -194,13 +225,34 @@ function SendTemplateNode({ id, data, selected }) {
         />
       }
       bottom={
-        <DetachableHandle
-          nodeId={id}
-          type="source"
-          position={Position.Bottom}
-          style={handleStyle}
-          isConnectable
-        />
+        hasQR ? (
+          <>
+            <DetachableHandle
+              nodeId={id}
+              type="source"
+              position={Position.Bottom}
+              style={{ ...handleStyle, left: "32%" }}
+              isConnectable
+            />
+            <DetachableHandle
+              nodeId={id}
+              type="source"
+              position={Position.Bottom}
+              id="timeout"
+              style={{ ...handleStyle, left: "68%" }}
+              title="Relance si pas de réponse (délai dans les paramètres)"
+              isConnectable
+            />
+          </>
+        ) : (
+          <DetachableHandle
+            nodeId={id}
+            type="source"
+            position={Position.Bottom}
+            style={handleStyle}
+            isConnectable
+          />
+        )
       }
     />
   );
@@ -210,7 +262,7 @@ function GeminiNode({ id, data, selected }) {
   const intents = Array.isArray(data.intents) ? data.intents : [];
   const intentRows = intents.filter((x) => (x?.keyword || "").trim());
   const hasIntentOut = intentRows.length > 0;
-  let sub = truncate(data.hint, 36) || "Playbook / bot";
+  let sub = truncate(data.hint, 36) || "Gemini dans le scénario";
   if (hasIntentOut) {
     sub = `${intentRows.length} intention(s) · ${sub}`;
   }
@@ -221,7 +273,7 @@ function GeminiNode({ id, data, selected }) {
       selected={selected}
       className="pg-node--gemini"
       badge="IA"
-      title="Gemini"
+      title="Bloc IA"
       subtitle={sub}
       codeShort={data.varKey ? `{{${data.varKey}}}` : null}
       top={
@@ -324,7 +376,7 @@ function WaitUntilNode({ id, data, selected }) {
       className="pg-node--waituntil"
       badge="📅"
       title="Jusqu’à"
-      subtitle={data.until ? data.until.replace("T", " ") : "-"}
+      subtitle={summarizeWaitUntilCanvas(data)}
       codeShort={data.varKey ? `{{${data.varKey}}}` : null}
       top={
         <DetachableHandle nodeId={id}

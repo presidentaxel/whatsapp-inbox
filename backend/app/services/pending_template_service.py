@@ -16,6 +16,75 @@ from app.services.account_service import get_account_by_id
 
 logger = logging.getLogger(__name__)
 
+# Cache of template names known to not exist on Meta (error 132001).
+# Avoids repeatedly calling the API for templates that will never work.
+# Entries expire after 1 hour so a re-created template can be picked up.
+_TEMPLATE_NOT_FOUND_TTL = 3600
+_template_not_found_cache: Dict[str, float] = {}
+
+
+def _is_template_blacklisted(template_name: str) -> bool:
+    import time
+    ts = _template_not_found_cache.get(template_name)
+    if ts is None:
+        return False
+    if time.time() - ts > _TEMPLATE_NOT_FOUND_TTL:
+        _template_not_found_cache.pop(template_name, None)
+        return False
+    return True
+
+
+def _blacklist_template(template_name: str):
+    import time
+    _template_not_found_cache[template_name] = time.time()
+
+
+# --- Polling statut template Meta (check_template_status_async) ---
+TEMPLATE_ASYNC_INITIAL_DELAY_SEC = 60
+TEMPLATE_ASYNC_POLL_INTERVAL_SEC = 300  # 5 minutes
+# Beaucoup d'essais mais fini (~21 jours à pas de 5 min)
+TEMPLATE_ASYNC_MAX_POLL_DAYS = 21
+TEMPLATE_ASYNC_MAX_ATTEMPTS = max(
+    1,
+    int(TEMPLATE_ASYNC_MAX_POLL_DAYS * 24 * 60 * 60 / TEMPLATE_ASYNC_POLL_INTERVAL_SEC),
+)
+
+# Évite plusieurs boucles CHECK-ASYNC concurrentes pour le même message (redémarrages / doublons).
+_active_template_async_polls: set[str] = set()
+
+# Verrou par message_id : plusieurs tâches (periodic check, check async, endpoint manuel…)
+# peuvent appeler send_pending_template en parallèle ; sans verrou, deux coroutines voient
+# wa_message_id NULL et envoient deux fois le même template.
+_template_send_registry_lock = asyncio.Lock()
+_template_send_locks: Dict[str, asyncio.Lock] = {}
+
+
+async def _template_send_lock_for(message_id: str) -> asyncio.Lock:
+    async with _template_send_registry_lock:
+        if message_id not in _template_send_locks:
+            _template_send_locks[message_id] = asyncio.Lock()
+        return _template_send_locks[message_id]
+
+
+def schedule_check_template_status_async(message_id: str) -> None:
+    """Lance au plus une boucle CHECK-ASYNC par message (évite doublons au redémarrage / double insert)."""
+    if message_id in _active_template_async_polls:
+        logger.info(
+            "⏭️ [CHECK-ASYNC] Tâche déjà en cours pour le message %s, pas de doublon",
+            message_id,
+        )
+        return
+
+    _active_template_async_polls.add(message_id)
+
+    async def _runner():
+        try:
+            await check_template_status_async(message_id)
+        finally:
+            _active_template_async_polls.discard(message_id)
+
+    asyncio.create_task(_runner())
+
 
 async def create_and_queue_template(
     conversation_id: str,
@@ -286,7 +355,7 @@ async def create_and_queue_template(
         asyncio.create_task(check_template_status_once(message_id))
         
         # Lancer la vérification périodique en arrière-plan (non bloquant)
-        asyncio.create_task(check_template_status_async(message_id))
+        schedule_check_template_status_async(message_id)
         
         # Vérifier si le message est déjà lu (au cas où il serait lu très rapidement)
         # et nettoyer le template si nécessaire
@@ -663,7 +732,7 @@ async def create_and_queue_image_template(
         asyncio.create_task(check_template_status_once(message_id))
         
         # Lancer la vérification périodique en arrière-plan
-        asyncio.create_task(check_template_status_async(message_id))
+        schedule_check_template_status_async(message_id)
         
         # Vérifier si le message est déjà lu
         message_read = False
@@ -718,25 +787,28 @@ async def check_template_status_once(message_id: str):
     """Fait une vérification unique du statut du template (pour vérification immédiate)"""
     # Attendre 5 secondes pour que Meta synchronise
     logger.info(f"⏳ [CHECK-ONCE] Attente de 5 secondes avant vérification immédiate pour le message {message_id}")
-    print(f"⏳ [CHECK-ONCE] Attente de 5 secondes avant vérification immédiate pour le message {message_id}")
     await asyncio.sleep(5)
     
     try:
         logger.info(f"🔍 [CHECK-ONCE] Vérification immédiate du statut pour le message {message_id}")
-        print(f"🔍 [CHECK-ONCE] Vérification immédiate du statut pour le message {message_id}")
         
         result = await check_and_update_template_status(message_id)
         
         logger.info(f"📊 [CHECK-ONCE] Résultat pour message {message_id}: statut={result.get('status')}")
-        print(f"📊 [CHECK-ONCE] Résultat pour message {message_id}: statut={result.get('status')}")
         
         if result["status"] == "APPROVED":
             logger.info(f"✅ [CHECK-ONCE] Template approuvé immédiatement pour le message {message_id}, envoi en cours...")
-            print(f"✅ [CHECK-ONCE] Template approuvé immédiatement pour le message {message_id}, envoi en cours...")
             await send_pending_template(message_id)
+        elif result["status"] == "NOT_FOUND":
+            logger.warning(
+                f"⚠️ [CHECK-ONCE] Template introuvable pour le message {message_id} - abandon et nettoyage"
+            )
+            await abandon_stale_pending_template(
+                message_id,
+                "Suivi template introuvable (entrée supprimée ou incohérente).",
+            )
         elif result["status"] == "REJECTED":
             logger.warning(f"❌ [CHECK-ONCE] Template rejeté immédiatement pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
-            print(f"❌ [CHECK-ONCE] Template rejeté immédiatement pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
             # Vérifier si c'est une campagne broadcast
             campaign_id = None
             if get_pool():
@@ -760,48 +832,69 @@ async def check_template_status_once(message_id: str):
                 await mark_message_as_failed(message_id, result.get("rejection_reason", "Template rejeté par Meta"))
         else:
             logger.info(f"⏳ [CHECK-ONCE] Template encore en attente pour le message {message_id} (statut: {result.get('status')})")
-            print(f"⏳ [CHECK-ONCE] Template encore en attente pour le message {message_id} (statut: {result.get('status')})")
     except Exception as e:
         logger.error(f"❌ [CHECK-ONCE] Erreur lors de la vérification immédiate pour le message {message_id}: {e}", exc_info=True)
-        print(f"❌ [CHECK-ONCE] Erreur lors de la vérification immédiate pour le message {message_id}: {e}")
 
 
 async def check_template_status_async(message_id: str):
     """Vérifie le statut d'un template en arrière-plan de manière périodique"""
     # Attendre un peu avant la première vérification (Meta peut prendre quelques secondes)
     # On a déjà fait une vérification immédiate, donc on attend plus longtemps ici
-    await asyncio.sleep(60)  # 1 minute après la création
-    
-    max_attempts = 288  # 24h avec vérification toutes les 5 minutes (24*60/5 = 288)
+    await asyncio.sleep(TEMPLATE_ASYNC_INITIAL_DELAY_SEC)
+
+    max_attempts = TEMPLATE_ASYNC_MAX_ATTEMPTS
+
+    logger.info(
+        f"🔄 [CHECK-ASYNC] Début pour le message {message_id} "
+        f"(max {max_attempts} essais ≈ {TEMPLATE_ASYNC_MAX_POLL_DAYS} jours, toutes les {TEMPLATE_ASYNC_POLL_INTERVAL_SEC // 60} min)"
+    )
+    print(
+        f"🔄 [CHECK-ASYNC] Début de la vérification périodique du statut du template pour le message {message_id}"
+    )
+
     attempt = 0
-    
-    logger.info(f"🔄 [CHECK-ASYNC] Début de la vérification périodique du statut du template pour le message {message_id}")
-    print(f"🔄 [CHECK-ASYNC] Début de la vérification périodique du statut du template pour le message {message_id}")
-    
     while attempt < max_attempts:
         try:
-            logger.info(f"🔍 [CHECK-ASYNC] Vérification #{attempt + 1}/{max_attempts} pour le message {message_id}")
-            print(f"🔍 [CHECK-ASYNC] Vérification #{attempt + 1}/{max_attempts} pour le message {message_id}")
-            
+            logger.info(
+                f"🔍 [CHECK-ASYNC] Vérification #{attempt + 1}/{max_attempts} pour le message {message_id}"
+            )
+            print(
+                f"🔍 [CHECK-ASYNC] Vérification #{attempt + 1}/{max_attempts} pour le message {message_id}"
+            )
+
             result = await check_and_update_template_status(message_id)
-            
-            logger.info(f"📊 [CHECK-ASYNC] Résultat pour message {message_id}: statut={result.get('status')}")
-            print(f"📊 [CHECK-ASYNC] Résultat pour message {message_id}: statut={result.get('status')}")
-            
+
+            logger.info(
+                f"📊 [CHECK-ASYNC] Résultat pour message {message_id}: statut={result.get('status')}"
+            )
+            print(
+                f"📊 [CHECK-ASYNC] Résultat pour message {message_id}: statut={result.get('status')}"
+            )
+
             if result["status"] in ["APPROVED", "REJECTED"]:
-                # Terminé
                 if result["status"] == "APPROVED":
-                    logger.info(f"✅ [CHECK-ASYNC] Template approuvé pour le message {message_id}, envoi en cours...")
-                    print(f"✅ [CHECK-ASYNC] Template approuvé pour le message {message_id}, envoi en cours...")
-                    # Envoyer le template
+                    logger.info(
+                        f"✅ [CHECK-ASYNC] Template approuvé pour le message {message_id}, envoi en cours..."
+                    )
+                    print(
+                        f"✅ [CHECK-ASYNC] Template approuvé pour le message {message_id}, envoi en cours..."
+                    )
                     await send_pending_template(message_id)
                 else:
-                    logger.warning(f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
-                    print(f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: {result.get('rejection_reason', 'Raison inconnue')}")
-                    # Vérifier si c'est une campagne broadcast
+                    logger.warning(
+                        f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: "
+                        f"{result.get('rejection_reason', 'Raison inconnue')}"
+                    )
+                    print(
+                        f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: "
+                        f"{result.get('rejection_reason', 'Raison inconnue')}"
+                    )
                     campaign_id = None
                     if get_pool():
-                        row = await fetch_one("SELECT campaign_id FROM pending_template_messages WHERE message_id = $1::uuid LIMIT 1", message_id)
+                        row = await fetch_one(
+                            "SELECT campaign_id FROM pending_template_messages WHERE message_id = $1::uuid LIMIT 1",
+                            message_id,
+                        )
                         if row:
                             campaign_id = row.get("campaign_id")
                     else:
@@ -813,35 +906,72 @@ async def check_template_status_async(message_id: str):
                         )
                         if pending_result.data and len(pending_result.data) > 0:
                             campaign_id = pending_result.data[0].get("campaign_id")
-                    
+
                     if campaign_id:
-                        # Marquer tous les destinataires payants de la campagne comme échoués
-                        await _mark_campaign_as_failed(campaign_id, result.get("rejection_reason", "Template rejeté par Meta"))
+                        await _mark_campaign_as_failed(
+                            campaign_id,
+                            result.get("rejection_reason", "Template rejeté par Meta"),
+                        )
                     else:
-                        await mark_message_as_failed(message_id, result.get("rejection_reason", "Template rejeté par Meta"))
+                        await mark_message_as_failed(
+                            message_id,
+                            result.get("rejection_reason", "Template rejeté par Meta"),
+                        )
                 break
-            elif result["status"] == "NOT_FOUND":
-                logger.warning(f"⚠️ [CHECK-ASYNC] Template non trouvé pour le message {message_id}, arrêt de la vérification")
-                print(f"⚠️ [CHECK-ASYNC] Template non trouvé pour le message {message_id}, arrêt de la vérification")
+            if result["status"] == "NOT_FOUND":
+                logger.warning(
+                    f"⚠️ [CHECK-ASYNC] Template non trouvé pour le message {message_id} - abandon et nettoyage"
+                )
+                print(
+                    f"⚠️ [CHECK-ASYNC] Template non trouvé pour le message {message_id}, arrêt de la vérification"
+                )
+                await abandon_stale_pending_template(
+                    message_id,
+                    "Suivi template introuvable (entrée supprimée ou incohérente).",
+                )
                 break
-            else:
-                logger.info(f"⏳ [CHECK-ASYNC] Template encore en attente pour le message {message_id} (statut: {result.get('status')})")
-                print(f"⏳ [CHECK-ASYNC] Template encore en attente pour le message {message_id} (statut: {result.get('status')})")
-                
+            logger.info(
+                f"⏳ [CHECK-ASYNC] Template encore en attente pour le message {message_id} "
+                f"(statut: {result.get('status')})"
+            )
+            print(
+                f"⏳ [CHECK-ASYNC] Template encore en attente pour le message {message_id} "
+                f"(statut: {result.get('status')})"
+            )
+
         except Exception as e:
-            logger.error(f"❌ [CHECK-ASYNC] Erreur lors de la vérification du statut du template pour {message_id}: {e}", exc_info=True)
-            print(f"❌ [CHECK-ASYNC] Erreur lors de la vérification du statut du template pour {message_id}: {e}")
-        
-        # Attendre 5 minutes avant la prochaine vérification
-        if attempt < max_attempts - 1:  # Ne pas attendre après le dernier essai
-            logger.info(f"⏰ [CHECK-ASYNC] Attente de 5 minutes avant la prochaine vérification pour le message {message_id}")
-            print(f"⏰ [CHECK-ASYNC] Attente de 5 minutes avant la prochaine vérification pour le message {message_id}")
-            await asyncio.sleep(300)  # 5 minutes (au lieu de 30)
+            logger.error(
+                f"❌ [CHECK-ASYNC] Erreur lors de la vérification du statut du template pour {message_id}: {e}",
+                exc_info=True,
+            )
+            print(
+                f"❌ [CHECK-ASYNC] Erreur lors de la vérification du statut du template pour {message_id}: {e}"
+            )
+
+        if attempt < max_attempts - 1:
+            logger.info(
+                f"⏰ [CHECK-ASYNC] Attente de {TEMPLATE_ASYNC_POLL_INTERVAL_SEC // 60} minutes "
+                f"avant la prochaine vérification pour le message {message_id}"
+            )
+            print(
+                f"⏰ [CHECK-ASYNC] Attente de 5 minutes avant la prochaine vérification pour le message {message_id}"
+            )
+            await asyncio.sleep(TEMPLATE_ASYNC_POLL_INTERVAL_SEC)
         attempt += 1
-    
+
     if attempt >= max_attempts:
-        logger.warning(f"⏰ [CHECK-ASYNC] Timeout: Le template pour le message {message_id} n'a pas été approuvé après 24h")
-        print(f"⏰ [CHECK-ASYNC] Timeout: Le template pour le message {message_id} n'a pas été approuvé après 24h")
+        logger.warning(
+            f"⏰ [CHECK-ASYNC] Limite d'essais atteinte ({max_attempts}) pour le message {message_id} "
+            f"(≈ {TEMPLATE_ASYNC_MAX_POLL_DAYS} jours) - abandon"
+        )
+        print(
+            f"⏰ [CHECK-ASYNC] Timeout: Le template pour le message {message_id} n'a pas été approuvé après "
+            f"{TEMPLATE_ASYNC_MAX_POLL_DAYS} jours"
+        )
+        await abandon_stale_pending_template(
+            message_id,
+            f"Délai d'approbation Meta dépassé ({TEMPLATE_ASYNC_MAX_POLL_DAYS} jours).",
+        )
 
 
 async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
@@ -849,7 +979,6 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
     from app.core.db import supabase
     
     logger.info(f"🔍 [CHECK-STATUS] Vérification du statut Meta pour le message {message_id}")
-    print(f"🔍 [CHECK-STATUS] Vérification du statut Meta pour le message {message_id}")
     
     pending = None
     if get_pool():
@@ -881,10 +1010,8 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
             if row_all:
                 status = row_all.get("template_status", "UNKNOWN")
                 logger.info(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
-                print(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
                 return {"status": status}
             logger.warning(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
-            print(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
             return {"status": "NOT_FOUND"}
     else:
         result = await supabase_execute(
@@ -896,7 +1023,6 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
         )
         if not result.data or len(result.data) == 0:
             logger.info(f"⚠️ [CHECK-STATUS] Template non trouvé avec statut PENDING/APPROVED pour le message {message_id}, recherche de tous les statuts...")
-            print(f"⚠️ [CHECK-STATUS] Template non trouvé avec statut PENDING/APPROVED pour le message {message_id}, recherche de tous les statuts...")
             result_all = await supabase_execute(
                 supabase.table("pending_template_messages")
                 .select("*, whatsapp_accounts!inner(waba_id, access_token)")
@@ -906,10 +1032,8 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
             if result_all.data and len(result_all.data) > 0:
                 status = result_all.data[0].get("template_status", "UNKNOWN")
                 logger.info(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
-                print(f"ℹ️ [CHECK-STATUS] Template trouvé avec statut {status} pour le message {message_id}")
                 return {"status": status}
             logger.warning(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
-            print(f"❌ [CHECK-STATUS] Aucun template trouvé pour le message {message_id}")
             return {"status": "NOT_FOUND"}
         pending = result.data[0]
         account_info = pending.get("whatsapp_accounts", {})
@@ -922,7 +1046,6 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
     
     template_name = pending.get("template_name", "inconnu")
     logger.info(f"📋 [CHECK-STATUS] Template trouvé: {template_name} (ID Meta: {pending.get('meta_template_id')}) pour le message {message_id}")
-    print(f"📋 [CHECK-STATUS] Template trouvé: {template_name} (ID Meta: {pending.get('meta_template_id')}) pour le message {message_id}")
     
     # Vérifier le statut auprès de Meta
     try:
@@ -982,7 +1105,6 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
         current_status = pending.get("template_status", "PENDING")
         
         logger.info(f"📊 [CHECK-STATUS] Statut Meta: {meta_status_upper}, Statut base: {current_status} pour le message {message_id}")
-        print(f"📊 [CHECK-STATUS] Statut Meta: {meta_status_upper}, Statut base: {current_status} pour le message {message_id}")
         
         if meta_status_upper == "APPROVED" and current_status != "APPROVED":
             if get_pool():
@@ -997,7 +1119,6 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
                     .eq("message_id", message_id)
                 )
             logger.info(f"✅ [CHECK-STATUS] Template {pending['template_name']} approuvé par Meta (statut mis à jour) pour le message {message_id}")
-            print(f"✅ [CHECK-STATUS] Template {pending['template_name']} approuvé par Meta (statut mis à jour) pour le message {message_id}")
         elif meta_status_upper == "REJECTED" and current_status != "REJECTED":
             reason = template.get("reason", "Rejeté par Meta")
             if get_pool():
@@ -1012,10 +1133,8 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
                     .eq("message_id", message_id)
                 )
             logger.warning(f"❌ [CHECK-STATUS] Template {pending['template_name']} rejeté par Meta: {reason} pour le message {message_id}")
-            print(f"❌ [CHECK-STATUS] Template {pending['template_name']} rejeté par Meta: {reason} pour le message {message_id}")
         elif meta_status_upper == "APPROVED" and current_status == "APPROVED":
             logger.info(f"ℹ️ [CHECK-STATUS] Template {pending['template_name']} déjà marqué comme approuvé pour le message {message_id}")
-            print(f"ℹ️ [CHECK-STATUS] Template {pending['template_name']} déjà marqué comme approuvé pour le message {message_id}")
         
         return {"status": meta_status_upper, "rejection_reason": template.get("reason")}
         
@@ -1076,11 +1195,17 @@ async def cleanup_read_auto_templates():
 
 async def send_pending_template(message_id: str):
     """Envoie un template une fois qu'il est approuvé (message individuel ou campagne broadcast)"""
+    lock = await _template_send_lock_for(message_id)
+    async with lock:
+        await _send_pending_template_unlocked(message_id)
+
+
+async def _send_pending_template_unlocked(message_id: str):
+    """Implémentation réelle de l'envoi ; appeler uniquement via send_pending_template (verrouillé)."""
     from app.core.db import supabase
-    
+
     logger.info(f"📤 [SEND-TEMPLATE] Début de l'envoi du template pour le message {message_id}")
-    print(f"📤 [SEND-TEMPLATE] Début de l'envoi du template pour le message {message_id}")
-    
+
     # Vérifier d'abord si le message n'a pas déjà été envoyé (éviter les doublons)
     if get_pool():
         msg_check = await fetch_one(
@@ -1089,7 +1214,6 @@ async def send_pending_template(message_id: str):
         )
         if msg_check and msg_check.get("wa_message_id"):
             logger.info(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé (wa_message_id: {msg_check['wa_message_id']}), skip")
-            print(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé, skip")
             return
     else:
         msg_check_result = await supabase_execute(
@@ -1100,7 +1224,6 @@ async def send_pending_template(message_id: str):
         )
         if msg_check_result.data and msg_check_result.data[0].get("wa_message_id"):
             logger.info(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé (wa_message_id: {msg_check_result.data[0]['wa_message_id']}), skip")
-            print(f"✅ [SEND-TEMPLATE] Message {message_id} déjà envoyé, skip")
             return
     
     pending = None
@@ -1134,7 +1257,6 @@ async def send_pending_template(message_id: str):
         )
         if not result.data or len(result.data) == 0:
             logger.warning(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
-            print(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
             return
         pending = result.data[0]
         conversation_info = pending.get("conversations", {})
@@ -1148,7 +1270,6 @@ async def send_pending_template(message_id: str):
     
     if not pending:
         logger.warning(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
-        print(f"⚠️ [SEND-TEMPLATE] Aucun template approuvé trouvé pour le message {message_id}")
         return
     
     template_name = pending.get("template_name", "inconnu")
@@ -1167,7 +1288,6 @@ async def send_pending_template(message_id: str):
     # Si c'est une campagne broadcast, envoyer à tous les destinataires
     if campaign_id:
         logger.info(f"📧 [SEND-TEMPLATE] Template approuvé pour campagne broadcast {campaign_id}, envoi à tous les destinataires")
-        print(f"📧 [SEND-TEMPLATE] Template approuvé pour campagne broadcast {campaign_id}, envoi à tous les destinataires")
         await _send_broadcast_template(campaign_id, template_name, phone_number_id, access_token, pending.get("text_content"))
         return
     
@@ -1182,7 +1302,6 @@ async def send_pending_template(message_id: str):
         is_free, _ = await is_within_free_window(conversation_id, skip_cache=True)
         if is_free:
             logger.info(f"✅ [SEND-TEMPLATE] Fenêtre gratuite rouverte pour {conversation_id} - envoi en gratuit et annulation du template")
-            print(f"✅ [SEND-TEMPLATE] Fenêtre gratuite - envoi en mode gratuit, annulation template pour message {message_id}")
             payload = {
                 "conversation_id": conversation_id,
                 "content": text_content,
@@ -1198,13 +1317,35 @@ async def send_pending_template(message_id: str):
                 return
 
     logger.info(f"📋 [SEND-TEMPLATE] Template à envoyer: {template_name} pour le message {message_id}")
-    print(f"📋 [SEND-TEMPLATE] Template à envoyer: {template_name} pour le message {message_id}")
-    
+
+    if _is_template_blacklisted(template_name):
+        logger.warning(f"⛔ [SEND-TEMPLATE] Template '{template_name}' blacklisté, re-création pour message {message_id}")
+        if get_pool():
+            await pg_execute("DELETE FROM pending_template_messages WHERE message_id = $1::uuid", message_id)
+        else:
+            await supabase_execute(
+                supabase.table("pending_template_messages").delete().eq("message_id", message_id)
+            )
+        try:
+            from app.services.template_deduplication import find_or_create_template
+            await find_or_create_template(
+                conversation_id=conversation_id,
+                account_id=pending["account_id"],
+                message_id=message_id,
+                text_content=text_content or pending.get("text_content", ""),
+                campaign_id=campaign_id,
+                created_by_user_id=pending.get("created_by_user_id"),
+            )
+            return
+        except Exception as retry_err:
+            logger.error(f"❌ [SEND-TEMPLATE] Échec re-création après blacklist pour {message_id}: {retry_err}")
+            await mark_message_as_failed(message_id, f"Impossible de créer un nouveau template: {retry_err}")
+            return
+
     to_number = conversation_info.get("client_number")
     
     try:
         logger.info(f"📤 [SEND-TEMPLATE] Envoi du template '{template_name}' vers {to_number} pour le message {message_id}")
-        print(f"📤 [SEND-TEMPLATE] Envoi du template '{template_name}' vers {to_number} pour le message {message_id}")
         
         # Si c'est un template avec image, inclure l'image dans les components
         components = None
@@ -1231,13 +1372,11 @@ async def send_pending_template(message_id: str):
         )
         
         logger.info(f"📥 [SEND-TEMPLATE] Réponse Meta pour le message {message_id}: {response}")
-        print(f"📥 [SEND-TEMPLATE] Réponse Meta pour le message {message_id}: {response}")
         
         # Mettre à jour le message avec le wa_message_id si disponible
         wa_message_id = response.get("messages", [{}])[0].get("id") if response.get("messages") else None
         if wa_message_id:
             logger.info(f"✅ [SEND-TEMPLATE] Message envoyé avec succès! wa_message_id={wa_message_id} pour le message {message_id}")
-            print(f"✅ [SEND-TEMPLATE] Message envoyé avec succès! wa_message_id={wa_message_id} pour le message {message_id}")
             if get_pool():
                 await pg_execute(
                     "UPDATE messages SET wa_message_id = $2, status = $3 WHERE id = $1::uuid",
@@ -1251,7 +1390,6 @@ async def send_pending_template(message_id: str):
                 )
         else:
             logger.warning(f"⚠️ [SEND-TEMPLATE] Pas de wa_message_id dans la réponse pour le message {message_id}, mais on marque comme envoyé")
-            print(f"⚠️ [SEND-TEMPLATE] Pas de wa_message_id dans la réponse pour le message {message_id}, mais on marque comme envoyé")
             if get_pool():
                 await pg_execute("UPDATE messages SET status = $2 WHERE id = $1::uuid", message_id, "sent")
             else:
@@ -1260,18 +1398,47 @@ async def send_pending_template(message_id: str):
                 )
         
         logger.info(f"✅ [SEND-TEMPLATE] Template '{template_name}' envoyé avec succès et message {message_id} mis à jour")
-        print(f"✅ [SEND-TEMPLATE] Template '{template_name}' envoyé avec succès et message {message_id} mis à jour")
         
     except Exception as e:
         logger.error(f"❌ Erreur lors de l'envoi du template pour le message {message_id}: {e}", exc_info=True)
         error_msg = str(e)
+        error_code = None
         if hasattr(e, 'response') and hasattr(e.response, 'json'):
             try:
                 error_data = e.response.json()
                 if 'error' in error_data:
                     error_msg = error_data['error'].get('message', error_msg)
-            except:
+                    error_code = error_data['error'].get('code')
+            except Exception:
                 pass
+        if error_code == 132001:
+            _blacklist_template(template_name)
+            logger.warning(f"⛔ [SEND-TEMPLATE] Template '{template_name}' supprimé sur Meta, nettoyage et re-création")
+            # Delete the stale pending entry so find_or_create_template can create a fresh one
+            if get_pool():
+                await pg_execute(
+                    "DELETE FROM pending_template_messages WHERE message_id = $1::uuid",
+                    message_id,
+                )
+            else:
+                await supabase_execute(
+                    supabase.table("pending_template_messages").delete().eq("message_id", message_id)
+                )
+            # Retry: create a new template for this message
+            try:
+                from app.services.template_deduplication import find_or_create_template
+                await find_or_create_template(
+                    conversation_id=conversation_id,
+                    account_id=pending["account_id"],
+                    message_id=message_id,
+                    text_content=text_content or pending.get("text_content", ""),
+                    campaign_id=campaign_id,
+                    created_by_user_id=pending.get("created_by_user_id"),
+                )
+                logger.info(f"🔄 [SEND-TEMPLATE] Nouveau template créé pour message {message_id} après 132001")
+                return
+            except Exception as retry_err:
+                logger.error(f"❌ [SEND-TEMPLATE] Échec re-création template pour {message_id}: {retry_err}")
         await mark_message_as_failed(message_id, f"Erreur lors de l'envoi: {error_msg}")
 
 
@@ -1287,7 +1454,6 @@ async def _send_broadcast_template(
     from app.services.broadcast_service import get_group_recipients, update_recipient_stat, update_campaign_counters
     
     logger.info(f"📧 [BROADCAST-TEMPLATE] Envoi du template '{template_name}' à tous les destinataires de la campagne {campaign_id}")
-    print(f"📧 [BROADCAST-TEMPLATE] Envoi du template '{template_name}' à tous les destinataires de la campagne {campaign_id}")
     
     campaign = None
     if get_pool():
@@ -1336,14 +1502,18 @@ async def _send_broadcast_template(
     if not stats:
         logger.warning(f"⚠️ [BROADCAST-TEMPLATE] Aucune stat trouvée pour la campagne {campaign_id}")
         return
-    
-    # Envoyer le template à chaque destinataire
+
+    def _digits_only(p: str) -> str:
+        return "".join(c for c in (p or "") if c.isdigit())
+
+    stats_by_digits = {_digits_only(k): v for k, v in stats.items()}
+
     sent_count = 0
     failed_count = 0
     
     for recipient in recipients:
         phone_number = recipient["phone_number"]
-        stat = stats.get(phone_number)
+        stat = stats.get(phone_number) or stats_by_digits.get(_digits_only(phone_number))
         
         if not stat:
             logger.warning(f"⚠️ [BROADCAST-TEMPLATE] Pas de stat trouvée pour {phone_number}")
@@ -1355,21 +1525,28 @@ async def _send_broadcast_template(
             logger.info(f"⏭️ [BROADCAST-TEMPLATE] Destinataire {phone_number} a déjà reçu le message (sent_at={stat.get('sent_at')}), skip")
             continue
         
+        if _is_template_blacklisted(template_name):
+            logger.warning(f"⛔ [BROADCAST-TEMPLATE] Template '{template_name}' blacklisté, skip {phone_number}")
+            failed_count += 1
+            await update_recipient_stat(stat["id"], {
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "error_message": f"Template '{template_name}' n'existe pas sur Meta (132001)"
+            })
+            continue
+
         try:
-            # Envoyer le template
             response = await whatsapp_api_service.send_template_message(
                 phone_number_id=phone_number_id,
                 access_token=access_token,
                 to=phone_number,
                 template_name=template_name,
                 language_code="fr",
-                components=None  # Pas de variables pour les templates auto-créés
+                components=None,
             )
             
             wa_message_id = response.get("messages", [{}])[0].get("id") if response.get("messages") else None
             timestamp_iso = datetime.now(timezone.utc).isoformat()
             
-            # Mettre à jour le message "fake" avec le vrai wa_message_id
             if stat.get("message_id"):
                 if get_pool():
                     from app.services.message_service import _parse_timestamp_iso
@@ -1388,7 +1565,6 @@ async def _send_broadcast_template(
                         .eq("id", stat["message_id"])
                     )
             
-            # Mettre à jour la stat
             await update_recipient_stat(stat["id"], {
                 "sent_at": timestamp_iso,
             })
@@ -1399,8 +1575,16 @@ async def _send_broadcast_template(
         except Exception as e:
             logger.error(f"❌ [BROADCAST-TEMPLATE] Erreur lors de l'envoi à {phone_number}: {e}", exc_info=True)
             failed_count += 1
+            error_code = None
+            if hasattr(e, 'response') and hasattr(e.response, 'json'):
+                try:
+                    error_code = e.response.json().get('error', {}).get('code')
+                except Exception:
+                    pass
+            if error_code == 132001:
+                _blacklist_template(template_name)
+                logger.warning(f"⛔ [BROADCAST-TEMPLATE] Template '{template_name}' blacklisté (132001), skip reste campagne")
             
-            # Marquer la stat comme échouée
             await update_recipient_stat(stat["id"], {
                 "failed_at": datetime.now(timezone.utc).isoformat(),
                 "error_message": str(e)
@@ -1410,7 +1594,6 @@ async def _send_broadcast_template(
     await update_campaign_counters(campaign_id)
     
     logger.info(f"✅ [BROADCAST-TEMPLATE] Campagne {campaign_id} terminée: {sent_count} envoyés, {failed_count} échoués")
-    print(f"✅ [BROADCAST-TEMPLATE] Campagne {campaign_id} terminée: {sent_count} envoyés, {failed_count} échoués")
 
 
 async def _mark_campaign_as_failed(campaign_id: str, error_message: str):
@@ -1528,7 +1711,10 @@ async def delete_auto_template_for_message(message_id: str):
             logger.warning(f"⚠️ Erreur lors de la suppression du template '{template_name}' depuis Meta: {e}")
             # Continuer quand même pour supprimer l'entrée en base
         
-        # Supprimer l'entrée dans pending_template_messages
+        # Blacklist the template so other messages using the same name will
+        # detect it and silently re-create a new template instead of failing.
+        _blacklist_template(template_name)
+
         if get_pool():
             await pg_execute("DELETE FROM pending_template_messages WHERE message_id = $1::uuid", message_id)
         else:
@@ -1536,11 +1722,110 @@ async def delete_auto_template_for_message(message_id: str):
             await supabase_execute(
                 supabase.table("pending_template_messages").delete().eq("message_id", message_id)
             )
-        
-        logger.info(f"✅ Entrée pending_template_messages supprimée pour le message {message_id}")
+
+        logger.info(f"✅ Template '{template_name}' supprimé de Meta et blacklisté, entrée pending du message {message_id} supprimée")
         
     except Exception as e:
         logger.error(f"❌ Erreur lors de la suppression du template auto-créé pour le message {message_id}: {e}", exc_info=True)
+
+
+def _coerce_created_at(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    if isinstance(value, str):
+        try:
+            d = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d
+    return None
+
+
+def _pending_template_too_old(created_at_raw: Any) -> bool:
+    created = _coerce_created_at(created_at_raw)
+    if not created:
+        return False
+    return datetime.now(timezone.utc) - created > timedelta(days=TEMPLATE_ASYNC_MAX_POLL_DAYS)
+
+
+async def abandon_stale_pending_template(message_id: str, reason: str) -> None:
+    """
+    Marque le message outbound en échec (si toujours bloqué sans wa_message_id),
+    supprime l'entrée pending et tente de retirer le template auto sur Meta.
+    """
+    from app.core.db import supabase
+
+    async def _delete_pending_row() -> None:
+        if get_pool():
+            await pg_execute(
+                "DELETE FROM pending_template_messages WHERE message_id = $1::uuid",
+                message_id,
+            )
+        else:
+            await supabase_execute(
+                supabase.table("pending_template_messages").delete().eq("message_id", message_id)
+            )
+
+    msg = None
+    if get_pool():
+        msg = await fetch_one(
+            "SELECT wa_message_id, status FROM messages WHERE id = $1::uuid LIMIT 1",
+            message_id,
+        )
+    else:
+        mr = await supabase_execute(
+            supabase.table("messages")
+            .select("wa_message_id, status")
+            .eq("id", message_id)
+            .limit(1)
+        )
+        if mr.data:
+            msg = mr.data[0]
+
+    if not msg:
+        logger.warning("⚠️ [ABANDON-TEMPLATE] Message %s introuvable - nettoyage pending", message_id)
+        await _delete_pending_row()
+        logger.info("🛑 [ABANDON-TEMPLATE] %s - %s", message_id, reason)
+        return
+
+    if msg.get("wa_message_id"):
+        logger.info(
+            "ℹ️ [ABANDON-TEMPLATE] Message %s déjà envoyé (wa_message_id présent), nettoyage pending",
+            message_id,
+        )
+        await _delete_pending_row()
+        return
+
+    st = (msg.get("status") or "").lower()
+    if st in ("sent", "delivered", "read"):
+        logger.info(
+            "ℹ️ [ABANDON-TEMPLATE] Message %s au statut %s - nettoyage pending seulement",
+            message_id,
+            st,
+        )
+        await _delete_pending_row()
+        return
+
+    if st != "failed":
+        await mark_message_as_failed(message_id, reason)
+
+    try:
+        await delete_auto_template_for_message(message_id)
+    except Exception as e:
+        logger.warning(
+            "⚠️ [ABANDON-TEMPLATE] delete_auto_template_for_message %s: %s",
+            message_id,
+            e,
+        )
+
+    await _delete_pending_row()
+    logger.info("🛑 [ABANDON-TEMPLATE] Message %s - %s", message_id, reason)
 
 
 async def resume_pending_templates_on_startup():
@@ -1553,12 +1838,11 @@ async def resume_pending_templates_on_startup():
     logger.info("🔄 [STARTUP] Reprise des templates en attente...")
     
     try:
-        # Récupérer tous les templates APPROVED ou PENDING créés dans les dernières 24h
-        cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
-        # S'assurer que cutoff_time est timezone-aware pour asyncpg
+        # Reprendre les entrées récentes (même fenêtre que le polling max) + marge
+        cutoff_time = datetime.now(timezone.utc) - timedelta(days=TEMPLATE_ASYNC_MAX_POLL_DAYS + 2)
         if cutoff_time.tzinfo is None:
             cutoff_time = cutoff_time.replace(tzinfo=timezone.utc)
-        
+
         if get_pool():
             rows = await fetch_all(
                 """
@@ -1583,21 +1867,34 @@ async def resume_pending_templates_on_startup():
                 .order("created_at")
             )
             pending_templates = result.data or []
-        
+
         if not pending_templates:
             logger.info("✅ [STARTUP] Aucun template en attente à reprendre")
             return
-        
+
         logger.info(f"📋 [STARTUP] {len(pending_templates)} template(s) en attente trouvé(s)")
-        
+
         approved_count = 0
         pending_count = 0
-        
+
         for template in pending_templates:
             message_id = template["message_id"]
             status = template["template_status"]
             template_name = template["template_name"]
-            
+
+            if _pending_template_too_old(template.get("created_at")):
+                logger.warning(
+                    "⏰ [STARTUP] Template %s (message %s) trop ancien (> %s jours) - abandon",
+                    template_name,
+                    message_id,
+                    TEMPLATE_ASYNC_MAX_POLL_DAYS,
+                )
+                await abandon_stale_pending_template(
+                    message_id,
+                    f"File d'attente template expirée (>{TEMPLATE_ASYNC_MAX_POLL_DAYS} jours).",
+                )
+                continue
+
             if status == "APPROVED":
                 # Template déjà approuvé, envoyer immédiatement
                 logger.info(f"✅ [STARTUP] Template APPROVED trouvé: {template_name} (message {message_id}), envoi...")
@@ -1612,12 +1909,17 @@ async def resume_pending_templates_on_startup():
                 logger.info(f"⏳ [STARTUP] Template PENDING trouvé: {template_name} (message {message_id}), vérification...")
                 try:
                     result = await check_and_update_template_status(message_id)
-                    if result.get("status") == "APPROVED":
+                    rs = result.get("status")
+                    if rs == "APPROVED":
                         await send_pending_template(message_id)
                         approved_count += 1
+                    elif rs == "NOT_FOUND":
+                        await abandon_stale_pending_template(
+                            message_id,
+                            "Suivi template introuvable (entrée supprimée ou incohérente).",
+                        )
                     else:
-                        # Relancer la vérification périodique
-                        asyncio.create_task(check_template_status_async(message_id))
+                        schedule_check_template_status_async(message_id)
                         pending_count += 1
                 except Exception as e:
                     logger.error(f"❌ [STARTUP] Erreur lors de la vérification du template {template_name}: {e}")
@@ -1638,20 +1940,18 @@ async def periodic_template_check():
     
     while True:
         try:
-            await asyncio.sleep(300)  # 5 minutes
-            
+            await asyncio.sleep(TEMPLATE_ASYNC_POLL_INTERVAL_SEC)
+
             logger.info("🔍 [PERIODIC] Vérification des templates en attente...")
-            
-            # Récupérer les templates PENDING ou APPROVED créés dans les dernières 24h
-            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
-            # S'assurer que cutoff_time est timezone-aware pour asyncpg
+
+            cutoff_time = datetime.now(timezone.utc) - timedelta(days=TEMPLATE_ASYNC_MAX_POLL_DAYS + 2)
             if cutoff_time.tzinfo is None:
                 cutoff_time = cutoff_time.replace(tzinfo=timezone.utc)
-            
+
             if get_pool():
                 rows = await fetch_all(
                     """
-                    SELECT p.message_id, p.template_status, p.template_name
+                    SELECT p.message_id, p.template_status, p.template_name, p.created_at
                     FROM pending_template_messages p
                     INNER JOIN messages m ON m.id = p.message_id
                     WHERE p.template_status IN ('APPROVED', 'PENDING')
@@ -1664,23 +1964,37 @@ async def periodic_template_check():
             else:
                 result = await supabase_execute(
                     supabase.table("pending_template_messages")
-                    .select("message_id, template_status, template_name, messages!inner(wa_message_id)")
+                    .select(
+                        "message_id, template_status, template_name, created_at, messages!inner(wa_message_id)"
+                    )
                     .in_("template_status", ["APPROVED", "PENDING"])
                     .gte("created_at", cutoff_time.isoformat())
                     .is_("messages.wa_message_id", "null")
                 )
                 pending_templates = result.data or []
-            
+
             if not pending_templates:
                 logger.debug("✅ [PERIODIC] Aucun template en attente")
                 continue
-            
+
             logger.info(f"📋 [PERIODIC] {len(pending_templates)} template(s) en attente")
-            
+
             for template in pending_templates:
                 message_id = template["message_id"]
                 status = template["template_status"]
-                
+
+                if _pending_template_too_old(template.get("created_at")):
+                    logger.warning(
+                        "⏰ [PERIODIC] Message %s - entrée template trop ancienne (> %s jours), abandon",
+                        message_id,
+                        TEMPLATE_ASYNC_MAX_POLL_DAYS,
+                    )
+                    await abandon_stale_pending_template(
+                        message_id,
+                        f"File d'attente template expirée (>{TEMPLATE_ASYNC_MAX_POLL_DAYS} jours).",
+                    )
+                    continue
+
                 if status == "APPROVED":
                     # Template approuvé mais pas encore envoyé, envoyer maintenant
                     try:
@@ -1692,8 +2006,14 @@ async def periodic_template_check():
                     # Vérifier le statut auprès de Meta
                     try:
                         result = await check_and_update_template_status(message_id)
-                        if result.get("status") == "APPROVED":
+                        rs = result.get("status")
+                        if rs == "APPROVED":
                             await send_pending_template(message_id)
+                        elif rs == "NOT_FOUND":
+                            await abandon_stale_pending_template(
+                                message_id,
+                                "Suivi template introuvable (entrée supprimée ou incohérente).",
+                            )
                     except Exception as e:
                         logger.error(f"❌ [PERIODIC] Erreur vérification template {message_id}: {e}")
         

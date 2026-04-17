@@ -39,9 +39,29 @@ export const importPlaygroundAudienceCsv = (flowId, file, broadcastGroupId = "")
   return api.post(`/bot/playground-flows/${flowId}/import-audience-csv`, fd);
 };
 
-/** Chat assistant Playground (explications + graphe optionnel). */
-export const postPlaygroundAssistant = (payload) =>
-  api.post("/bot/playground-flows/assistant", payload);
+/** Lie le numéro de test réservé à ce scénario et retourne la conversation (bot playground). */
+export const ensurePlaygroundSandboxSession = (flowId, payload) =>
+  api.post(`/bot/playground-flows/${flowId}/sandbox-session`, payload);
+
+/** Efface les messages du bac à sable et réinitialise l’état du flux pour ce scénario. */
+export const resetPlaygroundSandboxSession = (flowId, payload) =>
+  api.post(`/bot/playground-flows/${flowId}/sandbox-reset`, payload);
+
+/** Simule un message entrant « contact » (déclenche le scénario comme en prod, bac à sable WhatsApp). */
+export const simulatePlaygroundInbound = (flowId, payload) =>
+  api.post(`/bot/playground-flows/${flowId}/simulate-inbound`, payload);
+
+/** Enchaîne plusieurs messages simulés sur la même conversation bac à sable (phrases de test). */
+export const simulatePlaygroundInboundBatch = (flowId, payload) =>
+  api.post(`/bot/playground-flows/${flowId}/simulate-inbound-batch`, payload);
+
+/** Simule un lancement campagne (nœud start playground_audience), sans message contact. */
+export const simulatePlaygroundCampaignLaunch = (flowId, payload) =>
+  api.post(`/bot/playground-flows/${flowId}/simulate-campaign-launch`, payload);
+
+/** Chat assistant Playground (explications + graphe optionnel). `config` peut inclure `signal` (AbortController). */
+export const postPlaygroundAssistant = (payload, config = {}) =>
+  api.post("/bot/playground-flows/assistant", payload, config);
 
 /** Fils de discussion persistés (nom, messages, masquage doux). */
 export const listPlaygroundAssistThreads = ({ accountId, flowId, archived = false }) =>

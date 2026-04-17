@@ -17,10 +17,13 @@ export default function MobileChatWindow({
   onBotSettingsUpdated,
 }) {
   const [messages, setMessages] = useState([]);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
-  const pendingOptimisticRef = useRef(new Map()); // tempId -> waMessageId pour le matching
+  const pendingOptimisticRef = useRef(new Map());
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [chatTheme, setChatTheme] = useState(localStorage.getItem('chatTheme') || 'default');
@@ -56,17 +59,22 @@ export default function MobileChatWindow({
                      formatPhoneNumber(conversation?.client_number) ||
                      conversation?.client_number;
 
+  const mobileTs = (msg) => {
+    const ts = msg.timestamp || msg.created_at;
+    if (!ts) return 0;
+    if (typeof ts === "number") return ts;
+    return new Date(ts).getTime() || 0;
+  };
+
   const sortMessages = useCallback((items) => {
-    return [...items].sort((a, b) => {
-      const aTs = new Date(a.timestamp || a.created_at || 0).getTime();
-      const bTs = new Date(b.timestamp || b.created_at || 0).getTime();
-      return aTs - bTs;
-    });
+    return [...items].sort((a, b) => mobileTs(a) - mobileTs(b));
   }, []);
+
+  const MESSAGES_PAGE_SIZE = 50;
 
   const refreshMessages = useCallback(() => {
     if (!conversation?.id) return;
-    getMessages(conversation.id)
+    getMessages(conversation.id, { limit: MESSAGES_PAGE_SIZE })
       .then((res) => {
         const newMessages = res.data || [];
 
@@ -182,28 +190,103 @@ export default function MobileChatWindow({
   }, [conversation?.id, refreshMessages, sortMessages]);
 
   useEffect(() => {
-    refreshMessages();
-    // Réinitialiser le scroll quand on charge les messages
+    if (!conversation?.id) return;
+    setMessages([]);
+    setHasMoreMessages(true);
+    setOldestMessageTimestamp(null);
     setIsUserScrolling(false);
-  }, [refreshMessages]);
+
+    getMessages(conversation.id, { limit: MESSAGES_PAGE_SIZE })
+      .then((res) => {
+        const batch = res.data || [];
+        setMessages(sortMessages(batch));
+        if (batch.length < MESSAGES_PAGE_SIZE) {
+          setHasMoreMessages(false);
+        } else {
+          const oldest = batch.reduce((min, msg) => {
+            const ts = new Date(msg.timestamp || msg.created_at || 0).getTime();
+            return !min || ts < min ? ts : min;
+          }, null);
+          if (oldest) setOldestMessageTimestamp(new Date(oldest).toISOString());
+        }
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+        }, 50);
+      })
+      .catch(() => {});
+  }, [conversation?.id, sortMessages]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!conversation?.id || !hasMoreMessages || isLoadingMore || !oldestMessageTimestamp) return;
+    setIsLoadingMore(true);
+    try {
+      const container = messagesContainerRef.current;
+      const prevScrollHeight = container?.scrollHeight || 0;
+
+      const res = await getMessages(conversation.id, {
+        before: oldestMessageTimestamp,
+        limit: MESSAGES_PAGE_SIZE,
+      });
+      const batch = res.data || [];
+
+      if (batch.length === 0) {
+        setHasMoreMessages(false);
+        return;
+      }
+
+      setMessages((prev) => sortMessages([...batch, ...prev]));
+
+      if (batch.length < MESSAGES_PAGE_SIZE) {
+        setHasMoreMessages(false);
+      }
+
+      const oldest = batch.reduce((min, msg) => {
+        const ts = new Date(msg.timestamp || msg.created_at || 0).getTime();
+        return !min || ts < min ? ts : min;
+      }, null);
+      if (oldest) {
+        setOldestMessageTimestamp(new Date(oldest).toISOString());
+      } else {
+        setHasMoreMessages(false);
+      }
+
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTop = container.scrollHeight - prevScrollHeight;
+        }
+      });
+    } catch {
+      // Silent
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [conversation?.id, hasMoreMessages, isLoadingMore, oldestMessageTimestamp, sortMessages]);
 
   // Polling régulier pour mobile (plus fiable que realtime sur mobile)
   useEffect(() => {
     if (!conversation?.id) return;
 
-    // Polling toutes les 15 secondes (aligné avec ChatWindow, réduit charge)
     const pollInterval = setInterval(() => {
       refreshMessages();
-    }, 15000);
+    }, 30000);
 
     return () => {
       clearInterval(pollInterval);
     };
   }, [conversation?.id, refreshMessages]);
 
-  // Realtime updates (backup si disponible)
+  // Realtime updates
   useEffect(() => {
     if (!conversation?.id) return;
+
+    const insertSorted = (list, msg) => {
+      const ts = mobileTs(msg);
+      let i = list.length;
+      while (i > 0 && mobileTs(list[i - 1]) > ts) i--;
+      const next = [...list];
+      next.splice(i, 0, msg);
+      return next;
+    };
 
     const channel = supabaseClient
       .channel(`messages:${conversation.id}`)
@@ -217,69 +300,18 @@ export default function MobileChatWindow({
         },
         (payload) => {
           const incoming = payload.new;
+          if (incoming.message_type === "reaction" || incoming.is_system === true) return;
+
           setMessages((prev) => {
-            if (prev.some((msg) => msg.id === incoming.id)) return prev;
-            if (incoming.wa_message_id && prev.some((msg) => msg.wa_message_id === incoming.wa_message_id)) return prev;
+            if (prev.some((m) => m.id === incoming.id)) return prev;
+            if (incoming.wa_message_id && prev.some((m) => m.wa_message_id === incoming.wa_message_id)) return prev;
 
-            const norm = (s) => (s || "").trim().replace(/\s+/g, " ");
-            const incomingContent = norm(incoming.content_text);
-            const incomingTime = new Date(incoming.timestamp || incoming.created_at).getTime();
-            const isOutboundText = incoming.direction === "outbound" && (incoming.message_type === "text" || !incoming.message_type);
+            const idx = prev.findLastIndex((m) => m.id?.startsWith("temp-") || m._isOptimistic);
+            const cleaned = idx >= 0 && (incoming.direction === "outbound" || incoming.from_me)
+              ? prev.filter((_, i) => i !== idx)
+              : prev;
 
-            const withoutTemp = prev.filter(msg => {
-              if (!msg._isOptimistic && !msg.id?.startsWith("temp-")) {
-                return true;
-              }
-
-              // Message texte outbound : retirer l’optimiste dès que le contenu correspond (évite le double affichage même bref)
-              if (isOutboundText && incomingContent) {
-                const optContent = norm(msg._optimisticContent ?? msg.content_text);
-                if (optContent === incomingContent) {
-                  const optTime = msg._optimisticTime ?? new Date(msg.timestamp || msg.created_at).getTime();
-                  if (Math.abs(incomingTime - optTime) < 30000) {
-                    return false;
-                  }
-                }
-              }
-
-              if (msg._optimisticContent !== undefined) {
-                const optContent = norm(msg._optimisticContent ?? msg.content_text);
-                const optTime = msg._optimisticTime ?? new Date(msg.timestamp || msg.created_at).getTime();
-                if (optContent === incomingContent && Math.abs(incomingTime - optTime) < 15000) {
-                  return false;
-                }
-              }
-
-              if (msg._optimisticMediaId !== undefined) {
-                const optMediaId = msg._optimisticMediaId;
-                const optMediaType = msg._optimisticMediaType;
-                const optCaption = msg._optimisticCaption;
-                const optTime = msg._optimisticTime ?? new Date(msg.timestamp || msg.created_at).getTime();
-                const incomingMediaId = incoming.media_id;
-                const incomingMediaType = incoming.message_type;
-                const incomingCaption = incoming.content_text?.trim();
-                const sameMediaId = incomingMediaId === optMediaId;
-                const sameTypeAndCaption = incomingMediaType === optMediaType &&
-                  ((!incomingCaption && !optCaption) || incomingCaption === optCaption);
-                const timeDiff = Math.abs(incomingTime - optTime);
-                if ((sameMediaId || sameTypeAndCaption) && timeDiff < 15000) {
-                  return false;
-                }
-              }
-
-              return true;
-            });
-
-            const newMessages = sortMessages([...withoutTemp, incoming]);
-            
-            // Auto-scroll seulement si l'utilisateur est déjà en bas
-            if (!isUserScrolling) {
-              setTimeout(() => {
-                messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-              }, 100);
-            }
-            
-            return newMessages;
+            return insertSorted(cleaned, incoming);
           });
         }
       )
@@ -294,7 +326,11 @@ export default function MobileChatWindow({
         (payload) => {
           const updated = payload.new;
           setMessages((prev) =>
-            sortMessages(prev.map((msg) => (msg.id === updated.id ? updated : msg)))
+            prev.map((m) =>
+              m.id === updated.id || (updated.wa_message_id && m.wa_message_id === updated.wa_message_id)
+                ? updated
+                : m
+            )
           );
         }
       )
@@ -303,7 +339,7 @@ export default function MobileChatWindow({
     return () => {
       supabaseClient.removeChannel(channel);
     };
-  }, [conversation?.id, sortMessages, isUserScrolling]);
+  }, [conversation?.id]);
 
   // Réinitialiser le scroll quand on change de conversation
   useEffect(() => {
@@ -336,7 +372,9 @@ export default function MobileChatWindow({
     };
   }, [showMenu]);
 
-  // Gérer le scroll et détecter si l'utilisateur scroll manuellement
+  const loadOlderRef = useRef(loadOlderMessages);
+  loadOlderRef.current = loadOlderMessages;
+
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -348,12 +386,14 @@ export default function MobileChatWindow({
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
       setShowScrollToBottom(!isNearBottom);
       
-      // Si l'utilisateur scroll vers le haut, on ne fait plus d'auto-scroll
       if (!isNearBottom) {
         setIsUserScrolling(true);
       } else {
-        // Si l'utilisateur revient en bas, on peut réactiver l'auto-scroll
         setIsUserScrolling(false);
+      }
+
+      if (container.scrollTop < 200) {
+        loadOlderRef.current();
       }
     };
 
@@ -640,7 +680,13 @@ export default function MobileChatWindow({
             Aucun message
           </div>
         ) : (
-          messages.map((msg) => {
+          <>
+          {isLoadingMore && (
+            <div style={{ textAlign: "center", padding: "8px 0", color: "#888", fontSize: "0.85rem" }}>
+              Chargement...
+            </div>
+          )}
+          {messages.map((msg) => {
           // Masquer les médias si mediaVisibility est false
           if (!mediaVisibility && msg.message_type && ['image', 'video', 'document', 'audio'].includes(msg.message_type)) {
             return (
@@ -650,7 +696,8 @@ export default function MobileChatWindow({
             );
           }
           return <MessageBubble key={msg.id} message={msg} conversation={conversation} />;
-          })
+          })}
+          </>
         )}
         <div ref={messagesEndRef} />
         {showScrollToBottom && (

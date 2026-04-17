@@ -39,6 +39,8 @@ export default function ChatWindow({
   const [otherTyping, setOtherTyping] = useState(false);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [removedMessageIds, setRemovedMessageIds] = useState(new Set());
+  const removedIdsRef = useRef(removedMessageIds);
+  removedIdsRef.current = removedMessageIds;
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState(null);
@@ -46,26 +48,17 @@ export default function ChatWindow({
   const [playgroundFlows, setPlaygroundFlows] = useState([]);
   const [playgroundFlowsLoading, setPlaygroundFlowsLoading] = useState(false);
   const [playgroundFlowPending, setPlaygroundFlowPending] = useState(false);
+  const [playgroundFlowError, setPlaygroundFlowError] = useState(null);
+
+  const msgTs = (msg) => {
+    const ts = msg.timestamp || msg.created_at;
+    if (!ts) return 0;
+    if (typeof ts === "number") return ts;
+    return new Date(ts).getTime() || 0;
+  };
 
   const sortMessages = useCallback((items) => {
-    return [...items].sort((a, b) => {
-      // Normaliser les dates - s'assurer qu'elles sont au format ISO string
-      const getTimestamp = (msg) => {
-        const ts = msg.timestamp || msg.created_at;
-        if (!ts) return 0;
-        // Si c'est déjà un nombre (timestamp Unix), le convertir
-        if (typeof ts === 'number') {
-          return ts;
-        }
-        // Si c'est une string, la parser
-        const date = new Date(ts);
-        return isNaN(date.getTime()) ? 0 : date.getTime();
-      };
-      
-      const aTs = getTimestamp(a);
-      const bTs = getTimestamp(b);
-      return aTs - bTs;
-    });
+    return [...items].sort((a, b) => msgTs(a) - msgTs(b));
   }, []);
 
   const conversationId = conversation?.id;
@@ -176,7 +169,32 @@ export default function ChatWindow({
     });
   }, [conversationId, sortMessages, profile?.id, removedMessageIds]);
 
-  // Charger tous les messages au démarrage
+  const MESSAGES_PAGE_SIZE = 50;
+
+  const filterMessages = useCallback((data) => {
+    return data.filter((msg) => {
+      const type = (msg.message_type || "").toLowerCase();
+      if (["reaction", "status"].includes(type)) return false;
+      if (msg.is_system === true) return false;
+      if (profile?.id && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(profile.id)) {
+        return false;
+      }
+      return true;
+    });
+  }, [profile?.id]);
+
+  const getOldestTimestamp = useCallback((msgs) => {
+    return msgs.reduce((oldest, msg) => {
+      const ts = msg.timestamp || msg.created_at;
+      if (!ts) return oldest;
+      const date = new Date(ts);
+      if (isNaN(date.getTime())) return oldest;
+      const time = date.getTime();
+      return !oldest || time < oldest ? time : oldest;
+    }, null);
+  }, []);
+
+  // Load only the first page of messages when conversation changes
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
@@ -186,13 +204,11 @@ export default function ChatWindow({
       return;
     }
     
-    // Réinitialiser l'état
     setMessages([]);
     setHasMoreMessages(true);
     setOldestMessageTimestamp(null);
     setIsInitialLoad(true);
     
-    // Vérifier et télécharger les médias manquants en arrière-plan (debounce 5 min)
     const now = Date.now();
     const lastCheck = lastCheckMediaByConversation.get(conversationId) || 0;
     if (now - lastCheck >= CHECK_MEDIA_DEBOUNCE_MS) {
@@ -200,30 +216,17 @@ export default function ChatWindow({
       checkAndDownloadConversationMedia(conversationId)
         .then(() => {})
         .catch((err) => {
-          console.warn(`⚠️ [FRONTEND] Media check failed for ${conversationId}:`, err);
+          console.warn(`Media check failed for ${conversationId}:`, err);
         });
     }
     
-    // Charger d'abord les 100 derniers messages pour un affichage immédiat
     const loadMessages = async () => {
-      // ÉTAPE 1: Charger les 100 derniers messages immédiatement
-      const firstRes = await getMessages(conversationId, { limit: 100 });
-      const firstFiltered = firstRes.data.filter((msg) => {
-        const type = (msg.message_type || "").toLowerCase();
-        if (["reaction", "status"].includes(type)) return false;
-        // Exclure les messages système (notifications d'épinglage, etc.)
-        if (msg.is_system === true) return false;
-        if (profile?.id && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(profile.id)) {
-          return false;
-        }
-        return true;
-      });
+      const firstRes = await getMessages(conversationId, { limit: MESSAGES_PAGE_SIZE });
+      const firstFiltered = filterMessages(firstRes.data);
       
-      // Afficher immédiatement les premiers messages
       setMessages(sortMessages(firstFiltered));
       setIsInitialLoad(false);
       
-      // Scroll en bas immédiatement
       setTimeout(() => {
         if (messagesEndRef.current && messagesContainerRef.current) {
           const container = messagesContainerRef.current;
@@ -232,94 +235,76 @@ export default function ChatWindow({
         }
       }, 50);
       
-      // Si on a moins de 100 messages, on a tout chargé
-      if (firstFiltered.length < 100) {
+      if (firstFiltered.length < MESSAGES_PAGE_SIZE) {
         setHasMoreMessages(false);
         return;
       }
       
-      // ÉTAPE 2: Charger l'historique plus ancien en arrière-plan progressivement
-      let hasMore = true;
-      let before = firstFiltered.reduce((oldest, msg) => {
-        const ts = msg.timestamp || msg.created_at;
-        if (!ts) return oldest;
-        const date = new Date(ts);
-        if (isNaN(date.getTime())) return oldest;
-        const time = date.getTime();
-        return !oldest || time < oldest ? time : oldest;
-      }, null);
-      
-      if (before) {
-        before = new Date(before).toISOString();
-        setOldestMessageTimestamp(before);
+      const oldest = getOldestTimestamp(firstFiltered);
+      if (oldest) {
+        setOldestMessageTimestamp(new Date(oldest).toISOString());
       }
-      
-      let allMessages = [...firstFiltered];
-      
-      // Charger progressivement l'historique (batch par batch)
-      while (hasMore && conversationId && before) {
-        const res = await getMessages(conversationId, { before, limit: 100 });
-        const filtered = res.data.filter((msg) => {
-          const type = (msg.message_type || "").toLowerCase();
-          if (["reaction", "status"].includes(type)) return false;
-          // Exclure les messages système (notifications d'épinglage, etc.)
-          if (msg.is_system === true) return false;
-          if (profile?.id && Array.isArray(msg.deleted_for_user_ids) && msg.deleted_for_user_ids.includes(profile.id)) {
-            return false;
-          }
-          return true;
-        });
-        
-        if (filtered.length === 0) {
-          hasMore = false;
-          break;
-        }
-        
-        // Ajouter les nouveaux messages à la liste complète
-        allMessages = [...allMessages, ...filtered];
-        
-        // Mettre à jour la liste complète (sans bloquer l'UI)
-        setMessages(sortMessages(allMessages));
-        
-        // Trouver le timestamp du message le plus ancien
-        const oldest = filtered.reduce((oldest, msg) => {
-          const ts = msg.timestamp || msg.created_at;
-          if (!ts) return oldest;
-          const date = new Date(ts);
-          if (isNaN(date.getTime())) return oldest;
-          const time = date.getTime();
-          return !oldest || time < oldest ? time : oldest;
-        }, null);
-        
-        if (oldest) {
-          before = new Date(oldest).toISOString();
-          setOldestMessageTimestamp(before);
-        } else {
-          hasMore = false;
-        }
-        
-        // Si on a moins de 100 messages, on a tout chargé
-        if (filtered.length < 100) {
-          hasMore = false;
-        }
-      }
-      
-      setHasMoreMessages(false);
     };
     
     loadMessages();
-  }, [conversationId, sortMessages, profile?.id]);
+  }, [conversationId, sortMessages, filterMessages, getOldestTimestamp]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!conversationId || !hasMoreMessages || isLoadingMore || !oldestMessageTimestamp) return;
+    setIsLoadingMore(true);
+    try {
+      const container = messagesContainerRef.current;
+      const prevScrollHeight = container?.scrollHeight || 0;
+
+      const res = await getMessages(conversationId, {
+        before: oldestMessageTimestamp,
+        limit: MESSAGES_PAGE_SIZE,
+      });
+      const filtered = filterMessages(res.data);
+
+      if (filtered.length === 0) {
+        setHasMoreMessages(false);
+        return;
+      }
+
+      setMessages((prev) => sortMessages([...filtered, ...prev]));
+
+      if (filtered.length < MESSAGES_PAGE_SIZE) {
+        setHasMoreMessages(false);
+      }
+
+      const oldest = getOldestTimestamp(filtered);
+      if (oldest) {
+        setOldestMessageTimestamp(new Date(oldest).toISOString());
+      } else {
+        setHasMoreMessages(false);
+      }
+
+      // Preserve scroll position after prepending older messages
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTop = container.scrollHeight - prevScrollHeight;
+        }
+      });
+    } catch {
+      // Silent
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [conversationId, hasMoreMessages, isLoadingMore, oldestMessageTimestamp, filterMessages, getOldestTimestamp, sortMessages]);
 
   // Marquer la conversation comme lue quand elle est ouverte et active
+  const lastMarkedReadRef = useRef(null);
   useEffect(() => {
-    if (conversationId && isWindowActive && conversation) {
-      const markReadTimeout = setTimeout(() => {
-        onMarkRead?.(conversationId);
-        markConversationRead(conversationId).catch(() => {});
-      }, 1000);
-      return () => clearTimeout(markReadTimeout);
-    }
-  }, [conversationId, isWindowActive, conversation, onMarkRead]);
+    if (!conversationId || !isWindowActive || !conversation) return;
+    if ((conversation.unread_count || 0) === 0 && lastMarkedReadRef.current === conversationId) return;
+    const markReadTimeout = setTimeout(() => {
+      lastMarkedReadRef.current = conversationId;
+      onMarkRead?.(conversationId);
+      markConversationRead(conversationId).catch(() => {});
+    }, 1000);
+    return () => clearTimeout(markReadTimeout);
+  }, [conversationId, isWindowActive, conversation?.unread_count, onMarkRead]);
 
 
   useEffect(() => {
@@ -331,10 +316,10 @@ export default function ChatWindow({
     const poll = async () => {
       await refreshMessages();
       if (!cancelled) {
-        timeoutId = setTimeout(poll, 15000);
+        timeoutId = setTimeout(poll, 45000);
       }
     };
-    poll();
+    timeoutId = setTimeout(poll, 45000);
     return () => {
       cancelled = true;
       if (timeoutId) {
@@ -400,6 +385,15 @@ export default function ChatWindow({
       return undefined;
     }
 
+    const insertSorted = (list, msg) => {
+      const ts = msgTs(msg);
+      let i = list.length;
+      while (i > 0 && msgTs(list[i - 1]) > ts) i--;
+      const next = [...list];
+      next.splice(i, 0, msg);
+      return next;
+    };
+
     const channel = supabaseClient
       .channel(`messages:${conversationId}`)
       .on(
@@ -412,83 +406,30 @@ export default function ChatWindow({
         },
         (payload) => {
           const incoming = payload.new;
-          
-          // Ignorer les réactions - elles ne doivent pas être affichées comme des messages normaux
-          if (incoming.message_type === "reaction") {
-            return;
-          }
-          
-          // Ignorer les messages système (notifications d'épinglage, etc.)
-          if (incoming.is_system === true) {
-            return;
-          }
-          
-          // Si c'est un message entrant (de l'autre personne), 
-          // l'indicateur "en train d'écrire" sera géré par le useEffect qui surveille les messages
-          
-          // Afficher une notification si c'est un message entrant et que la fenêtre n'est pas au premier plan
-          // Vérifier aussi que les notifications sont activées pour ce compte
-          const hasFocus = document.hasFocus?.() === true;
-          const accountId = conversation?.account_id;
-          if (!incoming.from_me && (!isWindowActive || !hasFocus)) {
-            // Vérifier que l'utilisateur a accès à ce compte avant d'envoyer une notification
-            if (accountId && profile?.permissions?.account_access_levels) {
-              const accountAccessLevels = profile.permissions.account_access_levels;
-              const accountIdStr = String(accountId);
-              const accessLevel = accountAccessLevels[accountId] || 
-                                 accountAccessLevels[accountIdStr] ||
-                                 accountAccessLevels[accountIdStr.trim()];
-              
-              // Bloquer explicitement si access_level = 'aucun'
-              if (accessLevel === "aucun") {
-                return; // Ne pas notifier si l'utilisateur n'a aucun accès
-              }
-            }
-            
-            // Vérifier les préférences de notifications pour ce compte avant d'envoyer
-            if (accountId && isNotificationEnabledForAccount(accountId, 'messages')) {
-              notifyNewMessage(incoming, conversation);
-            }
-          }
-          
+          if (incoming.message_type === "reaction" || incoming.is_system === true) return;
+
           setMessages((prev) => {
-            // Ignorer les messages qui ont été supprimés pour renvoi
-            if (removedMessageIds.has(incoming.id) || removedMessageIds.has(incoming.wa_message_id)) {
-              return prev;
-            }
-            
-            // Vérifier si le message existe déjà (par ID ou wa_message_id)
-            const existsById = prev.some((msg) => msg.id === incoming.id);
-            const existsByWaId = incoming.wa_message_id && prev.some((msg) => msg.wa_message_id === incoming.wa_message_id);
-            
+            const removed = removedIdsRef.current;
+            if (removed.has(incoming.id) || removed.has(incoming.wa_message_id)) return prev;
+
+            const existsById = prev.some((m) => m.id === incoming.id);
+            const existsByWaId = incoming.wa_message_id && prev.some((m) => m.wa_message_id === incoming.wa_message_id);
+
             if (existsById || existsByWaId) {
-              // Mettre à jour le message existant avec les données du serveur (qui ont le bon statut)
-              const updated = prev.map((msg) => {
-                if (msg.id === incoming.id || (incoming.wa_message_id && msg.wa_message_id === incoming.wa_message_id)) {
-                  return incoming; // Utiliser la version du serveur qui a le bon statut
-                }
-                return msg;
-              });
-              return sortMessages(updated);
+              return prev.map((m) =>
+                m.id === incoming.id || (incoming.wa_message_id && m.wa_message_id === incoming.wa_message_id)
+                  ? incoming
+                  : m
+              );
             }
-            
-            // Message sortant : l'événement Realtime = backend a fini (checks, template, etc.)
-            // → Remplacer le message optimiste en attente par le message réel
+
             if (incoming.direction === "outbound" || incoming.from_me) {
-              const optimistics = prev.filter((m) => m.id?.startsWith("temp-"));
-              const mostRecent = optimistics.sort((a, b) => {
-                const ta = new Date(a.timestamp || a.created_at).getTime();
-                const tb = new Date(b.timestamp || b.created_at).getTime();
-                return tb - ta;
-              })[0];
-              const cleaned = mostRecent
-                ? prev.filter((m) => m.id !== mostRecent.id)
-                : prev;
-              return sortMessages([...cleaned, incoming]);
+              const idx = prev.findLastIndex((m) => m.id?.startsWith("temp-"));
+              const cleaned = idx >= 0 ? prev.filter((_, i) => i !== idx) : prev;
+              return insertSorted(cleaned, incoming);
             }
-            
-            // Pour les messages entrants, ajouter simplement
-            return sortMessages([...prev, incoming]);
+
+            return insertSorted(prev, incoming);
           });
         }
       )
@@ -502,22 +443,13 @@ export default function ChatWindow({
         },
         (payload) => {
           const updated = payload.new;
-          // Si le statut d'un message sortant a changé (sent → delivered → read),
-          // mettre à jour la liste pour afficher le nouveau statut
-          setMessages((prev) => {
-            const updatedList = prev.map((msg) => {
-              // Mettre à jour par ID
-              if (msg.id === updated.id) {
-                return updated; // Utiliser la version complète du serveur
-              }
-              // Mettre à jour par wa_message_id aussi
-              if (updated.wa_message_id && msg.wa_message_id === updated.wa_message_id) {
-                return updated;
-              }
-              return msg;
-            });
-            return sortMessages(updatedList);
-          });
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === updated.id || (updated.wa_message_id && m.wa_message_id === updated.wa_message_id)
+                ? updated
+                : m
+            )
+          );
         }
       )
       .on(
@@ -527,9 +459,15 @@ export default function ChatWindow({
           schema: "public",
           table: "message_reactions",
         },
-        () => {
-          // Rafraîchir les messages quand une réaction change
-          refreshMessages();
+        (payload) => {
+          const msgId = payload.new?.message_id || payload.old?.message_id;
+          if (!msgId) return;
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === msgId || m.wa_message_id === msgId)) {
+              refreshMessages();
+            }
+            return prev;
+          });
         }
       )
       .subscribe();
@@ -537,7 +475,7 @@ export default function ChatWindow({
     return () => {
       supabaseClient.removeChannel(channel);
     };
-  }, [conversationId, sortMessages, removedMessageIds]);
+  }, [conversationId]);
 
   const onSend = async (text, forceRefresh = false, optimisticMessageOverride = null) => {
     if (!conversationId) return;
@@ -660,6 +598,10 @@ export default function ChatWindow({
     if (!conversation?.bot_enabled) return "human";
     return conversation?.bot_reply_mode === "playground" ? "playground" : "gemini";
   }, [conversation?.bot_enabled, conversation?.bot_reply_mode]);
+
+  useEffect(() => {
+    setPlaygroundFlowError(null);
+  }, [conversationId]);
 
   useEffect(() => {
     const acc = conversation?.account_id;
@@ -799,18 +741,23 @@ export default function ChatWindow({
     }
   }, [filteredMessages, autoScroll, isNearBottom, isInitialLoad, scrollToBottom]);
 
+  const loadOlderRef = useRef(loadOlderMessages);
+  loadOlderRef.current = loadOlderMessages;
+
   useEffect(() => {
     const el = messagesContainerRef.current;
     if (!el) return;
     const handleScroll = () => {
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      // Si l'utilisateur scroll manuellement et n'est plus proche du bas, désactiver autoScroll
-      // Cela "fige" le scroll automatique pour cette conversation
       if (distanceFromBottom >= 120) {
         setAutoScroll(false);
       } else {
-        // Si l'utilisateur revient en bas, réactiver autoScroll
         setAutoScroll(true);
+      }
+
+      // Load older messages when scrolling near the top
+      if (el.scrollTop < 200) {
+        loadOlderRef.current();
       }
     };
     el.addEventListener("scroll", handleScroll, { passive: true });
@@ -1004,15 +951,15 @@ export default function ChatWindow({
               <label
                 className="chat-playground-flow__label"
                 htmlFor="chat-playground-flow-select"
-                title="Scénario Playground pour cette conversation"
+                title="Scénario utilisé pour cette conversation. Laissez vide pour appliquer le scénario actif du compte (webhook)."
               >
-                Flux
+                Scénario
               </label>
               <select
                 id="chat-playground-flow-select"
                 className="chat-playground-flow__select"
-                title="Scénario Playground"
-                aria-label="Scénario Playground"
+                title="Scénario Playground pour cette conversation"
+                aria-label="Scénario Playground pour cette conversation"
                 disabled={
                   playgroundFlowsLoading ||
                   playgroundFlowPending ||
@@ -1024,17 +971,25 @@ export default function ChatWindow({
                   const nextId = v === "" ? null : v;
                   const cur = conversation.playground_flow_id || null;
                   if (nextId === cur) return;
+                  setPlaygroundFlowError(null);
                   setPlaygroundFlowPending(true);
                   try {
                     await onPlaygroundFlowChange(conversation, nextId);
                   } catch (err) {
                     console.error(err);
+                    const msg =
+                      err?.response?.data?.detail ||
+                      err?.message ||
+                      "Impossible de changer le scénario.";
+                    setPlaygroundFlowError(
+                      typeof msg === "string" ? msg : "Impossible de changer le scénario."
+                    );
                   } finally {
                     setPlaygroundFlowPending(false);
                   }
                 }}
               >
-                <option value="">Défaut du compte</option>
+                <option value="">Scénario du compte (défaut)</option>
                 {playgroundFlows.map((f) => (
                   <option key={f.id} value={f.id}>
                     {f.name || f.id}
@@ -1042,6 +997,11 @@ export default function ChatWindow({
                   </option>
                 ))}
               </select>
+              {playgroundFlowError ? (
+                <span className="chat-playground-flow__error" role="alert">
+                  {playgroundFlowError}
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -1124,6 +1084,16 @@ export default function ChatWindow({
 
         <div className="messages-wrapper">
           <div className="messages" ref={messagesContainerRef}>
+            {isLoadingMore && (
+              <div style={{ textAlign: "center", padding: "8px 0", color: "#888", fontSize: "0.85rem" }}>
+                Chargement des messages plus anciens...
+              </div>
+            )}
+            {!hasMoreMessages && messages.length > MESSAGES_PAGE_SIZE && (
+              <div style={{ textAlign: "center", padding: "8px 0", color: "#aaa", fontSize: "0.8rem" }}>
+                Début de la conversation
+              </div>
+            )}
             {filteredMessages.map((m) => (
               <div
                 key={m.id}

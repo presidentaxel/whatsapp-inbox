@@ -96,6 +96,6 @@ async def get_current_user(
     return await get_cached_or_fetch(
         key=cache_key,
         fetch_func=fetch_and_load_user,
-        ttl_seconds=120  # 2 minutes - balance entre fraîcheur et performance
+        ttl_seconds=300  # 5 minutes - permissions rarely change, invalidation exists via auth_user:*
     )
 

@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { 
   FiSearch, 
   FiMoreVertical, 
@@ -51,11 +51,23 @@ export default function MobileConversationsList({
   onConnectedDevices,
   onImportant,
   onMarkAllRead,
-  onSettings
+  onSettings,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filter, setFilter] = useState("all");
+  const listRef = useRef(null);
+
+  const handleScroll = useCallback(() => {
+    if (!hasMore || loadingMore || !onLoadMore || !listRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = listRef.current;
+    if (scrollHeight - scrollTop - clientHeight < 200) {
+      onLoadMore();
+    }
+  }, [hasMore, loadingMore, onLoadMore]);
   
   // Gérer l'action "Important" en changeant le filtre
   const handleImportant = () => {
@@ -236,7 +248,7 @@ export default function MobileConversationsList({
       </div>
 
       {/* Liste des conversations */}
-      <div className="mobile-conversations__list">
+      <div className="mobile-conversations__list" ref={listRef} onScroll={handleScroll}>
         {filteredConversations.length === 0 ? (
           <div className="mobile-conversations__empty">
             <p>Aucune conversation</p>
@@ -272,12 +284,19 @@ export default function MobileConversationsList({
                               ? "playground"
                               : "bot"
                         }`}
+                        title={
+                          !conv.bot_enabled
+                            ? "Réponses manuelles"
+                            : conv.bot_reply_mode === "playground"
+                              ? "Parcours automatisé (peut inclure des blocs IA)"
+                              : "Assistant Gemini sur cette conversation"
+                        }
                       >
                         {!conv.bot_enabled
                           ? "Humain"
                           : conv.bot_reply_mode === "playground"
-                            ? "Playground"
-                            : "Gemini"}
+                            ? "Scénario"
+                            : "Assistant IA"}
                       </span>
                     </div>
                     <span className="mobile-conv-item__time">{time}</span>
@@ -313,6 +332,11 @@ export default function MobileConversationsList({
               </div>
             );
           })
+        )}
+        {hasMore && (
+          <div style={{ textAlign: "center", padding: "12px 0", color: "#888", fontSize: "0.85rem" }}>
+            {loadingMore ? "Chargement..." : "Défiler pour charger plus"}
+          </div>
         )}
       </div>
     </div>

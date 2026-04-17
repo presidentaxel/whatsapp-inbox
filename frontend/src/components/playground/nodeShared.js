@@ -104,7 +104,20 @@ export function summarizeStart(data) {
   }
   if (tt === "playground_audience") {
     const when = (data.campaignScheduledFor || "").replace("T", " ");
-    return when ? `${base} · ${when}` : `${base} · groupe`;
+    const scope = (data.playgroundAudienceScope || "").trim();
+    const scopeLabel =
+      scope === "phones"
+        ? "contacts"
+        : scope === "group"
+          ? "groupe"
+          : "tous";
+    return when ? `${base} · ${scopeLabel} · ${when}` : `${base} · ${scopeLabel}`;
+  }
+  if (tt === "message_in" && (data.playgroundAudienceScope || "").trim() === "phones") {
+    const n = Array.isArray(data.playgroundAudiencePhones)
+      ? data.playgroundAudiencePhones.length
+      : 0;
+    return `${base} · ${n} contact(s)`;
   }
   return base;
 }
@@ -114,6 +127,59 @@ export function summarizeTimeWindow(data) {
   const d0 = data.startTime || "09:00";
   const d1 = data.endTime || "18:00";
   return `${d0}–${d1} · ${days}j`;
+}
+
+/**
+ * Valeur stockée (ISO, datetime-local, etc.) → valeur affichable dans <input type="datetime-local">.
+ */
+export function untilToDatetimeLocalInputValue(raw) {
+  if (raw == null || String(raw).trim() === "") return "";
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Résumé court pour le nœud sur le canevas */
+export function summarizeWaitUntilCanvas(data) {
+  const vk = (data?.untilFromVarKey || "").trim();
+  if (vk) return `Variable: ${vk}`;
+  const u = (data?.until || "").trim();
+  if (u) return u.replace("T", " ").slice(0, 16);
+  return "Pas de date";
+}
+
+/**
+ * Texte d’état pour le formulaire (ce qui est réellement configuré).
+ */
+export function describeWaitUntilConfiguredState(data) {
+  const vk = (data?.untilFromVarKey || "").trim();
+  const raw = (data?.until || "").trim();
+  const tz = (data?.timezoneNote || "").trim();
+  if (vk) {
+    return {
+      kind: "variable",
+      text: `Date lue dans la variable de flux « ${vk} » (valeur ISO attendue au moment de l’exécution).`,
+    };
+  }
+  if (!raw) {
+    return {
+      kind: "empty",
+      text: "Aucune date fixe : le champ « Date et heure cible » est vide. Le moteur ne planifie pas d’attente sur une date (sauf si tu utilises une variable ci‑dessous).",
+    };
+  }
+  const local = untilToDatetimeLocalInputValue(raw);
+  const shown = local
+    ? local.replace("T", " ")
+    : raw.length > 48
+      ? `${raw.slice(0, 48)}…`
+      : raw;
+  return {
+    kind: "fixed",
+    text: `Date fixe affichée : ${shown}${tz ? ` · fuseau : ${tz}` : ""}`,
+  };
 }
 
 export function unitLabel(u) {

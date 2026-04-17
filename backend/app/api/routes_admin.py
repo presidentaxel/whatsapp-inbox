@@ -18,34 +18,32 @@ router = APIRouter()
 @router.get("/permissions")
 async def fetch_permissions(current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.ROLES_MANAGE)
-    return admin_service.list_permissions()
+    return await admin_service.list_permissions()
 
 
 @router.get("/roles")
 async def fetch_roles(current_user: CurrentUser = Depends(get_current_user)):
-    # Permettre à Admin et DEV de voir les rôles (pour l'affichage dans PermissionsTable)
-    # Seul Admin peut modifier les rôles via create/update/delete
     if not current_user.permissions.has(PermissionCodes.PERMISSIONS_VIEW):
         current_user.require(PermissionCodes.ROLES_MANAGE)
-    return admin_service.list_roles()
+    return await admin_service.list_roles()
 
 
 @router.post("/roles")
 async def create_role(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.ROLES_MANAGE)
-    return admin_service.create_role(payload)
+    return await admin_service.create_role(payload)
 
 
 @router.put("/roles/{role_id}")
 async def update_role(role_id: str, payload: dict, current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.ROLES_MANAGE)
-    return admin_service.update_role(role_id, payload)
+    return await admin_service.update_role(role_id, payload)
 
 
 @router.delete("/roles/{role_id}")
 async def remove_role(role_id: str, current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.ROLES_MANAGE)
-    admin_service.delete_role(role_id)
+    await admin_service.delete_role(role_id)
     return {"status": "deleted", "role_id": role_id}
 
 
@@ -53,7 +51,7 @@ async def remove_role(role_id: str, current_user: CurrentUser = Depends(get_curr
 async def fetch_users(current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.USERS_MANAGE)
     current_user.require(PermissionCodes.ROLES_MANAGE)
-    return admin_service.list_app_users()
+    return await admin_service.list_app_users()
 
 
 @router.post("/users/{user_id}/status")
@@ -62,19 +60,17 @@ async def update_user_status(user_id: str, payload: dict, current_user: CurrentU
     is_active = payload.get("is_active")
     if is_active is None:
         raise HTTPException(status_code=400, detail="is_active_required")
-    admin_service.set_user_status(user_id, bool(is_active))
+    await admin_service.set_user_status(user_id, bool(is_active))
     return {"status": "ok", "user_id": user_id, "is_active": bool(is_active)}
 
 
 @router.put("/users/{user_id}/roles")
 async def update_user_roles(user_id: str, payload: dict, current_user: CurrentUser = Depends(get_current_user)):
-    # Seul Admin peut modifier les rôles (via permissions.manage ou roles.manage)
-    # permissions.manage inclut la gestion des rôles car c'est un aspect de la gestion des permissions
     if not (current_user.permissions.has(PermissionCodes.PERMISSIONS_MANAGE) or 
             current_user.permissions.has(PermissionCodes.ROLES_MANAGE)):
         raise HTTPException(status_code=403, detail="permission_denied")
     assignments = payload.get("assignments", [])
-    admin_service.set_user_roles(user_id, assignments)
+    await admin_service.set_user_roles(user_id, assignments)
     return {"status": "ok"}
 
 
@@ -82,7 +78,7 @@ async def update_user_roles(user_id: str, payload: dict, current_user: CurrentUs
 async def update_user_overrides(user_id: str, payload: dict, current_user: CurrentUser = Depends(get_current_user)):
     current_user.require(PermissionCodes.ROLES_MANAGE)
     overrides = payload.get("overrides", [])
-    admin_service.set_user_overrides(user_id, overrides)
+    await admin_service.set_user_overrides(user_id, overrides)
     return {"status": "ok"}
 
 
@@ -161,7 +157,7 @@ async def fetch_users_with_access(current_user: CurrentUser = Depends(get_curren
     # permissions.view = DEV peut voir, permissions.manage = Admin peut modifier
     if not current_user.permissions.has(PermissionCodes.PERMISSIONS_VIEW):
         raise HTTPException(status_code=403, detail="permission_denied")
-    return admin_service.list_users_with_access()
+    return await admin_service.list_users_with_access()
 
 
 @router.put("/users/{user_id}/accounts/{account_id}/access")
@@ -172,15 +168,12 @@ async def update_user_account_access(
     current_user: CurrentUser = Depends(get_current_user)
 ):
     """Met à jour l'accès d'un utilisateur à un compte WhatsApp"""
-    # Seul Admin peut modifier (permissions.manage)
-    # Note: cette permission n'est PAS bloquée par access_level = 'aucun' car elle permet
-    # à l'admin de gérer les permissions même s'il a mis "aucun" pour lui-même
     current_user.require(PermissionCodes.PERMISSIONS_MANAGE)
     
     access_level = payload.get("access_level")
     if not access_level:
         raise HTTPException(status_code=400, detail="access_level_required")
-    admin_service.set_user_account_access(user_id, account_id, access_level)
+    await admin_service.set_user_account_access(user_id, account_id, access_level)
     return {"status": "ok", "user_id": user_id, "account_id": account_id, "access_level": access_level}
 
 

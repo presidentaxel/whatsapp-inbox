@@ -51,9 +51,17 @@ app = FastAPI(
     version="2.0.0",
 )
 
+_cors_origins_env = settings.CORS_ORIGINS if hasattr(settings, "CORS_ORIGINS") and settings.CORS_ORIGINS else None
+# Strip whitespace so "a, b, c" matches browser Origin headers (exact match, no leading space).
+_cors_origins = (
+    [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+    if _cors_origins_env
+    else ["*"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tu pourras restreindre plus tard
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

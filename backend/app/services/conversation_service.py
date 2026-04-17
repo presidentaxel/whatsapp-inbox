@@ -1,5 +1,6 @@
 import logging
-from typing import Optional
+from datetime import datetime
+from typing import List, Optional
 
 from fastapi import HTTPException
 
@@ -9,6 +10,9 @@ from app.core.pg import fetch_all, fetch_one, execute, get_pool
 from app.services.account_service import get_account_by_id
 
 logger = logging.getLogger(__name__)
+
+# Numéro réservé : conversation test Playground uniquement (exclue de la liste inbox principale).
+SANDBOX_PLAYGROUND_CLIENT_NUMBER = "33999999901"
 
 
 def _format_last_message(last_message_type: Optional[str], last_content_text: Optional[str]) -> str:
@@ -39,7 +43,8 @@ def _format_last_message(last_message_type: Optional[str], last_content_text: Op
 async def get_all_conversations(
     account_id: str,
     limit: int = 200,
-    cursor: Optional[str] = None,
+    cursor: Optional[datetime] = None,
+    updated_since: Optional[datetime] = None,
 ) -> Optional[list]:
     account = await get_account_by_id(account_id)
     if not account:
@@ -47,7 +52,6 @@ async def get_all_conversations(
 
     pool = get_pool()
     if pool:
-        # PostgreSQL direct: une seule requête avec LATERAL pour le dernier message
         sql = """
             SELECT c.id, c.contact_id, c.account_id, c.client_number, c.is_group, c.is_favorite,
                    c.unread_count, c.status, c.updated_at, c.bot_enabled, c.bot_reply_mode,
@@ -67,16 +71,17 @@ async def get_all_conversations(
                 LIMIT 1
             ) lm ON true
             WHERE c.account_id = $1
+              AND c.client_number IS DISTINCT FROM $2
         """
-        params: list = [account_id]
-        if cursor:
-            sql += " AND c.updated_at < $2"
+        params: list = [account_id, SANDBOX_PLAYGROUND_CLIENT_NUMBER]
+        if updated_since:
+            params.append(updated_since)
+            sql += f" AND c.updated_at > ${len(params)}::timestamptz"
+        elif cursor:
             params.append(cursor)
-            params.append(limit)
-            sql += " ORDER BY c.updated_at DESC LIMIT $3"
-        else:
-            params.append(limit)
-            sql += " ORDER BY c.updated_at DESC LIMIT $2"
+            sql += f" AND c.updated_at < ${len(params)}::timestamptz"
+        params.append(limit)
+        sql += f" ORDER BY c.updated_at DESC LIMIT ${len(params)}"
         rows = await fetch_all(sql, *params)
         conversations = []
         for r in rows:
@@ -112,12 +117,19 @@ async def get_all_conversations(
         .eq("account_id", account_id)
         .order("updated_at", desc=True)
     )
-    if cursor:
-        query = query.lt("updated_at", cursor)
+    if updated_since:
+        query = query.gt("updated_at", updated_since.isoformat())
+    elif cursor:
+        query = query.lt("updated_at", cursor.isoformat())
     query = query.limit(limit)
     res = await supabase_execute(query)
-    conversations = res.data
-    
+    raw_rows = res.data or []
+    conversations = [
+        c
+        for c in raw_rows
+        if c.get("client_number") != SANDBOX_PLAYGROUND_CLIENT_NUMBER
+    ]
+
     if not conversations:
         return []
     
@@ -153,7 +165,7 @@ async def get_all_conversations(
             )
         else:
             conv["last_message"] = ""
-    
+
     return conversations
 
 
@@ -361,24 +373,99 @@ async def set_conversation_bot_mode(
     return raw
 
 
-async def set_conversation_playground_flow(
-    conversation_id: str, playground_flow_id: Optional[str]
+async def ensure_playground_sandbox_conversation(
+    account_id: str, flow_id: str
 ) -> Optional[dict]:
-    """Lie une conversation à un flux playground (ou null = défaut du compte). Réinitialise bot_flow_state."""
+    """
+    Trouve ou crée la conversation de test pour le simulateur Playground,
+    active le bot en mode playground et lie le scénario donné.
+    """
+    conv = await find_or_create_conversation(account_id, SANDBOX_PLAYGROUND_CLIENT_NUMBER)
+    if not conv:
+        return None
+    cid = str(conv["id"])
+    await set_conversation_bot_mode(cid, True, "playground")
+    await set_conversation_playground_flow(cid, flow_id)
+    return await get_conversation_by_id_fresh(cid)
+
+
+async def reset_playground_sandbox_session(
+    account_id: str, flow_id: str
+) -> Optional[dict]:
+    """
+    Efface les messages du numéro réservé et réinitialise l'état du flux pour ce scénario.
+    Utile pour repartir de zéro après des tests dans le bac à sable.
+    """
+    conv = await ensure_playground_sandbox_conversation(account_id, flow_id)
+    if not conv:
+        return None
+    cid = str(conv["id"])
     if get_pool():
         await execute(
-            """
-            UPDATE conversations
-            SET playground_flow_id = $2, bot_flow_state = NULL
-            WHERE id = $1::uuid
-            """,
-            conversation_id,
-            playground_flow_id,
+            "DELETE FROM messages WHERE conversation_id = $1::uuid",
+            cid,
         )
     else:
         await supabase_execute(
+            supabase.table("messages").delete().eq("conversation_id", cid)
+        )
+    await invalidate_cache_pattern(f"conversation:{cid}")
+    return await get_conversation_by_id_fresh(cid)
+
+
+def _playground_flow_id_key(raw: Optional[str]) -> str:
+    if raw is None or raw == "":
+        return ""
+    return str(raw).strip().lower()
+
+
+async def set_conversation_playground_flow(
+    conversation_id: str, playground_flow_id: Optional[str]
+) -> Optional[dict]:
+    """
+    Lie une conversation à un flux playground (ou null = défaut du compte).
+    Réinitialise bot_flow_state uniquement lorsque l’identifiant de flux **change** ;
+    un nouvel appel avec le même flux (ex. simulate-inbound à chaque clic) ne doit pas
+    effacer la session du graphe (currentNodeId, variables, etc.).
+    """
+    row = await get_conversation_by_id(conversation_id)
+    if not row:
+        return None
+    prev_key = _playground_flow_id_key(row.get("playground_flow_id"))
+    next_key = _playground_flow_id_key(playground_flow_id)
+    if prev_key == next_key:
+        await invalidate_cache_pattern(f"conversation:{conversation_id}")
+        return await get_conversation_by_id(conversation_id)
+
+    if get_pool():
+        if playground_flow_id:
+            await execute(
+                """
+                UPDATE conversations
+                SET playground_flow_id = $2::uuid, bot_flow_state = NULL
+                WHERE id = $1::uuid
+                """,
+                conversation_id,
+                playground_flow_id,
+            )
+        else:
+            await execute(
+                """
+                UPDATE conversations
+                SET playground_flow_id = NULL, bot_flow_state = NULL
+                WHERE id = $1::uuid
+                """,
+                conversation_id,
+            )
+    else:
+        await supabase_execute(
             supabase.table("conversations")
-            .update({"playground_flow_id": playground_flow_id, "bot_flow_state": None})
+            .update(
+                {
+                    "playground_flow_id": playground_flow_id,
+                    "bot_flow_state": None,
+                }
+            )
             .eq("id", conversation_id)
         )
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
@@ -424,6 +511,55 @@ def normalize_phone_number(phone: str) -> Optional[str]:
         logger.debug(f"Phone number already in international format: {cleaned}")
     
     return cleaned
+
+
+async def list_conversation_phones_for_account(account_id: str, limit: int = 2000) -> List[str]:
+    """
+    Numéros distincts normalisés (hors conversation bac à sable Playground), pour audience « tout le monde ».
+    """
+    if get_pool():
+        rows = await fetch_all(
+            """
+            SELECT DISTINCT client_number
+            FROM conversations
+            WHERE account_id = $1::uuid
+              AND client_number IS NOT NULL
+              AND client_number IS DISTINCT FROM $2
+            LIMIT $3
+            """,
+            account_id,
+            SANDBOX_PLAYGROUND_CLIENT_NUMBER,
+            limit,
+        )
+        seen: set = set()
+        out: List[str] = []
+        for r in rows or []:
+            cn = r.get("client_number")
+            n = normalize_phone_number(str(cn or ""))
+            if n and n not in seen:
+                seen.add(n)
+                out.append(n)
+        return out
+
+    res = await supabase_execute(
+        supabase.table("conversations")
+        .select("client_number")
+        .eq("account_id", account_id)
+        .limit(limit * 2)
+    )
+    seen = set()
+    out: List[str] = []
+    for row in res.data or []:
+        cn = row.get("client_number")
+        if cn == SANDBOX_PLAYGROUND_CLIENT_NUMBER:
+            continue
+        n = normalize_phone_number(str(cn or ""))
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+        if len(out) >= limit:
+            break
+    return out
 
 
 async def find_or_create_conversation(account_id: str, phone_number: str) -> Optional[dict]:

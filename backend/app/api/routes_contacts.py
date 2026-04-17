@@ -1,11 +1,12 @@
+import asyncio
 import uuid as uuid_module
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.core.db import supabase, supabase_execute
-from app.services.contact_service import list_contacts
+from app.services.contact_service import list_contacts, count_contacts
 from app.services.account_service import get_account_by_id
 from app.services.profile_picture_service import update_all_contacts_profile_pictures
 
@@ -23,9 +24,17 @@ class ContactUpdate(BaseModel):
 
 
 @router.get("")
-async def fetch_contacts(current_user: CurrentUser = Depends(get_current_user)):
+async def fetch_contacts(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    current_user: CurrentUser = Depends(get_current_user),
+):
     current_user.require(PermissionCodes.CONTACTS_VIEW)
-    return await list_contacts()
+    items, total = await asyncio.gather(
+        list_contacts(limit=limit, offset=offset),
+        count_contacts(),
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("")

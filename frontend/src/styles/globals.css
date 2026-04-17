@@ -2033,7 +2033,7 @@ body {
 .chat-playground-flow {
   display: flex;
   flex-direction: row;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   width: auto;
@@ -2102,6 +2102,14 @@ body {
 .chat-playground-flow__select option {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
+}
+
+.chat-playground-flow__error {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.62rem;
+  line-height: 1.25;
+  color: #f87171;
 }
 
 .chat-search-bar {
@@ -2312,6 +2320,20 @@ body {
 [data-theme="dark"] .bubble.me {
   background: #005c4b;
   color: #e9edef;
+}
+
+.bubble__source {
+  font-size: 0.7rem;
+  font-weight: 500;
+  margin-bottom: 4px;
+  opacity: 0.88;
+  letter-spacing: 0.02em;
+}
+[data-theme="light"] .bubble.me .bubble__source {
+  color: rgba(0, 0, 0, 0.55);
+}
+[data-theme="dark"] .bubble.me .bubble__source {
+  color: rgba(233, 237, 239, 0.7);
 }
 
 /* Les bulles avec média ont moins de padding pour un look plus propre */

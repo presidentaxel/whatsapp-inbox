@@ -3,7 +3,8 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 import httpx
 
@@ -18,6 +19,7 @@ from app.services.account_service import (
     get_account_by_phone_number_id,
 )
 from app.services.conversation_service import (
+    SANDBOX_PLAYGROUND_CLIENT_NUMBER,
     get_conversation_by_id,
     get_conversation_by_id_fresh,
     set_conversation_bot_mode,
@@ -33,6 +35,16 @@ from app.services.whatsapp_api_service import (
 )
 
 FALLBACK_MESSAGE = "Je me renseigne auprès d'un collègue et je reviens vers vous au plus vite."
+BOT_CONFIDENCE_MIN_THRESHOLD = 0.72
+# Bac à sable Playground uniquement (conversation « 33999999901 ») : message visible quand le graphe ne répond pas.
+PLAYGROUND_SANDBOX_FLOW_SKIPPED_MESSAGE = (
+    "[Test sandbox] Le scénario n'a pas traité ce message. "
+    "Vérifiez une entrée « message entrant » (mot-clé), ou que le graphe est bien enregistré. "
+    "Si vous n'avez rien changé : essayez « Nouvelle session de test » (l'état du scénario peut référencer d'anciens nœuds)."
+)
+PLAYGROUND_SANDBOX_FLOW_ERROR_MESSAGE = (
+    "[Test sandbox] Erreur lors de l'exécution du scénario. Voir les logs serveur pour le détail."
+)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -243,11 +255,15 @@ async def _process_incoming_message(
     account_id: str, message: Dict[str, Any], contacts_map: Dict[str, Any]
 ):
     try:
-        print(f"🔍 [BOT DEBUG] _process_incoming_message called: account_id={account_id}, message_id={message.get('id')}, from={message.get('from')}")
-        logger.info(f"🔍 [BOT DEBUG] _process_incoming_message called: account_id={account_id}, message_id={message.get('id')}, from={message.get('from')}")
+        logger.debug(
+            "incoming webhook message: account_id=%s message_id=%s from=%s",
+            account_id,
+            message.get("id"),
+            message.get("from"),
+        )
         wa_id = message.get("from")
         if not wa_id:
-            logger.warning("⚠️ [BOT DEBUG] Message has no 'from' field, skipping")
+            logger.warning("incoming message has no 'from' field, skipping")
             return
 
         contact_info = contacts_map.get(wa_id, {})
@@ -267,10 +283,18 @@ async def _process_incoming_message(
 
         timestamp_iso = _timestamp_to_iso(message.get("timestamp"))
         contact = await _upsert_contact(wa_id, profile_name, profile_picture_url)
-        logger.info(f"🔍 [BOT DEBUG] Contact upserted: id={contact.get('id')}, whatsapp_number={contact.get('whatsapp_number')}")
-        
+        logger.debug(
+            "contact upserted: id=%s whatsapp_number=%s",
+            contact.get("id"),
+            contact.get("whatsapp_number"),
+        )
+
         conversation = await _upsert_conversation(account_id, contact["id"], wa_id, timestamp_iso)
-        logger.info(f"🔍 [BOT DEBUG] Conversation upserted: id={conversation.get('id')}, bot_enabled={conversation.get('bot_enabled')}")
+        logger.debug(
+            "conversation upserted: id=%s bot_enabled=%s",
+            conversation.get("id"),
+            conversation.get("bot_enabled"),
+        )
 
         # Invalider immédiatement le cache fenêtre gratuite pour que le prochain envoi
         # (ex. réponse rapide après "Eh") voie un état à jour et n'utilise pas un cache périmé
@@ -664,7 +688,12 @@ async def _process_incoming_message(
         if refreshed_conversation:
             conversation = refreshed_conversation
         
-        logger.info(f"🔍 [BOT DEBUG] Processing incoming message: conversation_id={conversation['id']}, bot_enabled={conversation.get('bot_enabled')}, content_text length={len(content_text or '')}")
+        logger.debug(
+            "processing incoming message: conversation_id=%s bot_enabled=%s content_len=%s",
+            conversation["id"],
+            conversation.get("bot_enabled"),
+            len(content_text or ""),
+        )
         await _maybe_trigger_bot_reply(
             conversation["id"],
             content_text,
@@ -1161,50 +1190,491 @@ async def _increment_unread_count(conversation: Dict[str, Any]):
     await invalidate_cache_pattern(f"conversation:{conversation['id']}")
 
 
+async def simulate_playground_sandbox_inbound(
+    conversation_id: str,
+    content_text: str,
+    *,
+    message_type: str = "text",
+    wa_message: Optional[Dict[str, Any]] = None,
+    flow_trace: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """
+    Insère un message entrant synthétique (wa_message_id préfixé sandbox_) et déclenche le bot.
+    Utilisé par le simulateur UI Playground. Pour la conversation sandbox (numéro réservé),
+    les réponses sortantes sont enregistrées en base uniquement, sans appel API WhatsApp.
+    """
+    conversation = await get_conversation_by_id_fresh(conversation_id)
+    if not conversation:
+        raise ValueError("conversation_not_found")
+
+    text = (content_text or "").strip()
+    if not text:
+        raise ValueError("empty_message")
+
+    nested = conversation.get("contacts") or {}
+    contact: Dict[str, Any] = {
+        "display_name": nested.get("display_name") or "Test Playground",
+        "whatsapp_number": nested.get("whatsapp_number") or conversation.get("client_number") or "",
+    }
+
+    ts = datetime.now(timezone.utc).isoformat()
+    wa_mid = f"sandbox_{uuid4()}"
+
+    if wa_message is None:
+        wa_message = {"type": "text", "text": {"body": text}}
+
+    mt_raw = (message_type or "text").lower()
+    if mt_raw == "button":
+        stored_message_type = "text"
+    else:
+        stored_message_type = mt_raw if mt_raw in ("text", "interactive") else "text"
+
+    if get_pool():
+        await execute(
+            """
+            INSERT INTO messages (
+                conversation_id, direction, content_text, timestamp, wa_message_id,
+                message_type, status
+            )
+            VALUES ($1::uuid, 'inbound', $2, $3::timestamptz, $4, $5, 'received')
+            """,
+            conversation_id,
+            text,
+            _parse_timestamp_iso(ts),
+            wa_mid,
+            stored_message_type,
+        )
+    else:
+        message_payload = {
+            "conversation_id": conversation_id,
+            "direction": "inbound",
+            "content_text": text,
+            "timestamp": ts,
+            "wa_message_id": wa_mid,
+            "message_type": stored_message_type,
+            "status": "received",
+        }
+        await supabase_execute(supabase.table("messages").insert(message_payload))
+
+    await _update_conversation_timestamp(conversation_id, ts)
+    await _increment_unread_count(conversation)
+    try:
+        from app.core.cache import get_cache
+
+        cache = await get_cache()
+        await cache.delete(f"free_window:{conversation_id}")
+    except Exception as cache_err:
+        logger.debug("sandbox inbound: free_window cache skip: %s", cache_err)
+
+    refreshed = await get_conversation_by_id_fresh(conversation_id)
+    if not refreshed:
+        return
+    nested2 = refreshed.get("contacts") or {}
+    contact2: Dict[str, Any] = {
+        "display_name": nested2.get("display_name") or contact.get("display_name"),
+        "whatsapp_number": nested2.get("whatsapp_number") or contact.get("whatsapp_number"),
+    }
+
+    await _maybe_trigger_bot_reply(
+        conversation_id,
+        text,
+        contact2,
+        stored_message_type,
+        wa_message=wa_message,
+        flow_trace=flow_trace,
+    )
+
+
+async def simulate_playground_campaign_launch(
+    conversation_id: str,
+    launch_entry_node_id: str,
+    *,
+    flow_trace: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
+    """
+    Exécute le graphe comme un lancement « campagne » (scheduled_flow_launch), sans message entrant.
+    Utilisé par le bac à sable pour tester un déclencheur playground_audience.
+    """
+    conversation = await get_conversation_by_id_fresh(conversation_id)
+    if not conversation:
+        raise ValueError("conversation_not_found")
+
+    nested = conversation.get("contacts") or {}
+    contact: Dict[str, Any] = {
+        "display_name": nested.get("display_name") or "Test Playground",
+        "whatsapp_number": nested.get("whatsapp_number")
+        or conversation.get("client_number")
+        or "",
+    }
+
+    from app.services.flow_runtime_service import try_run_playground_flow
+
+    return await try_run_playground_flow(
+        conversation_id,
+        conversation,
+        contact,
+        {},
+        "",
+        "text",
+        scheduled_flow_launch=True,
+        launch_entry_node_id=str(launch_entry_node_id).strip(),
+        flow_trace=flow_trace,
+    )
+
+
+def _is_playground_sandbox_conversation(conversation: Optional[Dict[str, Any]]) -> bool:
+    if not conversation:
+        return False
+    n = str(conversation.get("client_number") or "").strip()
+    return n == SANDBOX_PLAYGROUND_CLIENT_NUMBER
+
+
+async def _send_message_sandbox_internal(
+    payload: dict,
+    conversation: Dict[str, Any],
+    *,
+    skip_bot_trigger: bool = False,
+    is_system: bool = False,
+) -> Dict[str, Any]:
+    """Enregistre un message texte sortant sans appel WhatsApp (conversation sandbox Playground)."""
+    conv_id = payload.get("conversation_id")
+    text = payload.get("content") or ""
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    wa_mid = f"sandbox_out_{uuid4()}"
+    reply_to_message_id = payload.get("reply_to_message_id")
+    sent_by_user_id = payload.get("sent_by_user_id")
+    sent_via = payload.get("sent_via")
+    outbound_meta = payload.get("outbound_meta")
+    om_json = json.dumps(outbound_meta, ensure_ascii=False) if isinstance(outbound_meta, dict) else None
+    account_id_for_audit = conversation.get("account_id")
+
+    message_payload = {
+        "conversation_id": conv_id,
+        "direction": "outbound",
+        "content_text": text,
+        "timestamp": timestamp_iso,
+        "wa_message_id": wa_mid,
+        "message_type": "text",
+        "status": "sent",
+        "is_system": is_system,
+    }
+    if sent_by_user_id is not None:
+        message_payload["sent_by_user_id"] = sent_by_user_id
+    if sent_via is not None:
+        message_payload["sent_via"] = sent_via
+    if outbound_meta is not None:
+        message_payload["outbound_meta"] = outbound_meta
+    if reply_to_message_id:
+        message_payload["reply_to_message_id"] = reply_to_message_id
+
+    try:
+        if get_pool():
+            await execute(
+                """
+                INSERT INTO messages (
+                    conversation_id, direction, content_text, timestamp, wa_message_id,
+                    message_type, status, is_system, reply_to_message_id, sent_by_user_id, sent_via, outbound_meta
+                )
+                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'text', 'sent', $5, $6::uuid, $7::uuid, $8, $9::jsonb)
+                """,
+                conv_id,
+                text,
+                _parse_timestamp_iso(timestamp_iso),
+                wa_mid,
+                message_payload.get("is_system", False),
+                message_payload.get("reply_to_message_id"),
+                sent_by_user_id,
+                sent_via,
+                om_json,
+            )
+            row = await fetch_one(
+                "SELECT id FROM messages WHERE wa_message_id = $1 LIMIT 1",
+                wa_mid,
+            )
+            await _update_conversation_timestamp(conv_id, timestamp_iso)
+            if row and account_id_for_audit and sent_by_user_id:
+                from app.services.audit_service import log_action
+
+                await log_action(
+                    action="message.sent",
+                    resource_type="message",
+                    resource_id=str(row["id"]),
+                    user_id=sent_by_user_id,
+                    account_id=account_id_for_audit,
+                    details={"sent_via": sent_via or "sandbox", "sandbox": True},
+                )
+        else:
+            await asyncio.gather(
+                supabase_execute(
+                    supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
+                ),
+                _update_conversation_timestamp(conv_id, timestamp_iso),
+            )
+            if account_id_for_audit and sent_by_user_id:
+                from app.services.audit_service import log_action
+
+                res = await supabase_execute(
+                    supabase.table("messages")
+                    .select("id")
+                    .eq("wa_message_id", wa_mid)
+                    .limit(1)
+                )
+                if res.data and len(res.data) > 0:
+                    await log_action(
+                        action="message.sent",
+                        resource_type="message",
+                        resource_id=str(res.data[0]["id"]),
+                        user_id=sent_by_user_id,
+                        account_id=account_id_for_audit,
+                        details={"sent_via": sent_via or "sandbox", "sandbox": True},
+                    )
+    except Exception as e:
+        logger.error("sandbox outbound text insert failed: %s", e, exc_info=True)
+        return {"error": "sandbox_persist_failed", "details": str(e)}
+
+    return {
+        "status": "sent",
+        "message_id": wa_mid,
+        "is_free": True,
+        "price_usd": 0.0,
+        "price_eur": 0.0,
+        "category": "sandbox",
+    }
+
+
+def _sandbox_quick_reply_buttons_meta(
+    raw: Optional[Any],
+) -> List[Dict[str, Any]]:
+    """Normalise les boutons définis dans le graphe pour l’aperçu sandbox (pas d’appel Graph)."""
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for b in raw[:24]:
+        if not isinstance(b, dict):
+            continue
+        bid = str(b.get("id") or b.get("payload") or "").strip()
+        title = str(b.get("text") or b.get("title") or "").strip()
+        if not title and not bid:
+            continue
+        item: Dict[str, Any] = {"text": title, "type": "QUICK_REPLY"}
+        if bid:
+            item["id"] = bid
+        out.append(item)
+    return out
+
+
+async def persist_sandbox_flow_template_outbound(
+    conversation_id: str,
+    template_name: str,
+    language_code: str,
+    components: Optional[List[Dict[str, Any]]],
+    *,
+    quick_reply_buttons: Optional[Any] = None,
+) -> None:
+    """Enregistre un envoi template simulé (flux Playground sandbox, sans appel Graph)."""
+    preview_parts = [f"[Template sandbox] {template_name} ({language_code})"]
+    if components:
+        for c in components:
+            if not isinstance(c, dict):
+                continue
+            # Graph envoie souvent "body" ; d’autres chemins utilisent "BODY"
+            if str(c.get("type") or "").upper() == "BODY":
+                ps = c.get("parameters") or []
+                for p in ps:
+                    if isinstance(p, dict) and p.get("text"):
+                        preview_parts.append(str(p.get("text")))
+    content_text = "\n".join(preview_parts)[:8000]
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    wa_mid = f"sandbox_tpl_{uuid4()}"
+    qr_meta = _sandbox_quick_reply_buttons_meta(quick_reply_buttons)
+    outbound_meta: Dict[str, Any] = {
+        "source": "flow",
+        "sandbox": True,
+        "simulated": True,
+    }
+    if qr_meta:
+        outbound_meta["quick_reply_buttons"] = qr_meta
+    message_payload = {
+        "conversation_id": conversation_id,
+        "direction": "outbound",
+        "content_text": content_text,
+        "timestamp": timestamp_iso,
+        "wa_message_id": wa_mid,
+        "message_type": "template",
+        "status": "sent",
+        "sent_via": "flow",
+        "outbound_meta": outbound_meta,
+    }
+    try:
+        if get_pool():
+            om = json.dumps(outbound_meta, ensure_ascii=False)
+            await execute(
+                """
+                INSERT INTO messages (
+                    conversation_id, direction, content_text, timestamp, wa_message_id,
+                    message_type, status, sent_via, outbound_meta
+                )
+                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'template', 'sent', $5, $6::jsonb)
+                """,
+                conversation_id,
+                content_text,
+                _parse_timestamp_iso(timestamp_iso),
+                wa_mid,
+                "flow",
+                om,
+            )
+        else:
+            await supabase_execute(
+                supabase.table("messages").insert(
+                    {
+                        **{k: v for k, v in message_payload.items() if k != "outbound_meta"},
+                        "outbound_meta": message_payload.get("outbound_meta"),
+                    }
+                )
+            )
+        await _update_conversation_timestamp(conversation_id, timestamp_iso)
+    except Exception as e:
+        logger.error("persist_sandbox_flow_template_outbound failed: %s", e, exc_info=True)
+        raise
+
+
+async def _send_interactive_sandbox_internal(
+    conversation_id: str,
+    interactive_type: str,
+    body_text: str,
+    interactive_payload: dict,
+    header_text: Optional[str] = None,
+    footer_text: Optional[str] = None,
+    sent_by_user_id: Optional[str] = None,
+    sent_via: Optional[str] = None,
+    outbound_meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Enregistre un message interactif sortant sans appel WhatsApp (sandbox)."""
+    if interactive_type == "button":
+        button_titles = [
+            btn.get("reply", {}).get("title", "")
+            for btn in (interactive_payload or {}).get("buttons", [])
+            if isinstance(btn, dict)
+        ]
+        preview_text = f"{body_text}\n[Boutons: {', '.join(button_titles)}]"
+    else:
+        preview_text = f"{body_text}\n[Liste interactive - sandbox]"
+
+    timestamp_iso = datetime.now(timezone.utc).isoformat()
+    wa_mid = f"sandbox_ix_{uuid4()}"
+    interactive_data_json = json.dumps(
+        {
+            "type": interactive_type,
+            "header": header_text,
+            "body": body_text,
+            "footer": footer_text,
+            "action": interactive_payload,
+            "sandbox": True,
+        },
+        ensure_ascii=False,
+    )
+    om_ix = json.dumps(outbound_meta, ensure_ascii=False) if isinstance(outbound_meta, dict) else None
+    try:
+        if get_pool():
+            await execute(
+                """
+                INSERT INTO messages (
+                    conversation_id, direction, content_text, timestamp, wa_message_id,
+                    message_type, status, interactive_data, sent_by_user_id, sent_via, outbound_meta
+                )
+                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'interactive', 'sent', $5::jsonb, $6::uuid, $7, $8::jsonb)
+                """,
+                conversation_id,
+                preview_text,
+                _parse_timestamp_iso(timestamp_iso),
+                wa_mid,
+                interactive_data_json,
+                sent_by_user_id,
+                sent_via,
+                om_ix,
+            )
+            await _update_conversation_timestamp(conversation_id, timestamp_iso)
+        else:
+            mp = {
+                "conversation_id": conversation_id,
+                "direction": "outbound",
+                "content_text": preview_text,
+                "timestamp": timestamp_iso,
+                "wa_message_id": wa_mid,
+                "message_type": "interactive",
+                "status": "sent",
+                "interactive_data": interactive_data_json,
+            }
+            if sent_by_user_id is not None:
+                mp["sent_by_user_id"] = sent_by_user_id
+            if sent_via is not None:
+                mp["sent_via"] = sent_via
+            if outbound_meta is not None:
+                mp["outbound_meta"] = outbound_meta
+            await asyncio.gather(
+                supabase_execute(supabase.table("messages").insert(mp)),
+                _update_conversation_timestamp(conversation_id, timestamp_iso),
+            )
+    except Exception as e:
+        logger.error("sandbox interactive insert failed: %s", e, exc_info=True)
+        return {"error": "sandbox_persist_failed", "details": str(e)}
+
+    return {"status": "sent", "message_id": wa_mid}
+
+
 async def _maybe_trigger_bot_reply(
     conversation_id: str,
     content_text: Optional[str],
     contact: Dict[str, Any],
     message_type: Optional[str] = "text",
     wa_message: Optional[Dict[str, Any]] = None,
+    flow_trace: Optional[List[Dict[str, Any]]] = None,
 ):
-    print(f"🔍 [BOT DEBUG] _maybe_trigger_bot_reply called for conversation {conversation_id}, content_text length: {len(content_text or '')}, message_type: {message_type}")
-    logger.info(f"🔍 [BOT DEBUG] _maybe_trigger_bot_reply called for conversation {conversation_id}, content_text length: {len(content_text or '')}, message_type: {message_type}")
-    
+    logger.debug(
+        "_maybe_trigger_bot_reply: conversation_id=%s content_len=%s message_type=%s",
+        conversation_id,
+        len(content_text or ""),
+        message_type,
+    )
+
     message_text = (content_text or "").strip()
     if not message_text:
-        logger.info(f"ℹ️ [BOT DEBUG] Bot skip: empty message for conversation {conversation_id}")
+        logger.debug("bot skip: empty message for conversation %s", conversation_id)
         return
 
-    logger.info(f"🔍 [BOT DEBUG] Fetching conversation {conversation_id} to check bot status")
     conversation = await get_conversation_by_id_fresh(conversation_id)
-    
+
     if not conversation:
-        logger.warning(f"⚠️ [BOT DEBUG] Conversation {conversation_id} not found, cannot trigger bot")
+        logger.warning("conversation %s not found, cannot trigger bot", conversation_id)
         return
-        
+
     reply_mode = str(conversation.get("bot_reply_mode") or "gemini").strip().lower()
-    logger.info(
-        f"🔍 [BOT DEBUG] Conversation found: id={conversation_id}, bot_enabled={conversation.get('bot_enabled')}, "
-        f"bot_reply_mode={reply_mode}, account_id={conversation.get('account_id')}"
+    logger.debug(
+        "conversation %s bot_enabled=%s bot_reply_mode=%s",
+        conversation_id,
+        conversation.get("bot_enabled"),
+        reply_mode,
     )
 
     if not conversation.get("bot_enabled"):
-        logger.info(f"ℹ️ [BOT DEBUG] Bot skip: bot disabled for conversation {conversation_id}")
+        logger.debug("bot skip: bot disabled for conversation %s", conversation_id)
         return
 
     account_id = conversation["account_id"]
-    logger.info(f"🔍 [BOT DEBUG] Account ID: {account_id}")
 
     mt = (message_type or "text").lower() if message_type else "text"
     if mt not in ("text", "button", "interactive"):
         fallback = "Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ?"
-        logger.info(f"ℹ️ [BOT DEBUG] Non-text message detected for {conversation_id} (type: {message_type}); sending fallback")
+        logger.debug(
+            "non-text message for %s (type=%s); sending fallback",
+            conversation_id,
+            message_type,
+        )
         await send_message({"conversation_id": conversation_id, "content": fallback}, skip_bot_trigger=True)
         return
 
     contact_name = contact.get("display_name") or contact.get("whatsapp_number")
-    logger.info(f"🔍 [BOT DEBUG] Contact name: {contact_name}, contact data: {list(contact.keys())}")
+    logger.debug("bot contact_name=%s", contact_name)
 
     if reply_mode == "playground":
         try:
@@ -1217,77 +1687,153 @@ async def _maybe_trigger_bot_reply(
                 wa_message or {},
                 message_text,
                 message_type,
+                flow_trace=flow_trace,
             )
             if flow_done:
-                logger.info(
-                    "🧩 [BOT DEBUG] Playground flow handled message for conversation %s",
-                    conversation_id,
-                )
+                logger.debug("playground flow handled message for conversation %s", conversation_id)
                 return
             logger.warning(
-                "playground mode: flux non exécuté (graphe absent, start non match, compte WABA, …) "
-                "- pas de fallback Gemini. conversation_id=%s account_id=%s playground_flow_id=%s",
+                "playground flow did not handle message for conversation %s "
+                "(account_id=%s playground_flow_id=%s)",
                 conversation_id,
                 conversation.get("account_id"),
                 conversation.get("playground_flow_id"),
             )
+            if _is_playground_sandbox_conversation(conversation):
+                await send_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "content": PLAYGROUND_SANDBOX_FLOW_SKIPPED_MESSAGE,
+                        "sent_via": "playground_sandbox",
+                        "outbound_meta": {
+                            "source": "playground_sandbox",
+                            "reason": "flow_not_run",
+                        },
+                    },
+                    skip_bot_trigger=True,
+                )
             return
         except Exception as flow_exc:
             logger.error(
-                "❌ [BOT DEBUG] Playground flow error for %s: %s",
+                "playground flow error for conversation %s: %s",
                 conversation_id,
                 flow_exc,
                 exc_info=True,
             )
-            # Erreur inattendue : dernier recours Gemini pour ne pas laisser sans réponse.
+            if _is_playground_sandbox_conversation(conversation):
+                await send_message(
+                    {
+                        "conversation_id": conversation_id,
+                        "content": PLAYGROUND_SANDBOX_FLOW_ERROR_MESSAGE,
+                        "sent_via": "playground_sandbox",
+                        "outbound_meta": {
+                            "source": "playground_sandbox",
+                            "reason": "flow_exception",
+                        },
+                    },
+                    skip_bot_trigger=True,
+                )
+                return
 
     try:
-        logger.info(
-            f"🤖 [BOT DEBUG] Starting Gemini invocation for conversation {conversation_id} (account={account_id}, contact={contact_name}, message_length={len(message_text)})"
+        logger.debug(
+            "starting Gemini for conversation %s (account=%s message_len=%s)",
+            conversation_id,
+            account_id,
+            len(message_text),
         )
-        reply = await bot_service.generate_bot_reply(
+        bot_payload = await bot_service.generate_bot_reply_with_confidence(
             conversation_id,
             conversation["account_id"],
             message_text,
             contact_name,
         )
-        logger.info(f"✅ [BOT DEBUG] Gemini returned reply: length={len(reply) if reply else 0}, preview: '{reply[:100] if reply else None}...'")
+        reply = (bot_payload or {}).get("reply")
+        confidence = float((bot_payload or {}).get("confidence") or 0.0)
+        confidence_reasons = (bot_payload or {}).get("confidence_reasons") or []
+        logger.debug(
+            "Gemini reply length=%s confidence=%.2f",
+            len(reply) if reply else 0,
+            confidence,
+        )
     except Exception as exc:
-        logger.error(f"❌ [BOT DEBUG] Bot generation failed for {conversation_id}: {exc}", exc_info=True)
+        logger.error(
+            "bot generation failed for conversation %s: %s",
+            conversation_id,
+            exc,
+            exc_info=True,
+        )
         return
 
     if not reply:
-        logger.info(f"ℹ️ [BOT DEBUG] Gemini returned empty text for {conversation_id}, escalating to human")
+        logger.debug("Gemini empty reply for %s; escalating", conversation_id)
         await send_message({"conversation_id": conversation_id, "content": FALLBACK_MESSAGE}, skip_bot_trigger=True)
-        await _escalate_to_human(conversation, message_text)
+        await _escalate_to_human(
+            conversation,
+            message_text,
+            ai_reply=None,
+            ai_confidence=0.0,
+            ai_confidence_reasons=confidence_reasons,
+        )
+        return
+
+    if confidence < BOT_CONFIDENCE_MIN_THRESHOLD:
+        logger.debug(
+            "confidence too low for %s (%.2f < %.2f), escalating",
+            conversation_id,
+            confidence,
+            BOT_CONFIDENCE_MIN_THRESHOLD,
+        )
+        await send_message({"conversation_id": conversation_id, "content": FALLBACK_MESSAGE}, skip_bot_trigger=True)
+        await _escalate_to_human(
+            conversation,
+            message_text,
+            ai_reply=reply,
+            ai_confidence=confidence,
+            ai_confidence_reasons=confidence_reasons,
+        )
         return
 
     normalized_reply = reply.strip().lower()
     requires_escalation = normalized_reply == FALLBACK_MESSAGE.lower()
 
-    logger.info(f"🔍 [BOT DEBUG] Sending bot reply for conversation {conversation_id}, reply length: {len(reply)}")
-    send_result = await send_message({"conversation_id": conversation_id, "content": reply}, skip_bot_trigger=True)
-    
+    logger.debug("sending bot reply for conversation %s (len=%s)", conversation_id, len(reply))
+    send_result = await send_message(
+        {
+            "conversation_id": conversation_id,
+            "content": reply,
+            "sent_via": "bot",
+            "outbound_meta": {"source": "gemini_bot", "mode": "conversation"},
+        },
+        skip_bot_trigger=True,
+    )
+
     if isinstance(send_result, dict) and send_result.get("error"):
-        logger.error(f"❌ [BOT DEBUG] Bot send failed for {conversation_id}: {send_result}")
+        logger.error("bot send failed for conversation %s: %s", conversation_id, send_result)
         if message_type and message_type != "text":
-            logger.info(f"ℹ️ [BOT DEBUG] Disabling bot for {conversation_id} after unsupported content")
+            logger.info("disabling bot for %s after unsupported content", conversation_id)
             await set_conversation_bot_mode(conversation_id, False)
         return
 
-    logger.info(f"✅ [BOT DEBUG] Bot reply sent successfully for conversation {conversation_id} (length={len(reply)})")
+    logger.info("bot reply sent for conversation %s (length=%s)", conversation_id, len(reply))
     await supabase_execute(
         supabase.table("conversations")
         .update({"bot_last_reply_at": datetime.now(timezone.utc).isoformat()})
         .eq("id", conversation_id)
     )
-    logger.info(f"✅ [BOT DEBUG] Updated bot_last_reply_at for conversation {conversation_id}")
-    # Invalider le cache pour garantir la cohérence
+    logger.debug("updated bot_last_reply_at for conversation %s", conversation_id)
     from app.core.cache import invalidate_cache_pattern
+
     await invalidate_cache_pattern(f"conversation:{conversation_id}")
 
     if requires_escalation:
-        await _escalate_to_human(conversation, message_text)
+        await _escalate_to_human(
+            conversation,
+            message_text,
+            ai_reply=reply,
+            ai_confidence=confidence,
+            ai_confidence_reasons=confidence_reasons,
+        )
 
 
 async def get_messages(
@@ -1718,16 +2264,33 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         is_system: Si True, marque le message comme système (ne sera pas affiché dans l'interface)
     """
     import asyncio
-    
-    print(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}, force_send={force_send}")
-    logger.info(f"📤 [SEND MESSAGE] send_message() called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}, skip_bot_trigger={skip_bot_trigger}, force_send={force_send}")
-    
+
+    logger.debug(
+        "send_message: conversation_id=%s content_len=%s skip_bot_trigger=%s force_send=%s",
+        payload.get("conversation_id"),
+        len(payload.get("content") or ""),
+        skip_bot_trigger,
+        force_send,
+    )
+
     conv_id = payload.get("conversation_id")
     text = payload.get("content")
 
     if not conv_id or not text:
-        print(f"❌ [SEND MESSAGE] Invalid payload: conv_id={conv_id}, text_length={len(text or '')}")
+        logger.debug("send_message invalid payload: conv_id=%s text_len=%s", conv_id, len(text or ""))
         return {"error": "invalid_payload", "message": "conversation_id and content are required"}
+
+    conversation = await get_conversation_by_id(conv_id)
+    if not conversation:
+        return {"error": "conversation_not_found"}
+
+    if _is_playground_sandbox_conversation(conversation):
+        return await _send_message_sandbox_internal(
+            payload,
+            conversation,
+            skip_bot_trigger=skip_bot_trigger,
+            is_system=is_system,
+        )
 
     # Vérifier si on est dans la fenêtre gratuite
     is_free, last_inbound_time = await is_within_free_window(conv_id)
@@ -1737,11 +2300,6 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
     if not is_free and not force_send:
         # Si force_send=False, utiliser le système avec fallback template
         return await send_message_with_template_fallback(payload, skip_bot_trigger=skip_bot_trigger)
-
-    # Récupérer la conversation (avec cache)
-    conversation = await get_conversation_by_id(conv_id)
-    if not conversation:
-        return {"error": "conversation_not_found"}
 
     to_number = conversation["client_number"]
     account_id = conversation.get("account_id")
@@ -1884,6 +2442,7 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
     # Traçabilité: qui a envoyé et via quel canal (propagé par les routes)
     sent_by_user_id = payload.get("sent_by_user_id")
     sent_via = payload.get("sent_via")
+    outbound_meta = payload.get("outbound_meta")
     account_id_for_audit = conversation.get("account_id")
 
     # Retourner immédiatement après l'envoi à WhatsApp
@@ -1903,10 +2462,14 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
         message_payload["sent_by_user_id"] = sent_by_user_id
     if sent_via is not None:
         message_payload["sent_via"] = sent_via
+    if outbound_meta is not None:
+        message_payload["outbound_meta"] = outbound_meta
 
     # Ajouter reply_to_message_id si présent
     if reply_to_message_id:
         message_payload["reply_to_message_id"] = reply_to_message_id
+
+    om_json = json.dumps(outbound_meta, ensure_ascii=False) if isinstance(outbound_meta, dict) else None
 
     async def _save_message_async():
         try:
@@ -1916,7 +2479,7 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
                     await execute(
                         """
                         UPDATE messages SET wa_message_id = $2, status = 'sent', timestamp = $3::timestamptz,
-                        content_text = $4, sent_by_user_id = $5, sent_via = $6
+                        content_text = $4, sent_by_user_id = $5, sent_via = $6, outbound_meta = $7::jsonb
                         WHERE id = $1::uuid
                         """,
                         existing_message_id,
@@ -1925,18 +2488,24 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
                         text,
                         sent_by_user_id,
                         sent_via,
+                        om_json,
                     )
                 else:
+                    upd = {
+                        "wa_message_id": message_id,
+                        "status": "sent",
+                        "timestamp": timestamp_iso,
+                        "content_text": text,
+                    }
+                    if sent_by_user_id is not None:
+                        upd["sent_by_user_id"] = sent_by_user_id
+                    if sent_via is not None:
+                        upd["sent_via"] = sent_via
+                    if outbound_meta is not None:
+                        upd["outbound_meta"] = outbound_meta
                     await supabase_execute(
                         supabase.table("messages")
-                        .update({
-                            "wa_message_id": message_id,
-                            "status": "sent",
-                            "timestamp": timestamp_iso,
-                            "content_text": text,
-                            **({"sent_by_user_id": sent_by_user_id} if sent_by_user_id is not None else {}),
-                            **({"sent_via": sent_via} if sent_via is not None else {}),
-                        })
+                        .update(upd)
                         .eq("id", existing_message_id)
                     )
                 await _update_conversation_timestamp(conv_id, timestamp_iso)
@@ -1954,9 +2523,9 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
             if get_pool():
                 await execute(
                     """
-                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, is_system, reply_to_message_id, sent_by_user_id, sent_via)
-                    VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'text', 'sent', $5, $6::uuid, $7::uuid, $8)
-                    ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, content_text = EXCLUDED.content_text, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via
+                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, is_system, reply_to_message_id, sent_by_user_id, sent_via, outbound_meta)
+                    VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'text', 'sent', $5, $6::uuid, $7::uuid, $8, $9::jsonb)
+                    ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, content_text = EXCLUDED.content_text, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via, outbound_meta = EXCLUDED.outbound_meta
                     """,
                     conv_id,
                     text,
@@ -1966,6 +2535,7 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
                     message_payload.get("reply_to_message_id"),
                     sent_by_user_id,
                     sent_via,
+                    om_json,
                 )
                 # execute() doesn't return rows; we need fetch_one for RETURNING - use a different approach
                 row = await fetch_one(
@@ -2052,25 +2622,36 @@ async def is_within_free_window(conversation_id: str, skip_cache: bool = False) 
             logger.debug(f"🕐 Free window CACHE HIT for conversation {conversation_id}: is_free={is_free}")
             return (is_free, last_interaction_time)
     
-    # Récupérer le dernier message ENTRANT (client) de la conversation
-    # Seuls les messages entrants comptent pour la fenêtre gratuite
-    # Exclure les messages échoués car ils ne comptent pas comme interaction valide
-    # Note: .neq() inclut automatiquement les valeurs NULL, donc les messages sans statut sont inclus
-    last_message = await supabase_execute(
-        supabase.table("messages")
-        .select("timestamp, direction, status")
-        .eq("conversation_id", conversation_id)
-        .eq("direction", "inbound")  # Seulement les messages entrants (clients)
-        .neq("status", "failed")  # Exclure uniquement les messages échoués (inclut NULL et autres statuts)
-        .order("timestamp", desc=True)
-        .limit(1)
-    )
-    
-    if not last_message.data or len(last_message.data) == 0:
+    if get_pool():
+        row = await fetch_one(
+            """
+            SELECT timestamp, direction
+            FROM messages
+            WHERE conversation_id = $1::uuid
+              AND direction = 'inbound'
+              AND (status IS NULL OR status <> 'failed')
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            conversation_id,
+        )
+        last_message_data = dict(row) if row else None
+    else:
+        last_message = await supabase_execute(
+            supabase.table("messages")
+            .select("timestamp, direction, status")
+            .eq("conversation_id", conversation_id)
+            .eq("direction", "inbound")
+            .neq("status", "failed")
+            .order("timestamp", desc=True)
+            .limit(1)
+        )
+        last_message_data = last_message.data[0] if last_message.data else None
+
+    if not last_message_data:
         logger.warning(f"⚠️ No valid messages found for conversation {conversation_id} (excluding failed messages)")
         return (False, None)
-    
-    last_message_data = last_message.data[0]
+
     last_interaction_time_str = last_message_data["timestamp"]
     last_interaction_direction = last_message_data.get("direction", "unknown")
     
@@ -2241,6 +2822,17 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
     if not conv_id or not text:
         return {"error": "invalid_payload", "message": "conversation_id and content are required"}
 
+    conversation = await get_conversation_by_id(conv_id)
+    if not conversation:
+        return {"error": "conversation_not_found"}
+    if _is_playground_sandbox_conversation(conversation):
+        return await _send_message_sandbox_internal(
+            payload,
+            conversation,
+            skip_bot_trigger=skip_bot_trigger,
+            is_system=False,
+        )
+
     # Vérifier si on est dans la fenêtre gratuite
     is_free, last_inbound_time = await is_within_free_window(conv_id)
     
@@ -2257,10 +2849,6 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
     
     # Hors fenêtre : utiliser un template UTILITY
     logger.info(f"💰 Sending paid message with UTILITY template for conversation {conv_id}")
-    
-    conversation = await get_conversation_by_id(conv_id)
-    if not conversation:
-        return {"error": "conversation_not_found"}
     
     account = await get_account_by_id(conversation.get("account_id"))
     if not account:
@@ -2306,6 +2894,8 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
         timestamp_iso = datetime.now(timezone.utc).isoformat()
         sent_by_user_id = payload.get("sent_by_user_id")
         sent_via = payload.get("sent_via")
+        outbound_meta_fb = payload.get("outbound_meta")
+        om_fb_json = json.dumps(outbound_meta_fb, ensure_ascii=False) if isinstance(outbound_meta_fb, dict) else None
 
         # Sauvegarder le message
         message_payload = {
@@ -2321,15 +2911,17 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
             message_payload["sent_by_user_id"] = sent_by_user_id
         if sent_via is not None:
             message_payload["sent_via"] = sent_via
+        if outbound_meta_fb is not None:
+            message_payload["outbound_meta"] = outbound_meta_fb
 
         async def _save_message_async():
             try:
                 if get_pool():
                     await execute(
                         """
-                        INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, sent_by_user_id, sent_via)
-                        VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'template', 'sent', $5::uuid, $6)
-                        ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via
+                        INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, sent_by_user_id, sent_via, outbound_meta)
+                        VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'template', 'sent', $5::uuid, $6, $7::jsonb)
+                        ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via, outbound_meta = EXCLUDED.outbound_meta
                         """,
                         conv_id,
                         text,
@@ -2337,6 +2929,7 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
                         message_id,
                         sent_by_user_id,
                         sent_via,
+                        om_fb_json,
                     )
                     await _update_conversation_timestamp(conv_id, timestamp_iso)
                 else:
@@ -2425,6 +3018,7 @@ async def send_interactive_message_with_storage(
     footer_text: Optional[str] = None,
     sent_by_user_id: Optional[str] = None,
     sent_via: Optional[str] = None,
+    outbound_meta: Optional[Dict[str, Any]] = None,
 ):
     """
     Envoie un message interactif (buttons/list) ET l'enregistre correctement dans la base
@@ -2435,6 +3029,19 @@ async def send_interactive_message_with_storage(
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
         return {"error": "conversation_not_found"}
+
+    if _is_playground_sandbox_conversation(conversation):
+        return await _send_interactive_sandbox_internal(
+            conversation_id,
+            interactive_type,
+            body_text,
+            interactive_payload,
+            header_text=header_text,
+            footer_text=footer_text,
+            sent_by_user_id=sent_by_user_id,
+            sent_via=sent_via,
+            outbound_meta=outbound_meta,
+        )
 
     to_number = conversation["client_number"]
     account_id = conversation.get("account_id")
@@ -2523,12 +3130,13 @@ async def send_interactive_message_with_storage(
             "footer": footer_text,
             "action": interactive_payload
         })
+        om_ix = json.dumps(outbound_meta, ensure_ascii=False) if isinstance(outbound_meta, dict) else None
         if get_pool():
             await execute(
                 """
-                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, interactive_data, sent_by_user_id, sent_via)
-                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'interactive', 'sent', $5::jsonb, $6::uuid, $7)
-                ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, interactive_data = EXCLUDED.interactive_data, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, interactive_data, sent_by_user_id, sent_via, outbound_meta)
+                VALUES ($1::uuid, 'outbound', $2, $3::timestamptz, $4, 'interactive', 'sent', $5::jsonb, $6::uuid, $7, $8::jsonb)
+                ON CONFLICT (wa_message_id) DO UPDATE SET status = 'sent', timestamp = EXCLUDED.timestamp, interactive_data = EXCLUDED.interactive_data, sent_by_user_id = EXCLUDED.sent_by_user_id, sent_via = EXCLUDED.sent_via, outbound_meta = EXCLUDED.outbound_meta
                 """,
                 conversation_id,
                 preview_text,
@@ -2537,6 +3145,7 @@ async def send_interactive_message_with_storage(
                 interactive_data_json,
                 sent_by_user_id,
                 sent_via,
+                om_ix,
             )
             await _update_conversation_timestamp(conversation_id, timestamp_iso)
         else:
@@ -2554,6 +3163,8 @@ async def send_interactive_message_with_storage(
                 message_payload["sent_by_user_id"] = sent_by_user_id
             if sent_via is not None:
                 message_payload["sent_via"] = sent_via
+            if outbound_meta is not None:
+                message_payload["outbound_meta"] = outbound_meta
             await asyncio.gather(
                 supabase_execute(
                     supabase.table("messages").upsert(message_payload, on_conflict="wa_message_id")
@@ -2913,21 +3524,57 @@ async def get_message_by_id(message_id: str) -> Optional[Dict[str, Any]]:
     return res.data[0]
 
 
-async def _escalate_to_human(conversation: Dict[str, Any], last_customer_message: str):
+async def _escalate_to_human(
+    conversation: Dict[str, Any],
+    last_customer_message: str,
+    *,
+    ai_reply: Optional[str] = None,
+    ai_confidence: Optional[float] = None,
+    ai_confidence_reasons: Optional[list] = None,
+):
     await set_conversation_bot_mode(conversation["id"], False)
-    await _notify_backup(conversation, last_customer_message)
+    await _notify_backup(
+        conversation,
+        last_customer_message,
+        ai_reply=ai_reply,
+        ai_confidence=ai_confidence,
+        ai_confidence_reasons=ai_confidence_reasons,
+    )
 
 
-async def _notify_backup(conversation: Dict[str, Any], last_customer_message: str):
+async def _notify_backup(
+    conversation: Dict[str, Any],
+    last_customer_message: str,
+    *,
+    ai_reply: Optional[str] = None,
+    ai_confidence: Optional[float] = None,
+    ai_confidence_reasons: Optional[list] = None,
+):
     backup_number = settings.HUMAN_BACKUP_NUMBER
     if not backup_number:
         logger.info("No HUMAN_BACKUP_NUMBER configured; skipping backup notification")
         return
 
     account_id = conversation["account_id"]
+    reason_lines = []
+    for r in (ai_confidence_reasons or []):
+        txt = str(r).strip()
+        if txt:
+            reason_lines.append(f"- {txt}")
+    confidence_str = f"{ai_confidence:.2f}" if isinstance(ai_confidence, (int, float)) else "n/a"
+    ai_block = (
+        f"\n\nRéponse IA proposée:\n{ai_reply}"
+        if ai_reply else "\n\nRéponse IA proposée:\n(none)"
+    )
+    reasons_block = (
+        "\n\nRaisons confiance faible:\n" + ("\n".join(reason_lines) if reason_lines else "- Non renseigné")
+    )
     summary = (
         f"[Escalade] Conversation {conversation['id']} (client: {conversation.get('client_number')})\n"
-        f"Dernier message: {last_customer_message}"
+        f"Dernier message: {last_customer_message}\n"
+        f"Indice de confiance IA: {confidence_str}"
+        f"{ai_block}"
+        f"{reasons_block}"
     )
     await _send_direct_whatsapp(account_id, backup_number, summary)
 

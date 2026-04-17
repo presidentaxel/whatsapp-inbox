@@ -84,85 +84,16 @@ export default function AccountMediaGallery({ accountId, mediaType = "image" }) 
     loadGallery();
   }, [loadGallery]);
 
-  // Écouter les changements de messages via Supabase Realtime pour rafraîchir automatiquement
+  // Periodic light refresh instead of unfiltered global Realtime subscription.
+  // Supabase Realtime can't filter by account_id across a join, so the old
+  // approach subscribed to ALL messages globally and ran a DB query per event.
+  // A 30s interval is far cheaper than per-message queries.
   useEffect(() => {
-    if (!accountId) {
-      return;
-    }
-
-    // Types de médias supportés selon le mediaType
-    const mediaTypes = {
-      image: ["image", "sticker"],
-      video: ["video"],
-      document: ["document"],
-      audio: ["audio", "voice"],
-      all: ["image", "video", "document", "audio", "sticker", "voice"]
-    };
-    
-    const supportedTypes = mediaTypes[mediaType] || mediaTypes.image;
-
-    // Écouter tous les messages et filtrer côté client par account_id via conversations
-    // Note: On écoute tous les messages car Supabase Realtime ne supporte pas les filtres complexes
-    const channel = supabaseClient
-      .channel(`account-media-gallery:${accountId}:${mediaType}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-        },
-        async (payload) => {
-          const newMessage = payload.new;
-          // Vérifier si le message appartient à ce compte en vérifiant la conversation
-          if (supportedTypes.includes(newMessage.message_type?.toLowerCase())) {
-            const { data: conv } = await supabaseClient
-              .from("conversations")
-              .select("account_id")
-              .eq("id", newMessage.conversation_id)
-              .single();
-            
-            if (conv && conv.account_id === accountId) {
-              console.log("🔄 [ACCOUNT GALLERY] New media detected, refreshing gallery");
-              setTimeout(() => {
-                loadGallery();
-              }, 1000);
-            }
-          }
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "messages",
-        },
-        async (payload) => {
-          const updatedMessage = payload.new;
-          if (
-            supportedTypes.includes(updatedMessage.message_type?.toLowerCase()) &&
-            updatedMessage.storage_url
-          ) {
-            // Vérifier si le message appartient à ce compte
-            const { data: conv } = await supabaseClient
-              .from("conversations")
-              .select("account_id")
-              .eq("id", updatedMessage.conversation_id)
-              .single();
-            
-            if (conv && conv.account_id === accountId) {
-              console.log("🔄 [ACCOUNT GALLERY] Media storage_url updated, refreshing gallery");
-              loadGallery();
-            }
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabaseClient.removeChannel(channel);
-    };
+    if (!accountId) return;
+    const interval = setInterval(() => {
+      loadGallery();
+    }, 30000);
+    return () => clearInterval(interval);
   }, [accountId, mediaType, loadGallery]);
 
   // Fonction pour vérifier si un fichier est un PDF

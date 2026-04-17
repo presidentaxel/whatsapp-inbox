@@ -20,3 +20,6 @@ export const PlaygroundGraphContext = createContext([]);
 
 /** Double-clic sur une poignée : détache toutes les arêtes sur ce point */
 export const DetachHandleContext = createContext(() => {});
+
+/** Flush immédiat de la sauvegarde en cours (retourne une Promise) */
+export const FlushSaveContext = createContext(() => Promise.resolve());

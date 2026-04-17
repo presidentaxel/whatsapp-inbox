@@ -12,41 +12,38 @@ import { useAuth } from '../context/AuthContext';
  * Vérifie les permissions avant d'envoyer une notification
  * Ne notifie que si l'utilisateur a accès au compte/conversation
  */
-export function useGlobalNotifications(selectedConversationId = null) {
+export function useGlobalNotifications(selectedConversationId = null, onInboundMessage = null) {
   const { hasPermission, profile } = useAuth();
   const channelRef = useRef(null);
-  const lastNotifiedRef = useRef(new Set()); // Éviter les doublons
+  const lastNotifiedRef = useRef(new Set());
 
   useEffect(() => {
-    // S'assurer d'avoir la permission (une seule demande ici)
     askForNotificationPermission();
 
-    // Nettoyer l'ancien channel
     if (channelRef.current) {
       supabaseClient.removeChannel(channelRef.current);
       channelRef.current = null;
     }
     lastNotifiedRef.current.clear();
 
+    // Only subscribe if we have a profile with permissions loaded
+    if (!profile?.permissions?.account_access_levels) {
+      return;
+    }
 
-    // Écouter TOUS les nouveaux messages sans aucune restriction
-    // On écoute tous les INSERT sur messages et on notifie tout sauf si la conversation est ouverte
+    // Filter: only listen for inbound messages (direction = 'inbound')
     const channel = supabaseClient
-      .channel('global-messages-notifications-all')
+      .channel('global-messages-notifications-inbound')
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'messages',
+          filter: 'direction=eq.inbound',
         },
         async (payload) => {
           const newMessage = payload.new;
-          
-          // Ignorer UNIQUEMENT les messages sortants (de nous)
-          if (newMessage.direction === 'outbound') {
-            return;
-          }
 
           // Éviter les doublons (notifications multiples pour le même message)
           const messageKey = `${newMessage.id}-${newMessage.conversation_id}`;
@@ -79,18 +76,6 @@ export function useGlobalNotifications(selectedConversationId = null) {
               return;
             }
 
-            // Vérification explicite : si le profile n'est pas encore chargé, ne pas notifier
-            // (pour éviter les notifications avant que les permissions soient vérifiées)
-            if (!profile) {
-              return;
-            }
-
-            // Vérification que les permissions sont complètement chargées
-            // Si account_access_levels n'existe pas, ne pas notifier (sécurité par défaut)
-            if (!profile.permissions || !profile.permissions.account_access_levels) {
-              return;
-            }
-
             const accountAccessLevels = profile.permissions.account_access_levels;
 
             // Vérification STRICTE : si l'utilisateur a access_level = 'aucun' pour ce compte,
@@ -117,28 +102,24 @@ export function useGlobalNotifications(selectedConversationId = null) {
               return;
             }
 
-            // IMPORTANT: Vérifier les préférences de notifications pour ce compte spécifique
-            // Ne pasifier que si l'utilisateur a activé les notifications pour ce compte
+            // Signal the parent to refresh conversation list immediately
+            if (onInboundMessage) {
+              try { onInboundMessage(newMessage, conversation); } catch {}
+            }
+
             if (!isNotificationEnabledForAccount(accountId, 'messages')) {
-              // Les notifications sont désactivées pour ce compte, ne pas envoyer de notification
               return;
             }
 
-            // Vérifier si on doit notifier
-            // Notifier si :
-            // - l'app n'est pas au premier plan (tab masqué ou fenêtre non focus)
-            // - ou si la conversation n'est pas ouverte
             const isVisible = document.visibilityState === 'visible';
             const hasFocus = document.hasFocus?.() === true;
             const isForeground = isVisible && hasFocus;
             const isConversationOpen = selectedConversationId === conversation.id;
             
             if (isForeground && isConversationOpen) {
-              // L'utilisateur regarde déjà cette conversation dans une fenêtre active
               return;
             }
 
-            // Afficher la notification seulement si l'utilisateur a accès ET les notifications sont activées pour ce compte
             await notifyNewMessage(newMessage, conversation, {
               checkConversationOpen: false,
               force: false
@@ -160,6 +141,6 @@ export function useGlobalNotifications(selectedConversationId = null) {
       }
       lastNotifiedRef.current.clear();
     };
-  }, [selectedConversationId, hasPermission, profile]);
+  }, [selectedConversationId, hasPermission, profile, onInboundMessage]);
 }
 

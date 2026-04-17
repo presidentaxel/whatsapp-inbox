@@ -6,6 +6,10 @@ import { getContacts } from "../api/contactsApi";
 import { supabaseClient } from "../api/supabaseClient";
 import { clearAuthSession } from "../utils/secureStorage";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
+import {
+  excludePlaygroundSandboxConversations,
+  isPlaygroundSandboxConversation,
+} from "../utils/playgroundSandbox";
 import MobileConversationsList from "../components/mobile/MobileConversationsList";
 import MobileChatWindow from "../components/mobile/MobileChatWindow";
 import MobileContactsPanel from "../components/mobile/MobileContactsPanel";
@@ -23,6 +27,9 @@ export default function MobileInboxPage({ onLogout }) {
   const [accounts, setAccounts] = useState([]);
   const [activeAccount, setActiveAccount] = useState(null);
   const [conversations, setConversations] = useState([]);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [conversationCursor, setConversationCursor] = useState(null);
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [contacts, setContacts] = useState([]);
   const [selectedContactFromChat, setSelectedContactFromChat] = useState(null);
@@ -30,70 +37,83 @@ export default function MobileInboxPage({ onLogout }) {
   // Charger les comptes
   const loadAccounts = useCallback(async () => {
     try {
-      // Vérifier que la session est disponible avant d'appeler l'API
       const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
-      
-      if (sessionError) {
-        console.error("❌ Erreur session Supabase:", sessionError);
-        return;
-      }
-      
-      if (!session?.access_token) {
-        console.warn("⚠️ Pas de session ou token manquant, impossible de charger les comptes");
-        return;
-      }
-      
+      if (sessionError || !session?.access_token) return;
+
       const res = await getAccounts();
       const payload = Array.isArray(res?.data) ? res.data : res?.data?.data || [];
       setAccounts(payload);
       
-      // Essayer de restaurer le compte sauvegardé
       const savedAccountId = getActiveAccount();
       const savedAccountExists = savedAccountId && payload.some((acc) => acc.id === savedAccountId);
       
       if (payload.length > 0 && !activeAccount) {
-        // Si un compte est sauvegardé et existe toujours, l'utiliser
-        if (savedAccountExists) {
-          setActiveAccount(savedAccountId);
-        } else {
-          // Sinon, prendre le premier compte disponible
-          setActiveAccount(payload[0].id);
-        }
+        setActiveAccount(savedAccountExists ? savedAccountId : payload[0].id);
       }
-    } catch (error) {
-      console.error("❌ Erreur chargement comptes:", error);
-      if (error.response?.status === 401) {
-        console.error("⚠️ 401 Unauthorized - La session a peut-être expiré. Vérifiez votre connexion.");
-      }
+    } catch {
+      // Silent fallback
     }
   }, [activeAccount]);
 
-  // Charger les conversations
+  useEffect(() => {
+    setSelectedConversation((prev) =>
+      prev && isPlaygroundSandboxConversation(prev) ? null : prev
+    );
+  }, [activeAccount]);
+
+  const CONVERSATIONS_PAGE_SIZE = 50;
+
   const refreshConversations = useCallback(async (accountId) => {
     if (!accountId) return;
     try {
-      console.log(`🔄 Refreshing conversations for account: ${accountId}`);
-      const res = await getConversations(accountId);
-      const newConversations = res.data || [];
-      console.log(`✅ Loaded ${newConversations.length} conversations`);
-      
-      // Log les conversations avec des messages non lus
-      const unread = newConversations.filter(c => c.unread_count > 0);
-      if (unread.length > 0) {
-        console.log(`📬 ${unread.length} conversation(s) avec messages non lus:`, unread.map(c => ({ id: c.id, name: c.contacts?.display_name || c.client_number, unread: c.unread_count })));
+      const res = await getConversations(accountId, { limit: CONVERSATIONS_PAGE_SIZE });
+      const batch = excludePlaygroundSandboxConversations(res.data || []);
+      setConversations(batch);
+      if (batch.length >= CONVERSATIONS_PAGE_SIZE) {
+        setConversationCursor(batch[batch.length - 1].updated_at);
+        setHasMoreConversations(true);
+      } else {
+        setConversationCursor(null);
+        setHasMoreConversations(false);
       }
-      
-      setConversations(newConversations);
-    } catch (error) {
-      console.error("❌ Erreur chargement conversations:", error);
+    } catch {
+      setConversations([]);
+      setHasMoreConversations(false);
     }
   }, []);
+
+  const loadMoreConversations = useCallback(async () => {
+    if (!activeAccount || !hasMoreConversations || loadingMoreConversations || !conversationCursor) return;
+    setLoadingMoreConversations(true);
+    try {
+      const res = await getConversations(activeAccount, {
+        limit: CONVERSATIONS_PAGE_SIZE,
+        cursor: conversationCursor,
+      });
+      const batch = excludePlaygroundSandboxConversations(res.data || []);
+      if (batch.length === 0) {
+        setHasMoreConversations(false);
+      } else {
+        setConversations((prev) => [...prev, ...batch]);
+        if (batch.length >= CONVERSATIONS_PAGE_SIZE) {
+          setConversationCursor(batch[batch.length - 1].updated_at);
+        } else {
+          setHasMoreConversations(false);
+          setConversationCursor(null);
+        }
+      }
+    } catch {
+      // Silent
+    } finally {
+      setLoadingMoreConversations(false);
+    }
+  }, [activeAccount, hasMoreConversations, loadingMoreConversations, conversationCursor]);
 
   // Charger les contacts
   const loadContacts = useCallback(async () => {
     try {
-      const res = await getContacts();
-      setContacts(res.data || []);
+      const res = await getContacts({ limit: 1000 });
+      setContacts(res.data?.items || res.data || []);
     } catch (error) {
       console.error("Erreur chargement contacts:", error);
     }
@@ -116,15 +136,75 @@ export default function MobileInboxPage({ onLogout }) {
       refreshConversations(activeAccount);
       const interval = setInterval(() => {
         refreshConversations(activeAccount);
-      }, 15000);
+      }, 45000);
       return () => clearInterval(interval);
     }
   }, [activeAccount, refreshConversations]);
 
-  // Écouter TOUS les nouveaux messages pour afficher des notifications
-  // Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
-  // Peu importe le compte, la plateforme, etc.
-  useGlobalNotifications(selectedConversation?.id);
+  const onInboundMessage = useCallback(() => {
+    refreshConversations(activeAccount);
+  }, [activeAccount, refreshConversations]);
+
+  useGlobalNotifications(selectedConversation?.id, onInboundMessage);
+
+  // Realtime: refresh conversation list instantly when any conversation changes
+  useEffect(() => {
+    if (!activeAccount) return;
+    const channel = supabaseClient
+      .channel(`conversations:${activeAccount}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "conversations",
+          filter: `account_id=eq.${activeAccount}`,
+        },
+        (payload) => {
+          const updated = payload.new;
+          if (isPlaygroundSandboxConversation(updated)) {
+            setConversations((prev) => prev.filter((c) => c.id !== updated.id));
+            setSelectedConversation((prev) =>
+              prev?.id === updated.id ? null : prev
+            );
+            return;
+          }
+          setConversations((prev) => {
+            const idx = prev.findIndex((c) => c.id === updated.id);
+            if (idx === -1) return prev;
+            const next = [...prev];
+            next[idx] = { ...next[idx], ...updated };
+            return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
+          });
+          setSelectedConversation((prev) =>
+            prev?.id === updated.id ? { ...prev, ...updated } : prev
+          );
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "conversations",
+          filter: `account_id=eq.${activeAccount}`,
+        },
+        (payload) => {
+          const newConv = payload.new;
+          if (isPlaygroundSandboxConversation(newConv)) return;
+          setConversations((prev) => {
+            if (prev.some((c) => c.id === newConv.id)) return prev;
+            return [newConv, ...prev].sort(
+              (a, b) => (b.updated_at > a.updated_at ? 1 : -1)
+            );
+          });
+        }
+      )
+      .subscribe();
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
+  }, [activeAccount]);
 
   const optimisticallyMarkRead = useCallback((conversationIds) => {
     const ids = new Set(Array.isArray(conversationIds) ? conversationIds : [conversationIds]);
@@ -226,6 +306,9 @@ export default function MobileInboxPage({ onLogout }) {
             onImportant={handleImportant}
             onMarkAllRead={handleMarkAllRead}
             onSettings={handleSettings}
+            hasMore={hasMoreConversations}
+            loadingMore={loadingMoreConversations}
+            onLoadMore={loadMoreConversations}
           />
         );
       

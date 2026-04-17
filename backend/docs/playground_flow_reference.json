@@ -7,8 +7,8 @@
         "id": "timeWindowNode",
         "title": "Routage horaire (timeWindowNode)",
         "ui": "Poignées source inside / outside (pendant vs hors plage).",
-        "backend": "_successor(edges, cursor) sans handle - premier successeur ou arête sans sourceHandle ; branches inside/outside non distinguées (bloc waitUntilNode/timeWindowNode/logicNode hors mode « si » : passthrough, voir flow_runtime_service.py ~686-691).",
-        "impact": "Ex. message « bureaux fermés » sur branche outside ne s’exécute pas à 2h : le flux suit un seul chemin comme si les deux branches étaient équivalentes."
+        "backend": "Le moteur choisit sourceHandle inside ou outside selon _is_inside_time_window. Si les arêtes n’ont pas de sourceHandle : avec exactement deux arêtes sans poignée, ordre [0] = hors plage (outside), [1] = dans la plage (inside).",
+        "impact": "Les graphes anciens sans poignées reposent sur l’ordre des arêtes ; préférer des connexions explicites inside/outside."
       },
       {
         "id": "waitUntilNode",
@@ -26,10 +26,10 @@
       },
       {
         "id": "logicNode_si",
-        "title": "Logique « si » : condition non évaluée",
+        "title": "Logique « si » : évaluation condition",
         "ui": "Champ condition + branches true / false.",
-        "backend": "Aucune évaluation de condition ; cursor = _successor(..., \"true\") ou _successor(...) (poignée true prioritaire, sinon arête sans sourceHandle ou première arête). La poignée « false » n’est pas sélectionnée explicitement par le moteur.",
-        "impact": "Ce n’est pas un IF métier : le chemin ne dépend pas du texte ou des variables. Pour un routage basé sur le contenu, utiliser routerNode, interactiveNode ou gemini."
+        "backend": "_evaluate_logic_condition(data.condition, variables) puis _successor(..., \"true\"|\"false\") (voir flow_runtime_service logicNode).",
+        "impact": "Les expressions doivent correspondre au sous-ensemble supporté par le moteur (voir doc code)."
       }
     ]
   },
@@ -120,9 +120,10 @@
       "entryStartNodeId": "string | null - start choisi pour la session",
       "activeFlowId": "string | legacy - id flux résolu ou mot legacy",
       "flowDelayUntil": "ISO UTC | null - réveil après delayNode ou timeout interactif",
-      "flowDelayResumeNodeId": "string | null - nœud à exécuter après le délai (delayNode ou branche timeout)"
+      "flowDelayResumeNodeId": "string | null - nœud à exécuter après le délai (delayNode ou branche timeout)",
+      "geminiClarifyByNode": "dict optionnel - par id de nœud gemini, nombre de questions de clarification déjà envoyées avant branche intent-unknown"
     },
-    "reset_when_flow_changes": "Si activeFlowId change : variables, currentNodeId, continueFromNodeId, afterInteractiveTarget, entryStartNodeId, flowDelayUntil, flowDelayResumeNodeId sont remis à zéro."
+    "reset_when_flow_changes": "Si activeFlowId change : variables, currentNodeId, continueFromNodeId, afterInteractiveTarget, entryStartNodeId, flowDelayUntil, flowDelayResumeNodeId, geminiClarifyByNode sont remis à zéro."
   },
   "delayScheduling": {
     "description": "Nœud delayNode : attente réelle, pas un passthrough.",
@@ -198,13 +199,22 @@
       "data": {
         "hint": "string",
         "systemPrompt": "string",
+        "toneInstructions": "string optionnel",
+        "knowledgeBase": "string optionnel",
         "intents": [{ "keyword": "string", "label": "string" }],
-        "varKey": "string"
+        "varKey": "string",
+        "clarifyOnUnknown": "boolean défaut true - si échec routage par mot-clé, envoyer une question de précision (Gemini texte) puis repasser par ce nœud avant intent-unknown",
+        "maxClarifyAttempts": "entier 0-5 défaut 3 - nombre max de questions de précision avant de suivre intent-unknown ; 0 = désactiver la clarification",
+        "useEmbeddingSimilarity": "boolean défaut false - si true et échec mot-clé, choix d'intention par similarité cosinus des embeddings (Gemini) entre le message et « keyword + label » de chaque intention",
+        "embeddingSimilarityThreshold": "nombre 0,35-0,95 défaut 0,62 - seuil minimal de similarité cosinus pour valider l'intention par embeddings",
+        "structuredMemory": "boolean défaut true - si true et intention reconnue, ajoute une ligne au journal session exposé en variable flow_structured_notes",
+        "variables_runtime": "flow_recent_user_text (derniers messages user), flow_structured_notes (journal intentions) — substitution {{…}} dans prompts et corps"
       },
       "handles": {
         "sans_intentions": { "source": [null] },
         "avec_intentions": { "source": ["intent-0", "intent-1", "...", "intent-unknown"] }
-      }
+      },
+      "runtime_avec_intentions": "generate_flow_gemini_keyword puis _gemini_pick ; message uniquement salutation courte (ex. « Bonjour ») sans mot-clé exploitable → fallback intent-0 ; si ambigu et tentatives restantes : generate_flow_gemini_text_reply (clarification), continueFromNodeId = ce nœud ; sinon branche intent-unknown"
     },
     "handoffNode": {
       "description": "Type UI ; backend accepte aussi l’alias legacy \"handoff\".",
@@ -229,8 +239,7 @@
     "waitUntilNode": {
       "data": { "until": "string", "timezoneNote": "string", "varKey": "string" },
       "handles": { "target": [null], "source": [null] },
-      "runtime": "passthrough immédiat (pas d’attente calendaire côté serveur) - voir ui_backend_mismatches.waitUntilNode",
-      "workaround": "Utiliser delayNode pour une attente réelle relative (max 30 jours)."
+      "runtime": "Si échéance résolue dans le futur : flowDelayUntil + pause ; si passée ou non résoluble : enchaînement / passthrough (voir flow_runtime_service waitUntilNode)"
     },
     "timeWindowNode": {
       "data": {
@@ -240,7 +249,7 @@
         "varKey": "string"
       },
       "handles_UI": { "source": ["inside", "outside"] },
-      "runtime": "passthrough : _successor sans handle - branches inside/outside non distinguées par le moteur - voir ui_backend_mismatches.timeWindowNode"
+      "runtime": "Branche inside ou outside ; repli si deux arêtes sans sourceHandle : [0] outside, [1] inside"
     },
     "logicNode": {
       "data": { "logicMode": ["si", "ou", "et"], "condition": "string", "varKey": "string" },

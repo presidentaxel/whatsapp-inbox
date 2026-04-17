@@ -5,6 +5,7 @@ export const getConversations = (accountId, params = {}) => {
   queryParams.append('account_id', accountId);
   if (params.limit) queryParams.append('limit', params.limit);
   if (params.cursor) queryParams.append('cursor', params.cursor);
+  if (params.updated_since) queryParams.append('updated_since', params.updated_since);
   return api.get(`/conversations?${queryParams.toString()}`);
 };
 

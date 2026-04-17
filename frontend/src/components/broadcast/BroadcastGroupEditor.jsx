@@ -85,8 +85,8 @@ export default function BroadcastGroupEditor({
 
   const loadContacts = async () => {
     try {
-      const res = await getContacts();
-      setContacts(res.data || []);
+      const res = await getContacts({ limit: 1000 });
+      setContacts(res.data?.items || res.data || []);
     } catch (error) {
       console.error("Error loading contacts:", error);
     }

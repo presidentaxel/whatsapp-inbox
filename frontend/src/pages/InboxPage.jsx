@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import {
   getConversations,
   markConversationRead,
@@ -13,15 +13,15 @@ import ConversationList from "../components/conversations/ConversationList";
 import ChatWindow from "../components/chat/ChatWindow";
 import AccountSelector from "../components/accounts/AccountSelector";
 import SidebarNav from "../components/layout/SidebarNav";
-import ContactsPanel from "../components/contacts/ContactsPanel";
-import AccountMediaGallery from "../components/gallery/AccountMediaGallery";
 import { useAuth } from "../context/AuthContext";
-import SettingsPanel from "../components/settings/SettingsPanel";
-import AssistantPanel from "../components/assistant/AssistantPanel";
-import WhatsAppBusinessPanel from "../components/whatsapp/WhatsAppBusinessPanel";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
 import { clearConversationNotification } from "../registerSW";
+import { supabaseClient } from "../api/supabaseClient";
+import {
+  excludePlaygroundSandboxConversations,
+  isPlaygroundSandboxConversation,
+} from "../utils/playgroundSandbox";
 import { 
   getBroadcastGroups, 
   createBroadcastGroup, 
@@ -29,9 +29,16 @@ import {
   deleteBroadcastGroup,
   addRecipientToGroup
 } from "../api/broadcastApi";
-import BroadcastGroupsList from "../components/broadcast/BroadcastGroupsList";
-import BroadcastGroupEditor from "../components/broadcast/BroadcastGroupEditor";
-import BroadcastGroupChat from "../components/broadcast/BroadcastGroupChat";
+
+// Lazy-loaded heavy panels (code-split to reduce initial bundle)
+const ContactsPanel = lazy(() => import("../components/contacts/ContactsPanel"));
+const AccountMediaGallery = lazy(() => import("../components/gallery/AccountMediaGallery"));
+const SettingsPanel = lazy(() => import("../components/settings/SettingsPanel"));
+const AssistantPanel = lazy(() => import("../components/assistant/AssistantPanel"));
+const WhatsAppBusinessPanel = lazy(() => import("../components/whatsapp/WhatsAppBusinessPanel"));
+const BroadcastGroupsList = lazy(() => import("../components/broadcast/BroadcastGroupsList"));
+const BroadcastGroupEditor = lazy(() => import("../components/broadcast/BroadcastGroupEditor"));
+const BroadcastGroupChat = lazy(() => import("../components/broadcast/BroadcastGroupChat"));
 
 
 export default function InboxPage() {
@@ -39,6 +46,9 @@ export default function InboxPage() {
   const [accounts, setAccounts] = useState([]);
   const [activeAccount, setActiveAccount] = useState(null);
   const [conversations, setConversations] = useState([]);
+  const [hasMoreConversations, setHasMoreConversations] = useState(false);
+  const [conversationCursor, setConversationCursor] = useState(null);
+  const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [navMode, setNavMode] = useState("chat");
   const [filter, setFilter] = useState("all");
@@ -89,48 +99,101 @@ export default function InboxPage() {
     }
   }, []);
 
+  const CONVERSATIONS_PAGE_SIZE = 50;
+
+  // Ref so delta refresh can read conversations without being in the dep array
+  const conversationsForDeltaRef = useRef(conversations);
+  conversationsForDeltaRef.current = conversations;
+
   const refreshConversations = useCallback(
-    async (accountId = activeAccount) => {
+    async (accountId = activeAccount, { delta = false } = {}) => {
       if (!accountId) return;
-      
-      // Charger toutes les conversations avec pagination
-      let allConversations = [];
-      let hasMore = true;
-      let cursor = null;
-      const limit = 200; // Maximum autorisé par l'API
-      
-      while (hasMore) {
-        try {
-          const res = await getConversations(accountId, { limit, cursor });
-          const conversations = res.data || [];
-          
-          if (conversations.length === 0) {
-            hasMore = false;
-            break;
+
+      if (delta) {
+        const currentConversations = conversationsForDeltaRef.current;
+        const newest = currentConversations.length > 0
+          ? currentConversations.reduce((max, c) => (c.updated_at > max ? c.updated_at : max), currentConversations[0].updated_at)
+          : null;
+
+        if (newest) {
+          try {
+            const res = await getConversations(accountId, { limit: 200, updated_since: newest });
+            const updated = excludePlaygroundSandboxConversations(res.data || []);
+            if (updated.length > 0) {
+              setConversations((prev) => {
+                const map = new Map(
+                  excludePlaygroundSandboxConversations(prev).map((c) => [c.id, c])
+                );
+                updated.forEach((c) => map.set(c.id, c));
+                return Array.from(map.values()).sort(
+                  (a, b) => (b.updated_at > a.updated_at ? 1 : -1)
+                );
+              });
+              setSelectedConversation((prev) => {
+                if (!prev) return null;
+                if (isPlaygroundSandboxConversation(prev)) return null;
+                return updated.find((c) => c.id === prev.id) ?? prev;
+              });
+            }
+          } catch {
+            // Fallback silencieux
           }
-          
-          allConversations = [...allConversations, ...conversations];
-          
-          // Si on a moins de messages que la limite, on a tout chargé
-          if (conversations.length < limit) {
-            hasMore = false;
-          } else {
-            // Utiliser le updated_at de la dernière conversation comme cursor
-            const lastConversation = conversations[conversations.length - 1];
-            cursor = lastConversation.updated_at;
-          }
-        } catch (error) {
-          hasMore = false;
+          return;
         }
       }
       
-      setConversations(allConversations);
-      setSelectedConversation((prev) =>
-        prev ? allConversations.find((c) => c.id === prev.id) ?? null : null
-      );
+      try {
+        const res = await getConversations(accountId, { limit: CONVERSATIONS_PAGE_SIZE });
+        const batch = excludePlaygroundSandboxConversations(res.data || []);
+        setConversations(batch);
+        if (batch.length >= CONVERSATIONS_PAGE_SIZE) {
+          const last = batch[batch.length - 1];
+          setConversationCursor(last.updated_at);
+          setHasMoreConversations(true);
+        } else {
+          setConversationCursor(null);
+          setHasMoreConversations(false);
+        }
+        setSelectedConversation((prev) => {
+          if (!prev) return null;
+          if (isPlaygroundSandboxConversation(prev)) return null;
+          return batch.find((c) => c.id === prev.id) ?? null;
+        });
+      } catch {
+        setConversations([]);
+        setHasMoreConversations(false);
+        setConversationCursor(null);
+      }
     },
     [activeAccount]
   );
+
+  const loadMoreConversations = useCallback(async () => {
+    if (!activeAccount || !hasMoreConversations || loadingMoreConversations || !conversationCursor) return;
+    setLoadingMoreConversations(true);
+    try {
+      const res = await getConversations(activeAccount, {
+        limit: CONVERSATIONS_PAGE_SIZE,
+        cursor: conversationCursor,
+      });
+      const batch = excludePlaygroundSandboxConversations(res.data || []);
+      if (batch.length === 0) {
+        setHasMoreConversations(false);
+      } else {
+        setConversations((prev) => [...prev, ...batch]);
+        if (batch.length >= CONVERSATIONS_PAGE_SIZE) {
+          setConversationCursor(batch[batch.length - 1].updated_at);
+        } else {
+          setHasMoreConversations(false);
+          setConversationCursor(null);
+        }
+      }
+    } catch {
+      // Silent
+    } finally {
+      setLoadingMoreConversations(false);
+    }
+  }, [activeAccount, hasMoreConversations, loadingMoreConversations, conversationCursor]);
 
   useEffect(() => {
     const handleVisibility = () => setIsWindowActive(!document.hidden);
@@ -146,7 +209,11 @@ export default function InboxPage() {
     );
   }, []);
 
-  // Écouter les événements du Service Worker pour les notifications
+  // Use a ref so the SW event handlers always see the latest conversations
+  // without causing effect re-runs on every conversation list change.
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
+
   useEffect(() => {
     const handleMarkConversationRead = (event) => {
       const { conversationId } = event.detail;
@@ -171,7 +238,7 @@ export default function InboxPage() {
     const handleOpenConversation = (event) => {
       const { conversationId } = event.detail;
       if (conversationId) {
-        const conv = conversations.find((c) => c.id === conversationId);
+        const conv = conversationsRef.current.find((c) => c.id === conversationId);
         if (conv) {
           setSelectedConversation(conv);
           if (conv?.unread_count) {
@@ -192,12 +259,72 @@ export default function InboxPage() {
       window.removeEventListener('markAllConversationsRead', handleMarkAllRead);
       window.removeEventListener('openConversation', handleOpenConversation);
     };
-  }, [conversations, refreshConversations, optimisticallyMarkRead]);
+  }, [refreshConversations, optimisticallyMarkRead]);
 
-  // Écouter TOUS les nouveaux messages pour afficher des notifications
-  // Fonctionne comme WhatsApp : notifications pour TOUS les messages entrants
-  // Peu importe le compte, la plateforme, etc.
-  useGlobalNotifications(selectedConversation?.id);
+  const onInboundMessage = useCallback(() => {
+    refreshConversations(activeAccount, { delta: true });
+  }, [activeAccount, refreshConversations]);
+
+  useGlobalNotifications(selectedConversation?.id, onInboundMessage);
+
+  // Realtime: refresh conversation list instantly when any conversation changes
+  useEffect(() => {
+    if (!activeAccount) return;
+    const channel = supabaseClient
+      .channel(`conversations:${activeAccount}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "conversations",
+          filter: `account_id=eq.${activeAccount}`,
+        },
+        (payload) => {
+          const updated = payload.new;
+          if (isPlaygroundSandboxConversation(updated)) {
+            setConversations((prev) => prev.filter((c) => c.id !== updated.id));
+            setSelectedConversation((prev) =>
+              prev?.id === updated.id ? null : prev
+            );
+            return;
+          }
+          setConversations((prev) => {
+            const idx = prev.findIndex((c) => c.id === updated.id);
+            if (idx === -1) return prev;
+            const next = [...prev];
+            next[idx] = { ...next[idx], ...updated };
+            return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
+          });
+          setSelectedConversation((prev) =>
+            prev?.id === updated.id ? { ...prev, ...updated } : prev
+          );
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "conversations",
+          filter: `account_id=eq.${activeAccount}`,
+        },
+        (payload) => {
+          const newConv = payload.new;
+          if (isPlaygroundSandboxConversation(newConv)) return;
+          setConversations((prev) => {
+            if (prev.some((c) => c.id === newConv.id)) return prev;
+            return [newConv, ...prev].sort(
+              (a, b) => (b.updated_at > a.updated_at ? 1 : -1)
+            );
+          });
+        }
+      )
+      .subscribe();
+    return () => {
+      supabaseClient.removeChannel(channel);
+    };
+  }, [activeAccount]);
 
   useEffect(() => {
     loadAccounts();
@@ -208,6 +335,12 @@ export default function InboxPage() {
     if (activeAccount) {
       saveActiveAccount(activeAccount);
     }
+  }, [activeAccount]);
+
+  useEffect(() => {
+    setSelectedConversation((prev) =>
+      prev && isPlaygroundSandboxConversation(prev) ? null : prev
+    );
   }, [activeAccount]);
 
   // Charger les groupes de diffusion
@@ -274,9 +407,10 @@ export default function InboxPage() {
 
   useEffect(() => {
     if (navMode === "contacts" && canViewContacts) {
-      getContacts().then((res) => {
-        setContacts(res.data);
-        setSelectedContact((prev) => prev ?? res.data[0] ?? null);
+      getContacts({ limit: 1000 }).then((res) => {
+        const items = res.data?.items || res.data || [];
+        setContacts(items);
+        setSelectedContact((prev) => prev ?? items[0] ?? null);
       });
     } else if (navMode === "contacts" && !canViewContacts) {
       setContacts([]);
@@ -390,12 +524,12 @@ export default function InboxPage() {
     let cancelled = false;
     let timeoutId;
     const poll = async () => {
-      await refreshConversations(activeAccount);
+      await refreshConversations(activeAccount, { delta: true });
       if (!cancelled) {
-        timeoutId = setTimeout(poll, 15000);
+        timeoutId = setTimeout(poll, 45000);
       }
     };
-    poll();
+    timeoutId = setTimeout(poll, 45000);
     return () => {
       cancelled = true;
       if (timeoutId) {
@@ -409,19 +543,21 @@ export default function InboxPage() {
     if (showGallery) {
       return [];
     }
-    
+
+    const list = excludePlaygroundSandboxConversations(conversations);
+
     switch (filter) {
       case "unread":
-        return conversations.filter((c) => c.unread_count > 0);
+        return list.filter((c) => c.unread_count > 0);
       case "groups":
         // Les groupes seront gérés séparément
         return [];
       case "favorites":
-        return conversations.filter((c) => c.is_favorite);
+        return list.filter((c) => c.is_favorite);
       case "gallery":
-        return conversations; // Ne pas filtrer quand on affiche la galerie
+        return list;
       default:
-        return conversations;
+        return list;
     }
   }, [conversations, filter, showGallery]);
 
@@ -507,10 +643,13 @@ export default function InboxPage() {
       ? hasPermission?.("messages.send", selectedConversation.account_id)
       : false;
 
+  const lazyFallback = <div style={{ padding: 24 }}>Chargement...</div>;
+
   return (
     <div className="app-shell">
       <div className="workspace">
         <SidebarNav active={navMode} onSelect={setNavMode} allowedItems={allowedNavItems} onSignOut={signOut} />
+        <Suspense fallback={lazyFallback}>
 
         {navMode === "contacts" ? (
           canViewContacts ? (
@@ -705,6 +844,9 @@ export default function InboxPage() {
                     selectedId={selectedConversation?.id}
                     onSelect={handleSelectConversation}
                     onRefresh={() => refreshConversations(activeAccount)}
+                    hasMore={hasMoreConversations}
+                    loadingMore={loadingMoreConversations}
+                    onLoadMore={loadMoreConversations}
                   />
                 </>
               )}
@@ -730,8 +872,8 @@ export default function InboxPage() {
             )}
           </div>
         )}
+        </Suspense>
       </div>
-
       {/* Modal d'édition de groupe */}
       {showGroupEditor && (
         <div className="modal-overlay" onClick={() => setShowGroupEditor(false)}>

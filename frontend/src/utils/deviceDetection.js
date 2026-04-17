@@ -11,11 +11,26 @@ export function isMobileDevice() {
   // UA moderne (Chrome/Edge/Opera) expose cette info
   const isMobileUAData = navigator.userAgentData?.mobile === true;
 
-  const hasTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  if (isMobileUA || isMobileUAData) {
+    return true;
+  }
+
   const minViewport = Math.min(window.innerWidth, window.innerHeight);
   const isSmallScreen = minViewport <= 820; // inclus phablets
 
-  return isMobileUA || isMobileUAData || (hasTouch && isSmallScreen);
+  if (!isSmallScreen) {
+    return false;
+  }
+
+  // PC tactiles (Surface, etc.) : souvent petite fenêtre + touch mais souris fine → éviter le faux mobile
+  const mqCoarse = window.matchMedia?.("(pointer: coarse)");
+  const mqNoHover = window.matchMedia?.("(hover: none)");
+  if (!mqCoarse && !mqNoHover) {
+    const hasTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+    return hasTouch && isSmallScreen;
+  }
+
+  return Boolean(mqCoarse?.matches || mqNoHover?.matches);
 }
 
 export function isTablet() {

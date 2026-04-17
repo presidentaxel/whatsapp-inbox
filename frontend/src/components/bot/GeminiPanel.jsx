@@ -126,6 +126,7 @@ const createEmptyProfile = () => ({
   description: "",
   address: "",
   hours: "",
+  style_guide: "",
   knowledge_base: "",
   custom_fields: [],
   template_config: ensureTemplateConfig({}),
@@ -313,6 +314,7 @@ export default function GeminiPanel({
           description: data.description || "",
           address: data.address || "",
           hours: data.hours || "",
+          style_guide: data.style_guide || "",
           knowledge_base: data.knowledge_base || "",
           custom_fields: (data.custom_fields || []).map((field) => ({
             id: field.id || randomId(),
@@ -544,6 +546,20 @@ export default function GeminiPanel({
                 rows={3}
               />
             </label>
+          </section>
+
+          <section className="bot-panel__section">
+            <h4>Guide de style (ton global)</h4>
+            <p className="muted" style={{ marginTop: 0 }}>
+              S’applique à l’assistant Gemini en mode conversation et aux nœuds « bloc IA » du scénario,
+              en complément du playbook. Ex. : tutoiement/vouvoiement, longueur des réponses, mots à éviter.
+            </p>
+            <textarea
+              value={form.style_guide || ""}
+              onChange={(e) => updateField("style_guide", e.target.value)}
+              rows={5}
+              placeholder="Ex. : Toujours vouvoyer. Réponses courtes (2–4 phrases). Ne pas promettre de délai précis."
+            />
           </section>
 
           <section className="bot-panel__section">

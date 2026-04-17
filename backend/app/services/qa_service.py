@@ -34,7 +34,7 @@ _EMBED_ENDPOINT = (
 async def embed_text(text: str) -> Optional[List[float]]:
     """Call Gemini text-embedding-004 and return a 768-d vector, or None on failure."""
     if not settings.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY not set — skipping embedding")
+        logger.warning("GEMINI_API_KEY not set - skipping embedding")
         return None
     text = (text or "").strip()
     if not text:
@@ -177,7 +177,7 @@ def format_qa_context(qa_pairs: List[Dict[str, Any]]) -> str:
     """Format matched Q&A pairs into a prompt-injectable block.
 
     Includes a guideline that tells the LLM to synthesize from multiple
-    examples rather than copy a single one verbatim — especially important
+    examples rather than copy a single one verbatim - especially important
     when examples may contradict each other (e.g. availability changes).
     """
     if not qa_pairs:

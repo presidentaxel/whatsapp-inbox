@@ -9,9 +9,11 @@ from app.core.pg import execute as pg_execute, fetch_all, fetch_one, get_pool
 
 DEFAULT_ACCOUNT_SLUG = "default-env-account"
 _CACHE_TTL_SECONDS = 60
+_LIST_CACHE_TTL_SECONDS = 300
 _account_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
 _phone_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
 _verify_cache: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_list_cache: Dict[str, tuple[float, Sequence[Dict[str, Any]]]] = {}
 _default_account_synced = False
 _default_account_record: Optional[Dict[str, Any]] = None
 
@@ -64,8 +66,22 @@ def invalidate_account_cache(account_id: str):
             cache.pop(key, None)
 
 
+def _invalidate_list_cache():
+    _list_cache.clear()
+
+
 async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Sequence[Dict[str, Any]]:
     await ensure_default_account()
+
+    # Cache the full account list (no account_ids filter) for 5 min
+    if account_ids is None:
+        cache_key = "__all__"
+        entry = _list_cache.get(cache_key)
+        if entry:
+            expires_at, data = entry
+            if expires_at >= time.time():
+                return data
+
     if get_pool():
         if account_ids is not None and not account_ids:
             return []
@@ -90,6 +106,8 @@ async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Seque
                 ORDER BY name
                 """
             )
+        if account_ids is None:
+            _list_cache["__all__"] = (time.time() + _LIST_CACHE_TTL_SECONDS, rows)
         return rows
     query = (
         supabase.table("whatsapp_accounts")
@@ -102,7 +120,10 @@ async def get_all_accounts(account_ids: Optional[Sequence[str]] = None) -> Seque
             return []
         query = query.in_("id", list(account_ids))
     res = await supabase_execute(query)
-    return res.data or []
+    result = res.data or []
+    if account_ids is None:
+        _list_cache["__all__"] = (time.time() + _LIST_CACHE_TTL_SECONDS, result)
+    return result
 
 
 async def get_account_by_id(account_id: str) -> Optional[Dict[str, Any]]:
@@ -368,6 +389,7 @@ async def create_account(payload: Dict[str, Any]) -> Dict[str, Any]:
         _cache_set(_phone_cache, record["phone_number_id"], record)
     if record.get("verify_token"):
         _cache_set(_verify_cache, record["verify_token"], record)
+    _invalidate_list_cache()
     return _sanitize_account(record)
 
 
@@ -393,6 +415,7 @@ async def update_account(account_id: str, updates: Dict[str, Any]) -> Optional[D
         keys_to_purge = [key for key, (_, record) in cache.items() if record.get("id") == account_id]
         for key in keys_to_purge:
             cache.pop(key, None)
+    _invalidate_list_cache()
     return await get_account_by_id(account_id)
 
 
@@ -406,4 +429,5 @@ async def delete_account(account_id: str) -> bool:
         keys_to_purge = [key for key, (_, record) in cache.items() if record.get("id") == account_id]
         for key in keys_to_purge:
             cache.pop(key, None)
+    _invalidate_list_cache()
     return True

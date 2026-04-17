@@ -222,6 +222,21 @@ async def get_group_recipients(group_id: str) -> List[Dict[str, Any]]:
     return result.data or []
 
 
+async def phone_in_broadcast_group(group_id: str, normalized_phone: str) -> bool:
+    """True si le numéro normalisé est membre du groupe (comparaison numéros normalisés)."""
+    from app.services.conversation_service import normalize_phone_number
+
+    target = normalize_phone_number(normalized_phone or "")
+    if not target:
+        return False
+    recipients = await get_group_recipients(group_id)
+    for r in recipients:
+        p = normalize_phone_number(str(r.get("phone_number") or ""))
+        if p and p == target:
+            return True
+    return False
+
+
 async def remove_recipient_from_group(recipient_id: str) -> bool:
     """Retire un destinataire d'un groupe"""
     if get_pool():

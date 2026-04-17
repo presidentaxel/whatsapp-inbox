@@ -116,13 +116,20 @@ async def send_api_message(payload: dict, current_user: CurrentUser = Depends(ge
     - Si dans la fenêtre gratuite de 24h : envoie un message conversationnel gratuit
     - Si hors fenêtre : utilise automatiquement un template UTILITY (payant mais fonctionne sans erreur)
     """
-    print(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
-    logger.info(f"📤 [SEND DEBUG] POST /messages/send called: conversation_id={payload.get('conversation_id')}, content_length={len(payload.get('content', '') or '')}")
+    logger.debug(
+        "POST /messages/send conversation_id=%s content_len=%s",
+        payload.get("conversation_id"),
+        len(payload.get("content") or ""),
+    )
     conversation_id = payload.get("conversation_id")
     if not conversation_id:
         raise HTTPException(status_code=400, detail="conversation_id_required")
     conversation = await get_conversation_by_id(conversation_id)
-    print(f"📤 [SEND DEBUG] Conversation found: {conversation is not None}, bot_enabled: {conversation.get('bot_enabled') if conversation else None}")
+    logger.debug(
+        "POST /messages/send conversation found=%s bot_enabled=%s",
+        conversation is not None,
+        conversation.get("bot_enabled") if conversation else None,
+    )
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
     

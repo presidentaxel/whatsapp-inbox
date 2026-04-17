@@ -9,11 +9,28 @@ from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser
 from app.core.db import supabase, supabase_execute
 from app.core.config import settings
+from app.core.cache import get_cached_or_fetch, invalidate_cache_pattern
 from starlette.concurrency import run_in_threadpool
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _get_auth_users_cached():
+    """Fetch all auth users with 60s cache to avoid repeated full scans."""
+    async def _fetch():
+        def _list():
+            result = supabase.auth.admin.list_users()
+            if isinstance(result, list):
+                return result
+            elif hasattr(result, 'users'):
+                return result.users
+            elif hasattr(result, 'data'):
+                return result.data
+            return []
+        return await run_in_threadpool(_list)
+    return await get_cached_or_fetch("auth_users_list", _fetch, ttl_seconds=60)
 
 
 class InviteUserRequest(BaseModel):
@@ -39,19 +56,7 @@ async def invite_user(
     # Vous pouvez ajouter une vérification de permission ici si nécessaire
     
     try:
-        # Vérifier si l'utilisateur existe déjà
-        def _check_user():
-            result = supabase.auth.admin.list_users()
-            # La réponse peut être une liste ou un objet avec un attribut users
-            if isinstance(result, list):
-                return result
-            elif hasattr(result, 'users'):
-                return result.users
-            elif hasattr(result, 'data'):
-                return result.data
-            return []
-        
-        users_list = await run_in_threadpool(_check_user)
+        users_list = await _get_auth_users_cached()
         existing_user = next(
             (u for u in users_list if hasattr(u, 'email') and u.email == request.email),
             None
@@ -87,9 +92,8 @@ async def invite_user(
         invite_result = await run_in_threadpool(_invite_user)
         
         if invite_result.user:
-            # Créer l'entrée dans app_users si nécessaire
-            # Elle sera créée automatiquement lors de la première connexion
             logger.info(f"✅ User invitation sent to {request.email}")
+            await invalidate_cache_pattern("auth_users_list")
             
             return {
                 "success": True,
@@ -121,19 +125,7 @@ async def resend_invite(
     Renvoie une invitation à un utilisateur
     """
     try:
-        # Vérifier si l'utilisateur existe
-        def _check_user():
-            result = supabase.auth.admin.list_users()
-            # La réponse peut être une liste ou un objet avec un attribut users
-            if isinstance(result, list):
-                return result
-            elif hasattr(result, 'users'):
-                return result.users
-            elif hasattr(result, 'data'):
-                return result.data
-            return []
-        
-        users_list = await run_in_threadpool(_check_user)
+        users_list = await _get_auth_users_cached()
         user = next(
             (u for u in users_list if hasattr(u, 'email') and u.email == request.email),
             None
@@ -170,6 +162,7 @@ async def resend_invite(
         
         if invite_result.user:
             logger.info(f"✅ Invitation resent to {request.email}")
+            await invalidate_cache_pattern("auth_users_list")
             return {
                 "success": True,
                 "message": "invitation_resent",
@@ -199,18 +192,7 @@ async def get_pending_invites(
     Liste les invitations en attente
     """
     try:
-        def _list_users():
-            result = supabase.auth.admin.list_users()
-            # La réponse peut être une liste ou un objet avec un attribut users
-            if isinstance(result, list):
-                return result
-            elif hasattr(result, 'users'):
-                return result.users
-            elif hasattr(result, 'data'):
-                return result.data
-            return []
-        
-        users_list = await run_in_threadpool(_list_users)
+        users_list = await _get_auth_users_cached()
         
         pending_invites = [
             {

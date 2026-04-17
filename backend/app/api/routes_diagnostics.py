@@ -8,9 +8,11 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.core.auth import get_current_user
+from app.core.permissions import CurrentUser, PermissionCodes
 from app.core.db import supabase, supabase_execute
 from app.services.account_service import get_all_accounts
 
@@ -37,7 +39,7 @@ def log_error_to_memory(error_type: str, message: str, details: Optional[Dict] =
 
 
 @router.get("/diagnostics/webhook-status")
-async def webhook_status():
+async def webhook_status(current_user: CurrentUser = Depends(get_current_user)):
     """
     Retourne l'état des webhooks et des messages récents
     """
@@ -149,7 +151,7 @@ async def webhook_status():
 
 
 @router.get("/diagnostics/recent-errors")
-async def recent_errors():
+async def recent_errors(current_user: CurrentUser = Depends(get_current_user)):
     """
     Retourne les dernières erreurs enregistrées en mémoire
     """
@@ -162,7 +164,7 @@ async def recent_errors():
 
 
 @router.get("/diagnostics/test-webhook")
-async def test_webhook_info():
+async def test_webhook_info(current_user: CurrentUser = Depends(get_current_user)):
     """
     Retourne les informations pour tester un webhook
     """
@@ -240,7 +242,7 @@ async def test_webhook_info():
 
 
 @router.get("/diagnostics/database-connection")
-async def database_connection():
+async def database_connection(current_user: CurrentUser = Depends(get_current_user)):
     """
     Teste la connexion à la base de données
     """
@@ -270,14 +272,14 @@ async def database_connection():
 
 
 @router.get("/diagnostics/full")
-async def full_diagnostics():
+async def full_diagnostics(current_user: CurrentUser = Depends(get_current_user)):
     """
     Retourne un diagnostic complet du système
     """
     try:
-        webhook_status_data = await webhook_status()
-        db_status = await database_connection()
-        errors = await recent_errors()
+        webhook_status_data = await webhook_status(current_user)
+        db_status = await database_connection(current_user)
+        errors = await recent_errors(current_user)
         
         return {
             "status": "ok",

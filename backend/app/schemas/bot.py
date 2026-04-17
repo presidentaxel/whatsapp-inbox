@@ -16,6 +16,7 @@ class BotProfileUpdate(BaseModel):
     description: Optional[str] = None
     address: Optional[str] = None
     hours: Optional[str] = None
+    style_guide: Optional[str] = None
     knowledge_base: Optional[str] = None
     custom_fields: List[BotCustomField] = Field(default_factory=list)
     template_config: dict = Field(default_factory=dict)

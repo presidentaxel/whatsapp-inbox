@@ -10,6 +10,13 @@ npm install
 npm run dev
 ```
 
+## Docker tests
+```bash
+#ouvrir docker
+docker compose build
+docker compose up
+```
+
 ## Push Online
 ```bash
 git add .

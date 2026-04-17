@@ -33,6 +33,9 @@ export default function ConversationList({
   onSelect,
   onRefresh,
   emptyLabel = "Aucune conversation",
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
 }) {
   const [contextMenu, setContextMenu] = useState({ open: false, x: 0, y: 0, conversation: null });
   const [hiddenConversations, setHiddenConversations] = useState(getHiddenConversations());
@@ -90,12 +93,20 @@ export default function ConversationList({
   // Filtrer les conversations masquées
   const visibleConversations = data.filter((c) => !hiddenConversations.includes(c.id));
 
+  const handleScroll = () => {
+    if (!hasMore || loadingMore || !onLoadMore || !containerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    if (scrollHeight - scrollTop - clientHeight < 200) {
+      onLoadMore();
+    }
+  };
+
   if (!visibleConversations.length) {
     return <div className="conversation-list empty">{emptyLabel}</div>;
   }
 
   return (
-    <div className="conversation-list" ref={containerRef}>
+    <div className="conversation-list" ref={containerRef} onScroll={handleScroll}>
       {visibleConversations.map((c) => {
         const displayName =
           c.contacts?.display_name || c.contacts?.whatsapp_number || c.client_number;
@@ -122,8 +133,13 @@ export default function ConversationList({
                         ? "bot-pill--playground"
                         : "bot-pill--on"
                     }`}
+                    title={
+                      c.bot_reply_mode === "playground"
+                        ? "Parcours automatisé (scénario). Peut inclure des blocs IA dans le graphe."
+                        : "Réponses pilotées par l’assistant Gemini sur cette conversation, sans scénario graphique."
+                    }
                   >
-                    {c.bot_reply_mode === "playground" ? "PLAYGROUND" : "GEMINI"}
+                    {c.bot_reply_mode === "playground" ? "Scénario" : "Assistant IA"}
                   </span>
                 )}
                 <span className="conversation-time">{timeLabel}</span>
@@ -143,6 +159,12 @@ export default function ConversationList({
           </div>
         );
       })}
+
+      {hasMore && (
+        <div className="conversation-list__loader" style={{ textAlign: "center", padding: "12px 0", color: "#888", fontSize: "0.85rem" }}>
+          {loadingMore ? "Chargement..." : "Défiler pour charger plus"}
+        </div>
+      )}
 
       {contextMenu.open && (
         <div

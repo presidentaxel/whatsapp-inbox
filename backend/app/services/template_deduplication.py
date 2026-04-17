@@ -65,7 +65,7 @@ class TemplateDeduplication:
         body_text: str,
         header_text: Optional[str] = None,
         footer_text: Optional[str] = None,
-        max_age_days: int = 90  # Chercher dans les templates des 90 derniers jours
+        max_age_days: int = 90,
     ) -> Optional[Dict[str, Any]]:
         """Cherche un template existant similaire/identique pour ce compte
         
@@ -129,23 +129,25 @@ class TemplateDeduplication:
                 logger.info(f"🔍 [DEDUP] Aucun template trouvé dans la période de {max_age_days} jours")
                 return None
             
-            # Comparer avec les templates existants
+            from app.services.pending_template_service import _is_template_blacklisted
+
             for pending_template in rows:
                 existing_text = pending_template.get("text_content", "")
                 existing_normalized = TemplateDeduplication.normalize_text_for_hash(existing_text)
                 
-                # Comparer les hashes du body
                 if normalized_body == existing_normalized:
-                    # Vérifier aussi header et footer si fournis
-                    # Pour l'instant, on compare juste le body car c'est le plus important
-                    logger.info(f"✅ [DEDUP] Template similaire trouvé: {pending_template.get('template_name')} (status: {pending_template.get('template_status')})")
+                    tpl_name = pending_template.get("template_name")
+                    if _is_template_blacklisted(tpl_name):
+                        logger.info(f"⛔ [DEDUP] Template '{tpl_name}' blacklisté (supprimé sur Meta), skip")
+                        continue
+                    logger.info(f"✅ [DEDUP] Template similaire trouvé: {tpl_name} (status: {pending_template.get('template_status')})")
                     
                     return {
-                        "template_name": pending_template.get("template_name"),
+                        "template_name": tpl_name,
                         "meta_template_id": pending_template.get("meta_template_id"),
                         "template_status": pending_template.get("template_status"),
                         "message_id": pending_template.get("message_id"),
-                        "template_id": pending_template.get("id"),  # ID dans pending_template_messages
+                        "template_id": pending_template.get("id"),
                         "created_at": pending_template.get("created_at"),
                         "account_id": account_id
                     }
@@ -252,21 +254,9 @@ async def find_or_create_template(
     """
     from app.services.pending_template_service import create_and_queue_template
     
-    logger.info(f"🔍 [FIND-OR-CREATE] ========== DÉBUT FIND_OR_CREATE ==========")
-    logger.info(f"🔍 [FIND-OR-CREATE] conversation_id={conversation_id}")
-    logger.info(f"🔍 [FIND-OR-CREATE] account_id={account_id}")
-    logger.info(f"🔍 [FIND-OR-CREATE] message_id={message_id}")
-    logger.info(f"🔍 [FIND-OR-CREATE] Paramètres reçus:")
-    logger.info(f"   - header_text: {repr(header_text)} (type: {type(header_text).__name__})")
-    logger.info(f"   - body_text: {repr(body_text)} (type: {type(body_text).__name__})")
-    logger.info(f"   - footer_text: {repr(footer_text)} (type: {type(footer_text).__name__})")
-    logger.info(f"   - buttons: {repr(buttons)} (type: {type(buttons).__name__})")
-    logger.info(f"   - text_content: {repr(text_content[:100] if text_content else None)}")
+    logger.info(f"🔍 [FIND-OR-CREATE] message_id={message_id} account_id={account_id}")
     
-    # Utiliser body_text si fourni, sinon text_content
     actual_body_text = body_text if body_text is not None else text_content
-    logger.info(f"🔍 [FIND-OR-CREATE] actual_body_text: {repr(actual_body_text[:100] if actual_body_text else None)}")
-    logger.info(f"🔍 [FIND-OR-CREATE] Recherche de template existant pour message {message_id}")
     
     # Vérifier le risque de spam
     is_spam_risk, spam_details = await TemplateDeduplication.check_spam_risk(
@@ -406,9 +396,9 @@ async def find_or_create_template(
         )
         
         # Le template sera envoyé automatiquement une fois approuvé via check_template_status_async
-        from app.services.pending_template_service import check_template_status_async
-        import asyncio
-        asyncio.create_task(check_template_status_async(message_id))
+        from app.services.pending_template_service import schedule_check_template_status_async
+
+        schedule_check_template_status_async(message_id)
         
         return {
             "success": True,
@@ -432,14 +422,6 @@ async def find_or_create_template(
                 f"Considérez de réutiliser des templates existants."
             )
         
-        # Créer le template normalement
-        logger.info(f"🆕 [FIND-OR-CREATE] Appel à create_and_queue_template avec:")
-        logger.info(f"   - header_text: {repr(header_text)}")
-        logger.info(f"   - body_text: {repr(body_text)}")
-        logger.info(f"   - footer_text: {repr(footer_text)}")
-        logger.info(f"   - buttons: {repr(buttons)}")
-        logger.info(f"   - text_content: {repr(text_content[:100] if text_content else None)}")
-        
         result = await create_and_queue_template(
             conversation_id=conversation_id,
             account_id=account_id,
@@ -452,9 +434,6 @@ async def find_or_create_template(
             buttons=buttons,
             created_by_user_id=created_by_user_id,
         )
-        
-        logger.info(f"🆕 [FIND-OR-CREATE] Résultat de create_and_queue_template: {result.get('success')}")
-        logger.info(f"🆕 [FIND-OR-CREATE] ========== FIN FIND_OR_CREATE ==========")
         
         return result
 

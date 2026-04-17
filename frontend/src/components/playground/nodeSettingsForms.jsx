@@ -7,17 +7,17 @@ import {
   useState,
 } from "react";
 import { getBroadcastGroups } from "../../api/broadcastApi";
+import { getConversations } from "../../api/conversationsApi";
 import { schedulePlaygroundFlowLaunch } from "../../api/playgroundFlowsApi";
-import { VarListContext, PlaygroundGraphContext, TemplatesContext } from "./flowContext";
+import { VarListContext, TemplatesContext, FlushSaveContext } from "./flowContext";
 import {
   WEEKDAYS,
   collectVarIdsFromTemplate,
   extractQuickReplyButtons,
-  extractCtaButtons,
-  replyPredicateForButton,
-  buildTemplateReplyPredicate,
   toggleDay,
   DEFAULT_GEMINI_STATUT_ROUTER_PROMPT,
+  describeWaitUntilConfiguredState,
+  untilToDatetimeLocalInputValue,
 } from "./nodeShared";
 
 function NodeVarLine({ varKey, nodeId, patch }) {
@@ -82,13 +82,21 @@ function localDatetimeInputToUtcIso(value) {
   return d.toISOString();
 }
 
-function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
-  const [groups, setGroups] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState(null);
+function audienceScopeFromData(data) {
+  const s = (data.playgroundAudienceScope || "").trim().toLowerCase();
+  if (s === "all" || s === "group" || s === "phones") return s;
+  return (data.audienceBroadcastGroupId || "").trim() ? "group" : "all";
+}
 
+/** Qui peut activer le scénario (message entrant + campagne) : tout le monde, groupe, ou contacts précis. */
+function StartAudienceScopeBlock({ id, data, patch, accountId }) {
+  const [groups, setGroups] = useState([]);
+  const [conversations, setConversations] = useState([]);
+  const scope = audienceScopeFromData(data);
   const groupId = data.audienceBroadcastGroupId ?? "";
-  const scheduledLocal = data.campaignScheduledFor ?? "";
+  const selectedPhones = Array.isArray(data.playgroundAudiencePhones)
+    ? data.playgroundAudiencePhones
+    : [];
 
   useEffect(() => {
     if (!accountId) {
@@ -108,6 +116,130 @@ function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
     };
   }, [accountId]);
 
+  useEffect(() => {
+    if (!accountId || scope !== "phones") {
+      setConversations([]);
+      return;
+    }
+    let cancelled = false;
+    getConversations(accountId, { limit: 200 })
+      .then((res) => {
+        const rows = Array.isArray(res.data) ? res.data : [];
+        if (!cancelled) setConversations(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setConversations([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, scope]);
+
+  const togglePhone = (phone) => {
+    if (!phone) return;
+    const set = new Set(selectedPhones);
+    if (set.has(phone)) set.delete(phone);
+    else set.add(phone);
+    patch(id, { playgroundAudiencePhones: [...set] });
+  };
+
+  return (
+    <>
+      <h4 className="pg-modal__form-title">Audience</h4>
+      <p className="pg-modal__hint muted">
+        Définit qui peut déclencher ce scénario (messages entrants et filtre côté moteur).
+      </p>
+      <label className="pg-modal__label">
+        Portée
+        <select
+          className="pg-modal__input"
+          value={scope}
+          onChange={(e) =>
+            patch(id, { playgroundAudienceScope: e.target.value })
+          }
+        >
+          <option value="all">Tout le monde (toutes les conversations du compte)</option>
+          <option value="group">Un groupe de diffusion</option>
+          <option value="phones">Contacts précis (sélection)</option>
+        </select>
+      </label>
+      {scope === "group" && (
+        <label className="pg-modal__label">
+          Groupe
+          <select
+            className="pg-modal__input"
+            value={groupId}
+            onChange={(e) =>
+              patch(id, { audienceBroadcastGroupId: e.target.value })
+            }
+            disabled={!accountId}
+          >
+            <option value="">- Choisir un groupe -</option>
+            {groups.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name || g.id}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {scope === "phones" && (
+        <div className="pg-modal__label">
+          <span>Conversations / numéros</span>
+          <div
+            className="pg-modal__audience-list"
+            style={{ maxHeight: 200, overflowY: "auto" }}
+          >
+            {!accountId ? (
+              <p className="pg-modal__hint muted">Compte requis.</p>
+            ) : conversations.length === 0 ? (
+              <p className="pg-modal__hint muted">Aucune conversation chargée.</p>
+            ) : (
+              conversations.map((c) => {
+                const phone = c.client_number;
+                if (!phone) return null;
+                const label =
+                  c.contacts?.display_name ||
+                  c.contacts?.whatsapp_number ||
+                  phone;
+                return (
+                  <label
+                    key={c.id}
+                    className="pg-modal__audience-row"
+                    style={{ display: "flex", gap: 8, alignItems: "center" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedPhones.includes(phone)}
+                      onChange={() => togglePhone(phone)}
+                    />
+                    <span>{label}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+          <p className="pg-modal__hint muted">
+            {selectedPhones.length} contact(s) sélectionné(s).
+          </p>
+        </div>
+      )}
+    </>
+  );
+}
+
+function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+  const flushSave = useContext(FlushSaveContext);
+
+  const scope = audienceScopeFromData(data);
+  const groupId = data.audienceBroadcastGroupId ?? "";
+  const phones = Array.isArray(data.playgroundAudiencePhones)
+    ? data.playgroundAudiencePhones
+    : [];
+  const scheduledLocal = data.campaignScheduledFor ?? "";
+
   const onScheduleSend = useCallback(async () => {
     if (!flowId) {
       setFeedback({
@@ -116,8 +248,15 @@ function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
       });
       return;
     }
-    if (!groupId) {
+    if (scope === "group" && !groupId) {
       setFeedback({ ok: false, text: "Choisis un groupe de diffusion." });
+      return;
+    }
+    if (scope === "phones" && phones.length === 0) {
+      setFeedback({
+        ok: false,
+        text: "Sélectionne au moins un contact (audience).",
+      });
       return;
     }
     if (!scheduledLocal.trim()) {
@@ -135,15 +274,19 @@ function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
     setFeedback(null);
     setBusy(true);
     try {
-      await schedulePlaygroundFlowLaunch(flowId, {
-        broadcast_group_id: groupId,
+      await flushSave();
+      const payload = {
         entry_node_id: id,
         scheduled_for,
-      });
+      };
+      if (scope === "group" && groupId) {
+        payload.broadcast_group_id = groupId;
+      }
+      await schedulePlaygroundFlowLaunch(flowId, payload);
       setFeedback({
         ok: true,
         text:
-          "Lancement planifié : à l’heure indiquée, le scénario démarre pour chaque contact du groupe et enchaîne avec le bloc suivant sur le canevas (aucun message depuis ce déclencheur).",
+          "Lancement planifié : à l’heure indiquée, le scénario démarre pour chaque contact cible et enchaîne avec le bloc suivant sur le canevas (aucun message depuis ce déclencheur).",
       });
     } catch (err) {
       setFeedback({
@@ -156,33 +299,19 @@ function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
     } finally {
       setBusy(false);
     }
-  }, [flowId, groupId, scheduledLocal, id]);
+  }, [flowId, scope, groupId, phones.length, scheduledLocal, id, flushSave]);
+
+  const scheduleDisabled =
+    busy ||
+    !accountId ||
+    !flowId ||
+    !scheduledLocal.trim() ||
+    (scope === "group" && !groupId) ||
+    (scope === "phones" && phones.length === 0);
 
   return (
     <>
-      <p className="pg-modal__hint">
-        Ce déclencheur n’envoie rien lui-même : il sert de <strong>point de lancement programmé</strong>.
-        Relie ce bloc à la <strong>deuxième étape</strong> du parcours (texte, template, etc.) : à l’heure
-        choisie, le moteur démarre le flux pour chaque membre du groupe et suit les flèches du graphe.
-      </p>
-      <label className="pg-modal__label">
-        Groupe de diffusion
-        <select
-          className="pg-modal__input"
-          value={groupId}
-          onChange={(e) =>
-            patch(id, { audienceBroadcastGroupId: e.target.value })
-          }
-          disabled={busy || !accountId}
-        >
-          <option value="">- Choisir un groupe -</option>
-          {groups.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name || g.id}
-            </option>
-          ))}
-        </select>
-      </label>
+      <h4 className="pg-modal__form-title">Planification campagne</h4>
       <label className="pg-modal__label">
         Date et heure de lancement
         <input
@@ -202,7 +331,7 @@ function StartAudiencePanel({ id, data, patch, accountId, flowId }) {
         <button
           type="button"
           className="pg-modal__mini-btn"
-          disabled={busy || !accountId || !flowId || !groupId || !scheduledLocal.trim()}
+          disabled={scheduleDisabled}
           onClick={() => void onScheduleSend()}
         >
           Programmer le lancement
@@ -254,36 +383,11 @@ function VarInsertSelect({ onInsert, excludeId }) {
 
 export function StartSettingsForm({ id, data, patch, accountId, flowId }) {
   const tt = data.triggerType || "message_in";
-  const priVal =
-    data.entryPriority !== undefined && data.entryPriority !== null
-      ? String(data.entryPriority)
-      : "0";
+  const inboundLike = tt === "message_in" || tt === "playground_audience";
   return (
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Déclencheur</h4>
       <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
-      <label className="pg-modal__label">
-        Priorité (plusieurs entrées)
-        <input
-          className="pg-modal__input"
-          type="number"
-          inputMode="numeric"
-          min={0}
-          step={1}
-          value={priVal}
-          onChange={(e) => {
-            const v = e.target.value;
-            const n = parseInt(v, 10);
-            patch(id, {
-              entryPriority: v === "" || Number.isNaN(n) ? 0 : n,
-            });
-          }}
-        />
-      </label>
-      <p className="pg-modal__hint">
-        Plus la valeur est élevée, plus cette entrée est choisie en premier parmi celles
-        dont le déclencheur correspond au message.
-      </p>
       <label className="pg-modal__label">
         Type
         <select
@@ -298,8 +402,27 @@ export function StartSettingsForm({ id, data, patch, accountId, flowId }) {
           <option value="playground_audience">Campagne planifiée</option>
         </select>
       </label>
-      {tt === "message_in" && (
+      <label className="pg-modal__label">
+        Priorité d’entrée
+        <input
+          className="pg-modal__input"
+          type="number"
+          step={1}
+          value={data.entryPriority ?? 0}
+          onChange={(e) =>
+            patch(id, {
+              entryPriority: Number.parseInt(e.target.value, 10) || 0,
+            })
+          }
+        />
+      </label>
+      <p className="pg-modal__hint muted">
+        Plus la valeur est élevée, plus ce déclencheur est prioritaire. À égalité, « message entrant »
+        l’emporte sur « campagne ».
+      </p>
+      {inboundLike && (
         <>
+          <h4 className="pg-modal__form-title">Message entrant</h4>
           <label className="pg-modal__label">
             Correspondance
             <select
@@ -327,6 +450,14 @@ export function StartSettingsForm({ id, data, patch, accountId, flowId }) {
             </label>
           )}
         </>
+      )}
+      {inboundLike && (
+        <StartAudienceScopeBlock
+          id={id}
+          data={data}
+          patch={patch}
+          accountId={accountId}
+        />
       )}
       {tt === "schedule" && (
         <>
@@ -420,25 +551,64 @@ export function SendTextSettingsForm({ id, data, patch }) {
           placeholder="Ex. Bonjour {{prenom_client}} ! Voici notre réponse : {{réponse_…}}"
         />
       </label>
-      <p className="pg-modal__hint">
-        Utilisez le sélecteur ci-dessus pour insérer la variable d'un autre nœud
-        (ex. réponse Gemini, bouton interactif). Le texte <code>{"{{…}}"}</code> sera
-        remplacé automatiquement à l'envoi.
-      </p>
     </div>
   );
 }
 
 export function SendTemplateSettingsForm({ id, data, patch }) {
   const { templates, loading } = useContext(TemplatesContext);
+  const normalizeMetaStatus = useCallback((raw) => {
+    const s = String(raw || "").trim().toLowerCase();
+    if (!s) return "unknown";
+    if (s === "approved") return "approved";
+    if (s === "rejected") return "rejected";
+    if (s === "pending" || s === "pending_review" || s === "in_review") {
+      return "pending_review";
+    }
+    return "unknown";
+  }, []);
+  const statusLabel = useCallback((raw) => {
+    const s = normalizeMetaStatus(raw);
+    if (s === "approved") return "Approuvé";
+    if (s === "pending_review") return "En revue";
+    if (s === "rejected") return "Rejeté";
+    if (s === "missing") return "Absent";
+    return "Inconnu";
+  }, [normalizeMetaStatus]);
+  const templateOptions = useMemo(() => {
+    const list = Array.isArray(templates) ? templates : [];
+    const byKey = new Map();
+    list.forEach((tpl) => {
+      const key = `${tpl?.name || ""}||${tpl?.language || ""}`;
+      if (!key || key === "||") return;
+      byKey.set(key, tpl);
+    });
+    const currentKey = String(data.selectedTemplateKey || "").trim();
+    if (currentKey && !byKey.has(currentKey)) {
+      const [name, language] = currentKey.split("||");
+      byKey.set(currentKey, {
+        name: data.templateName || name || "",
+        language: data.templateLanguage || language || "",
+        status: data.templateStatus || "unknown",
+        _orphan: true,
+      });
+    }
+    return Array.from(byKey.entries()).map(([key, tpl]) => ({ key, ...tpl }));
+  }, [
+    templates,
+    data.selectedTemplateKey,
+    data.templateName,
+    data.templateLanguage,
+    data.templateStatus,
+  ]);
   const selectedTpl = useMemo(() => {
     const key = data.selectedTemplateKey;
-    if (!key || !templates?.length) return null;
+    if (!key) return null;
+    const hit = templateOptions.find((t) => t.key === key);
+    if (hit) return hit;
     const [name, lang] = key.split("||");
-    return templates.find(
-      (t) => t.name === name && String(t.language) === String(lang)
-    );
-  }, [data.selectedTemplateKey, templates]);
+    return { name, language: lang };
+  }, [data.selectedTemplateKey, templateOptions]);
 
   const varIds = useMemo(() => {
     const fromTpl = collectVarIdsFromTemplate(selectedTpl);
@@ -450,59 +620,49 @@ export function SendTemplateSettingsForm({ id, data, patch }) {
     if (data.quickReplyButtons?.length) return data.quickReplyButtons;
     return extractQuickReplyButtons(selectedTpl);
   }, [data.quickReplyButtons, selectedTpl]);
-  const ctaButtons = useMemo(
-    () => extractCtaButtons(selectedTpl),
-    [selectedTpl]
-  );
-
   const setTemplateKey = (key) => {
     const [name, lang] = key.split("||");
-    const tpl = templates.find(
-      (t) => t.name === name && String(t.language) === String(lang)
-    );
+    const tpl = templateOptions.find((t) => t.key === key);
     const vars = collectVarIdsFromTemplate(tpl);
     const variableValues = {};
     vars.forEach((v) => {
       variableValues[v] = data.variableValues?.[v] ?? "";
     });
+    const status = normalizeMetaStatus(tpl?.status);
     patch(id, {
       selectedTemplateKey: key,
       templateName: name,
       templateLanguage: lang,
       variableValues,
       quickReplyButtons: extractQuickReplyButtons(tpl),
+      templateStatus: status,
     });
   };
+
+  const templateStatus = data.templateStatus || "unknown";
 
   return (
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Template WhatsApp (Meta)</h4>
       <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
-      <p className="pg-modal__hint">
-        Pour initier ou relancer après 24h : message pré-approuvé Meta (ID du
-        template ci-dessous). Mappez les variables ; les quick replies alimentent
-        le routeur / SI en aval.
-      </p>
-      <p className="pg-modal__hint">
-        <code>réponse_*</code> = texte reçu (message libre ou libellé exact d’un
-        bouton quick reply).
-      </p>
       <label className="pg-modal__label">
         Modèle Meta
         <select
           className="pg-modal__input"
           value={data.selectedTemplateKey || ""}
-          disabled={loading || !templates?.length}
+          disabled={loading || !templateOptions.length}
           onChange={(e) => e.target.value && setTemplateKey(e.target.value)}
         >
           <option value="">
-            {loading ? "Chargement…" : templates?.length ? "Choisir…" : "Aucun"}
+            {loading ? "Chargement…" : templateOptions.length ? "Choisir…" : "Aucun"}
           </option>
-          {templates.map((t) => {
-            const key = `${t.name}||${t.language}`;
+          {templateOptions.map((t) => {
+            const key = t.key;
+            const suffix = statusLabel(t.status);
             return (
               <option key={key} value={key}>
-                {t.name} ({t.language})
+                {t.name} ({t.language}) - {suffix}
+                {t._orphan ? " (conservé)" : ""}
               </option>
             );
           })}
@@ -511,18 +671,6 @@ export function SendTemplateSettingsForm({ id, data, patch }) {
       {varIds.length > 0 && (
         <div className="pg-modal__section">
           <span className="pg-modal__section-title">Variables du template Meta</span>
-          <p className="pg-modal__hint">
-            Texte fixe ou placeholders du <strong>client</strong> (remplis à l’envoi) :{" "}
-            <code>{"{{prenom_client}}"}</code>, <code>{"{{nom_client}}"}</code>,{" "}
-            <code>{"{{numero_client}}"}</code> - ou en anglais{" "}
-            <code>{"{{contact_first_name}}"}</code>, <code>{"{{contact_name}}"}</code>,{" "}
-            <code>{"{{contact_phone}}"}</code> - alias courants{" "}
-            <code>{"{{contact.firstName}}"}</code>, <code>{"{{contact.name}}"}</code>,{" "}
-            <code>{"{{contact.phone}}"}</code>. Civilité (M./Mme) : pas de variable dédiée - préfixe fixe, ex.{" "}
-            <code>{"M. {{nom_client}}"}</code>.{" "}
-            <strong>Syntaxe :</strong> privilégier <code>{"{{…}}"}</code> ; la forme à une seule paire{" "}
-            <code>{"{prenom_client}"}</code> / <code>{"{contact.firstName}"}</code> est aussi remplacée à l’envoi.
-          </p>
           {varIds.map((vk) => (
             <label key={vk} className="pg-modal__label">
               <code>{`{{${vk}}}`}</code> (corps Meta)
@@ -544,48 +692,55 @@ export function SendTemplateSettingsForm({ id, data, patch }) {
           ))}
         </div>
       )}
-      {quickReplies.length > 0 && (
-        <div className="pg-modal__section">
-          <span className="pg-modal__section-title">Réponses boutons</span>
-          <p className="pg-modal__hint">
-            Pour un SI en aval, comparer <code>réponse_*</code> au texte du
-            bouton (souvent égal à).
-          </p>
-          <ul className="pg-modal__qr-list">
-            {quickReplies.map((b, i) => {
-              const pred = replyPredicateForButton(data.varKey, b.text);
-              return (
-                <li key={i} className="pg-modal__qr-item">
-                  <strong>{b.text}</strong>
-                  <code className="pg-modal__snippet">{pred}</code>
-                  <button
-                    type="button"
-                    className="ghost pg-modal__mini-btn"
-                    onClick={() =>
-                      navigator.clipboard?.writeText(pred).catch(() => {})
-                    }
-                  >
-                    Copier SI
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
-      {ctaButtons.length > 0 && (
-        <div className="pg-modal__section">
-          <span className="pg-modal__section-title">Liens / appel</span>
-          <p className="pg-modal__hint">Pas de texte de réponse pour un SI.</p>
-          <ul>
-            {ctaButtons.map((b, i) => (
-              <li key={i}>
-                {b.type === "URL" ? "Lien" : "Appel"} : {b.text}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <details className="pg-modal__section">
+        <summary className="pg-modal__section-title">Avancé</summary>
+        <label className="pg-modal__label">
+          Statut sur Meta (affiché sur le nœud)
+          <select
+            className="pg-modal__input"
+            value={templateStatus}
+            onChange={(e) => patch(id, { templateStatus: e.target.value })}
+          >
+            <option value="unknown">Inconnu / à vérifier</option>
+            <option value="missing">N’existe pas encore sur le compte</option>
+            <option value="pending_review">Soumis - en cours de vérification</option>
+            <option value="approved">Approuvé (envoyable)</option>
+            <option value="rejected">Rejeté par Meta</option>
+          </select>
+        </label>
+        {quickReplies.length > 0 && (
+          <div className="pg-modal__row2">
+            <label className="pg-modal__label">
+              Délai timeout
+              <input
+                className="pg-modal__input"
+                type="number"
+                min={0}
+                step="any"
+                value={data.timeoutDuration ?? ""}
+                onChange={(e) =>
+                  patch(id, {
+                    timeoutDuration: e.target.value === "" ? "" : e.target.value,
+                  })
+                }
+              />
+            </label>
+            <label className="pg-modal__label">
+              Unité timeout
+              <select
+                className="pg-modal__input"
+                value={data.timeoutUnit || "h"}
+                onChange={(e) => patch(id, { timeoutUnit: e.target.value })}
+              >
+                <option value="s">Secondes</option>
+                <option value="m">Minutes</option>
+                <option value="h">Heures</option>
+                <option value="d">Jours</option>
+              </select>
+            </label>
+          </div>
+        )}
+      </details>
     </div>
   );
 }
@@ -619,16 +774,6 @@ export function GeminiSettingsForm({ id, data, patch }) {
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Gemini (IA)</h4>
       <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
-      <p className="pg-modal__hint">
-        La réponse IA est stockée dans <code>{`{{${data.varKey || "…"}}}`}</code>.
-        Utilisez cette variable dans le nœud <strong>Texte</strong> ou <strong>Interactif</strong> suivant
-        pour envoyer le message au client.
-      </p>
-      <p className="pg-modal__hint muted">
-        Sans intentions + prompt rempli : texte généré (pas d’envoi direct).
-        Sans prompt : réponse playbook (envoi direct).
-        Avec intentions : routage par mot-clé.
-      </p>
       <VarInsertSelect excludeId={id} onInsert={insertVarInPrompt} />
       <label className="pg-modal__label">
         Prompt système
@@ -650,35 +795,129 @@ export function GeminiSettingsForm({ id, data, patch }) {
           Charger le prompt qualification statut VTC
         </button>
       </div>
-      <label className="pg-modal__label">
-        Consigne complémentaire (optionnel)
-        <textarea
-          className="pg-modal__input"
-          rows={3}
-          value={data.hint || ""}
-          onChange={(e) => patch(id, { hint: e.target.value })}
-        />
-      </label>
-      <label className="pg-modal__label">
-        Base de connaissances (optionnel)
-        <textarea
-          className="pg-modal__input pg-modal__code"
-          rows={5}
-          value={data.knowledgeBase || ""}
-          onChange={(e) => patch(id, { knowledgeBase: e.target.value })}
-          placeholder="Ajoutez ici des infos spécifiques à ce nœud : FAQ, tarifs, procédures...\nCes infos s'ajoutent au profil bot (entreprise, description, etc.)"
-        />
-      </label>
-      <p className="pg-modal__hint muted">
-        Le profil bot (nom, description, horaires, base de connaissances générale) est automatiquement injecté.
-        Ce champ permet d'ajouter du contexte supplémentaire propre à ce nœud.
-      </p>
+      <details className="pg-modal__section">
+        <summary className="pg-modal__section-title">Avancé</summary>
+        <label className="pg-modal__label">
+          Consigne complémentaire
+          <textarea
+            className="pg-modal__input"
+            rows={3}
+            value={data.hint || ""}
+            onChange={(e) => patch(id, { hint: e.target.value })}
+          />
+        </label>
+        <label className="pg-modal__label">
+          Base de connaissances
+          <textarea
+            className="pg-modal__input pg-modal__code"
+            rows={5}
+            value={data.knowledgeBase || ""}
+            onChange={(e) => patch(id, { knowledgeBase: e.target.value })}
+          />
+        </label>
+      </details>
       <div className="pg-modal__section">
         <span className="pg-modal__section-title">Mots-clés → branche</span>
         <p className="pg-modal__hint">
-          Reliez chaque sortie du nœud au suivant. La poignée « inconnu » =
-          intention floue (handoff).
+          Reliez chaque sortie au suivant. La poignée « inconnu » est utilisée après
+          échec du routage (par défaut l’IA pose d’abord une question de précision si
+          activé ci‑dessous, puis cette branche — ex. handoff).
         </p>
+        <div className="pg-modal__btn-row">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() =>
+              patch(id, { clarifyOnUnknown: true, maxClarifyAttempts: 3 })
+            }
+          >
+            Préréglage : compréhension (3 précisions)
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() =>
+              patch(id, { clarifyOnUnknown: true, maxClarifyAttempts: 1 })
+            }
+          >
+            Préréglage : rapide (1 précision)
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() =>
+              patch(id, { clarifyOnUnknown: false, maxClarifyAttempts: 1 })
+            }
+          >
+            Préréglage : direct « inconnu »
+          </button>
+        </div>
+        <label className="pg-modal__label pg-modal__row2">
+          <input
+            type="checkbox"
+            checked={data.useEmbeddingSimilarity === true}
+            onChange={(e) => patch(id, { useEmbeddingSimilarity: e.target.checked })}
+          />{" "}
+          Routage sémantique (embeddings) si le mot-clé échoue — coût API supplémentaire
+        </label>
+        <label className="pg-modal__label">
+          Seuil de similarité (0,35–0,95)
+          <input
+            className="pg-modal__input"
+            type="number"
+            step="0.01"
+            min={0.35}
+            max={0.95}
+            value={data.embeddingSimilarityThreshold ?? 0.62}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value, 10);
+              patch(id, {
+                embeddingSimilarityThreshold: Number.isFinite(v)
+                  ? Math.min(0.95, Math.max(0.35, v))
+                  : 0.62,
+              });
+            }}
+          />
+        </label>
+        <label className="pg-modal__label pg-modal__row2">
+          <input
+            type="checkbox"
+            checked={data.structuredMemory !== false}
+            onChange={(e) => patch(id, { structuredMemory: e.target.checked })}
+          />{" "}
+          Journal mémoire (lignes dans la variable{" "}
+          <code className="pg-modal__code">flow_structured_notes</code>)
+        </label>
+        <p className="pg-modal__hint">
+          Utilisez{" "}
+          <code className="pg-modal__code">{"{{flow_structured_notes}}"}</code> et{" "}
+          <code className="pg-modal__code">{"{{flow_recent_user_text}}"}</code> dans
+          les prompts pour le contexte multi-messages.
+        </p>
+        <label className="pg-modal__label pg-modal__row2">
+          <input
+            type="checkbox"
+            checked={data.clarifyOnUnknown !== false}
+            onChange={(e) => patch(id, { clarifyOnUnknown: e.target.checked })}
+          />{" "}
+          Demander une précision (IA) avant la branche « inconnu »
+        </label>
+        <label className="pg-modal__label">
+          Nombre max de questions de précision avant « inconnu »
+          <input
+            className="pg-modal__input"
+            type="number"
+            min={0}
+            max={5}
+            value={data.maxClarifyAttempts ?? 3}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              patch(id, {
+                maxClarifyAttempts: Number.isFinite(v) ? Math.min(5, Math.max(0, v)) : 3,
+              });
+            }}
+          />
+        </label>
         {intents.map((row, i) => (
           <div key={i} className="pg-modal__row2">
             <label className="pg-modal__label">
@@ -761,38 +1000,79 @@ export function DelaySettingsForm({ id, data, patch }) {
           </select>
         </label>
       </div>
-      <p className="pg-modal__hint">
-        Si le délai fait dépasser 24h sans message client, le nœud suivant doit
-        en principe être un template WhatsApp (hors fenêtre gratuite).
-      </p>
     </div>
   );
 }
 
 export function WaitUntilSettingsForm({ id, data, patch }) {
+  const displayUntil = useMemo(
+    () => untilToDatetimeLocalInputValue(data.until),
+    [data.until]
+  );
+  const configured = useMemo(
+    () => describeWaitUntilConfiguredState(data || {}),
+    [data]
+  );
+
   return (
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Attendre jusqu’à</h4>
-      <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
+      <p className="pg-modal__hint muted">
+        Le sélecteur ci‑dessous attend une <strong>date fixe</strong>. Les valeurs ISO
+        (souvent produites par l’IA) sont converties pour l’affichage : si tu voyais un champ
+        vide avant, la date peut être là sans être visible.
+      </p>
+      <p
+        className={`pg-modal__status ${
+          configured.kind === "empty"
+            ? "pg-modal__status--warn"
+            : "pg-modal__status--ok"
+        }`}
+        role="status"
+      >
+        {configured.text}
+      </p>
       <label className="pg-modal__label">
-        Date et heure cible
+        Date et heure cible (fixe)
         <input
           className="pg-modal__input"
           type="datetime-local"
-          value={data.until || ""}
+          value={displayUntil}
           onChange={(e) => patch(id, { until: e.target.value })}
         />
       </label>
       <label className="pg-modal__label">
-        Fuseau / note
+        Date depuis une variable de flux (optionnel)
         <input
           className="pg-modal__input"
           type="text"
-          placeholder="Europe/Paris"
+          placeholder="ex. réponse_date_rdv (sans {{ }})"
+          value={data.untilFromVarKey || ""}
+          onChange={(e) =>
+            patch(id, { untilFromVarKey: e.target.value.trim() })
+          }
+        />
+      </label>
+      <p className="pg-modal__hint muted">
+        Si renseigné, le moteur lit <code>variables[clé]</code> (chaîne ISO type{" "}
+        <code>2026-04-20T15:00:00+02:00</code>) et ignore la date fixe ci‑dessus.
+      </p>
+      <label className="pg-modal__label">
+        Fuseau horaire (IANA, pour la date fixe sans offset)
+        <input
+          className="pg-modal__input"
+          type="text"
+          placeholder="Europe/Paris ou UTC"
           value={data.timezoneNote || ""}
           onChange={(e) => patch(id, { timezoneNote: e.target.value })}
         />
       </label>
+      <h4 className="pg-modal__form-title">Variable du nœud</h4>
+      <p className="pg-modal__hint muted">
+        Le libellé <code>{`{{${data.varKey || "…"}}}`}</code> est le{" "}
+        <strong>nom interne</strong> de ce bloc (aperçu sur le canevas), pas la date cible.
+      </p>
+      <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
     </div>
   );
 }
@@ -803,7 +1083,6 @@ export function TimeWindowSettingsForm({ id, data, patch }) {
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Fenêtre horaire</h4>
       <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
-      <p className="pg-modal__hint">0 = dimanche. Sorties : dans / hors plage.</p>
       <div className="pg-modal__days">
         {WEEKDAYS.map(({ v, l }) => (
           <label key={v} className="pg-modal__day">
@@ -841,80 +1120,7 @@ export function TimeWindowSettingsForm({ id, data, patch }) {
 }
 
 export function LogicSettingsForm({ id, data, patch }) {
-  const graphNodes = useContext(PlaygroundGraphContext) || [];
-  const { templates } = useContext(TemplatesContext);
   const mode = data.logicMode || "si";
-
-  const templateNodes = useMemo(
-    () =>
-      (graphNodes || []).filter(
-        (n) => n.type === "sendTemplate" && n.data?.varKey
-      ),
-    [graphNodes]
-  );
-
-  const [tplCondNodeId, setTplCondNodeId] = useState("");
-  const [tplCondOp, setTplCondOp] = useState("eq");
-  const [tplCondVal, setTplCondVal] = useState("");
-  const [tplCondBtnIdx, setTplCondBtnIdx] = useState("");
-
-  const tplNodeForCond = useMemo(
-    () => templateNodes.find((x) => x.id === tplCondNodeId),
-    [templateNodes, tplCondNodeId]
-  );
-
-  const tplQuickButtonsForCond = useMemo(() => {
-    const n = tplNodeForCond;
-    if (!n?.data) return [];
-    const d = n.data;
-    if (Array.isArray(d.quickReplyButtons) && d.quickReplyButtons.length) {
-      return d.quickReplyButtons;
-    }
-    const key = d.selectedTemplateKey;
-    if (!key || !templates?.length) return [];
-    const [name, lang] = key.split("||");
-    const meta = templates.find(
-      (t) => t.name === name && String(t.language) === String(lang)
-    );
-    return extractQuickReplyButtons(meta);
-  }, [tplNodeForCond, templates]);
-
-  useEffect(() => {
-    setTplCondBtnIdx("");
-  }, [tplCondNodeId]);
-
-  const appendTemplateCondition = useCallback(() => {
-    const n = templateNodes.find((x) => x.id === tplCondNodeId);
-    if (!n?.data?.varKey) return;
-    const pred = buildTemplateReplyPredicate(
-      n.data.varKey,
-      tplCondOp,
-      tplCondVal
-    );
-    if (!pred) return;
-    const cur = (data.condition || "").trim();
-    patch(id, { condition: cur ? `${cur} && (${pred})` : pred });
-  }, [
-    templateNodes,
-    tplCondNodeId,
-    tplCondOp,
-    tplCondVal,
-    data.condition,
-    id,
-    patch,
-  ]);
-
-  const replaceWithTemplateCondition = useCallback(() => {
-    const n = templateNodes.find((x) => x.id === tplCondNodeId);
-    if (!n?.data?.varKey) return;
-    const pred = buildTemplateReplyPredicate(
-      n.data.varKey,
-      tplCondOp,
-      tplCondVal
-    );
-    if (!pred) return;
-    patch(id, { condition: pred });
-  }, [templateNodes, tplCondNodeId, tplCondOp, tplCondVal, id, patch]);
 
   return (
     <div className="pg-modal__form">
@@ -935,112 +1141,6 @@ export function LogicSettingsForm({ id, data, patch }) {
 
       {mode === "si" && (
         <>
-          <p className="pg-modal__hint">
-            Variables <code>réponse_*</code> - pour un template, réponse client
-            après envoi.
-          </p>
-          {templateNodes.length > 0 && (
-            <div className="pg-modal__section pg-modal__cond">
-              <span className="pg-modal__section-title">
-                Si réponse au template…
-              </span>
-              <label className="pg-modal__label">
-                Nœud template
-                <select
-                  className="pg-modal__input"
-                  value={tplCondNodeId}
-                  onChange={(e) => setTplCondNodeId(e.target.value)}
-                >
-                  <option value="">-</option>
-                  {templateNodes.map((n) => {
-                    const name =
-                      n.data?.templateName ||
-                      (n.data?.selectedTemplateKey || "").split("||")[0] ||
-                      "template";
-                    const qr = n.data?.quickReplyButtons?.length || 0;
-                    return (
-                      <option key={n.id} value={n.id}>
-                        « {name} »{qr ? ` · ${qr} btn` : ""}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
-              {tplQuickButtonsForCond.length > 0 && (
-                <label className="pg-modal__label">
-                  = bouton quick reply
-                  <select
-                    className="pg-modal__input"
-                    value={tplCondBtnIdx}
-                    onChange={(e) => {
-                      const idx = e.target.value;
-                      setTplCondBtnIdx(idx);
-                      if (idx === "") return;
-                      const b = tplQuickButtonsForCond[Number(idx)];
-                      if (b?.text) {
-                        setTplCondVal(b.text);
-                        setTplCondOp("eq");
-                      }
-                    }}
-                  >
-                    <option value="">Manuel</option>
-                    {tplQuickButtonsForCond.map((b, i) => (
-                      <option key={i} value={String(i)}>
-                        {b.text}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              <div className="pg-modal__row2">
-                <label className="pg-modal__label">
-                  Comparaison
-                  <select
-                    className="pg-modal__input"
-                    value={tplCondOp}
-                    onChange={(e) => setTplCondOp(e.target.value)}
-                  >
-                    <option value="eq">Égal à</option>
-                    <option value="contains">Contient</option>
-                    <option value="regex">Regex</option>
-                  </select>
-                </label>
-                <label className="pg-modal__label">
-                  Valeur
-                  <input
-                    className="pg-modal__input"
-                    type="text"
-                    value={tplCondVal}
-                    onChange={(e) => setTplCondVal(e.target.value)}
-                  />
-                </label>
-              </div>
-              <div className="pg-modal__btn-row">
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={appendTemplateCondition}
-                  disabled={!tplCondNodeId}
-                >
-                  Ajouter (ET)
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={replaceWithTemplateCondition}
-                  disabled={!tplCondNodeId}
-                >
-                  Remplacer tout
-                </button>
-              </div>
-            </div>
-          )}
-          <VarInsertSelect
-            excludeId={id}
-            onInsert={(token) =>
-              patch(id, { condition: (data.condition || "") + token })
-            }
-          />
           <label className="pg-modal__label">
             Expression
             <textarea
@@ -1096,51 +1196,6 @@ export function InteractiveSettingsForm({ id, data, patch }) {
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Message interactif (24h)</h4>
       <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
-      <p className="pg-modal__hint">
-        Texte + boutons (max 3) ou liste (&gt; 3 options). La réponse est
-        disponible dans <code>{`{{${data.varKey || "…"}}}`}</code> pour le
-        routeur en aval.
-      </p>
-      <div className="pg-modal__section">
-        <span className="pg-modal__section-title">Relance sans réponse (optionnel)</span>
-        <p className="pg-modal__hint">
-          Reliez la sortie <strong>timeout</strong> du nœud à la suite (ex.
-          rappel). Définissez la durée ci-dessous ; si le client répond avant,
-          la relance est annulée.
-        </p>
-        <div className="pg-modal__row2">
-          <label className="pg-modal__label">
-            Délai
-            <input
-              className="pg-modal__input"
-              type="number"
-              min={0}
-              step="any"
-              value={data.timeoutDuration ?? ""}
-              onChange={(e) =>
-                patch(id, {
-                  timeoutDuration:
-                    e.target.value === "" ? "" : e.target.value,
-                })
-              }
-              placeholder="ex. 48"
-            />
-          </label>
-          <label className="pg-modal__label">
-            Unité
-            <select
-              className="pg-modal__input"
-              value={data.timeoutUnit || "h"}
-              onChange={(e) => patch(id, { timeoutUnit: e.target.value })}
-            >
-              <option value="s">Secondes</option>
-              <option value="m">Minutes</option>
-              <option value="h">Heures</option>
-              <option value="d">Jours</option>
-            </select>
-          </label>
-        </div>
-      </div>
       <VarInsertSelect excludeId={id} onInsert={insertVar} />
       <label className="pg-modal__label">
         Texte du message
@@ -1200,34 +1255,6 @@ export function InteractiveSettingsForm({ id, data, patch }) {
                 }}
               />
             </label>
-            <label className="pg-modal__label">
-              Id payload Meta
-              <input
-                className="pg-modal__input"
-                type="text"
-                value={c.id || ""}
-                placeholder={`btn_${i}`}
-                onChange={(e) => {
-                  const next = [...choices];
-                  next[i] = { ...next[i], id: e.target.value };
-                  setChoices(next);
-                }}
-              />
-            </label>
-            <label className="pg-modal__label">
-              Variable session (optionnel)
-              <input
-                className="pg-modal__input"
-                type="text"
-                value={c.saveToVariable || ""}
-                placeholder="ex. interetCoop"
-                onChange={(e) => {
-                  const next = [...choices];
-                  next[i] = { ...next[i], saveToVariable: e.target.value || undefined };
-                  setChoices(next);
-                }}
-              />
-            </label>
           </div>
         ))}
         <div className="pg-modal__btn-row">
@@ -1248,6 +1275,39 @@ export function InteractiveSettingsForm({ id, data, patch }) {
           </button>
         </div>
       </div>
+      <details className="pg-modal__section">
+        <summary className="pg-modal__section-title">Avancé</summary>
+        <div className="pg-modal__row2">
+          <label className="pg-modal__label">
+            Délai timeout
+            <input
+              className="pg-modal__input"
+              type="number"
+              min={0}
+              step="any"
+              value={data.timeoutDuration ?? ""}
+              onChange={(e) =>
+                patch(id, {
+                  timeoutDuration: e.target.value === "" ? "" : e.target.value,
+                })
+              }
+            />
+          </label>
+          <label className="pg-modal__label">
+            Unité timeout
+            <select
+              className="pg-modal__input"
+              value={data.timeoutUnit || "h"}
+              onChange={(e) => patch(id, { timeoutUnit: e.target.value })}
+            >
+              <option value="s">Secondes</option>
+              <option value="m">Minutes</option>
+              <option value="h">Heures</option>
+              <option value="d">Jours</option>
+            </select>
+          </label>
+        </div>
+      </details>
     </div>
   );
 }
@@ -1263,11 +1323,6 @@ export function RouterSettingsForm({ id, data, patch }) {
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Routeur (réponse précédente)</h4>
       <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
-      <p className="pg-modal__hint">
-        Compare la valeur dans <code>réponse_*</code> du nœud précédent (bouton,
-        texte…). Reliez chaque sortie du nœud à la suite du flux ; la sortie
-        d’échappement = texte libre ou non reconnu (ex. branche Gemini).
-      </p>
       <div className="pg-modal__section">
         <span className="pg-modal__section-title">Branches</span>
         {routes.map((r, i) => (
@@ -1333,10 +1388,6 @@ export function HandoffSettingsForm({ id, data, patch }) {
     <div className="pg-modal__form">
       <h4 className="pg-modal__form-title">Handoff humain / action</h4>
       <NodeVarLine varKey={data.varKey} nodeId={id} patch={patch} />
-      <p className="pg-modal__hint">
-        Arrêt bot, notification interne ou suite CRM (à brancher côté serveur).
-        Sortie basse optionnelle pour enchaîner après l’action.
-      </p>
       <label className="pg-modal__label">
         Tags (séparés par virgule)
         <input
@@ -1345,16 +1396,6 @@ export function HandoffSettingsForm({ id, data, patch }) {
           value={data.tagsText || ""}
           onChange={(e) => patch(id, { tagsText: e.target.value })}
           placeholder="Chaud - Coopérative, VIP…"
-        />
-      </label>
-      <label className="pg-modal__label">
-        Assignation agent (référence / id)
-        <input
-          className="pg-modal__input"
-          type="text"
-          value={data.assignAgent || ""}
-          onChange={(e) => patch(id, { assignAgent: e.target.value })}
-          placeholder="user_id ou file d’attente"
         />
       </label>
       <label className="pg-modal__label">
@@ -1367,6 +1408,19 @@ export function HandoffSettingsForm({ id, data, patch }) {
           placeholder="Appeler ce prospect au plus vite…"
         />
       </label>
+      <details className="pg-modal__section">
+        <summary className="pg-modal__section-title">Avancé</summary>
+        <label className="pg-modal__label">
+          Assignation agent (référence / id)
+          <input
+            className="pg-modal__input"
+            type="text"
+            value={data.assignAgent || ""}
+            onChange={(e) => patch(id, { assignAgent: e.target.value })}
+            placeholder="user_id ou file d’attente"
+          />
+        </label>
+      </details>
     </div>
   );
 }

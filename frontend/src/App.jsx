@@ -1,19 +1,17 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { supabaseClient } from "./api/supabaseClient";
 import { getDeviceType } from "./utils/deviceDetection";
 import { getAuthSession, saveAuthSession, clearAuthSession } from "./utils/secureStorage";
 import { useTheme } from "./hooks/useTheme";
-
-// Desktop
-import InboxPage from "./pages/InboxPage";
-import AppHeader from "./components/layout/AppHeader";
-import LoginPage from "./pages/LoginPage";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 
-// Mobile
-import MobileLoginPage from "./pages/MobileLoginPage";
-import MobileInboxPage from "./pages/MobileInboxPage";
-import RegisterPage from "./pages/RegisterPage";
+// Lazy-loaded pages: desktop and mobile bundles are split
+const InboxPage = lazy(() => import("./pages/InboxPage"));
+const AppHeader = lazy(() => import("./components/layout/AppHeader"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const MobileLoginPage = lazy(() => import("./pages/MobileLoginPage"));
+const MobileInboxPage = lazy(() => import("./pages/MobileInboxPage"));
+const RegisterPage = lazy(() => import("./pages/RegisterPage"));
 
 // Composant mobile (sans AuthProvider, gestion directe)
 function MobileApp() {
@@ -32,11 +30,9 @@ function MobileApp() {
         refresh_token: savedSession.refresh_token,
       }).then(({ data, error }) => {
         if (error || !data.session) {
-          console.warn("⚠️ Saved session invalid, clearing:", error);
           clearAuthSession();
           setSession(null);
         } else {
-          console.log("✅ Session restored from storage:", data.session.user?.id);
           setSession(data.session);
         }
         setLoading(false);
@@ -45,16 +41,10 @@ function MobileApp() {
       // Vérifier la session Supabase actuelle
       supabaseClient.auth.getSession().then(({ data, error }) => {
         if (error) {
-          console.warn("⚠️ Error getting session:", error);
           setSession(null);
         } else if (data.session) {
-          console.log("✅ Session found:", data.session.user?.id);
-          if (!data.session.access_token) {
-            console.warn("⚠️ Session exists but no access_token!");
-          }
           setSession(data.session);
         } else {
-          console.log("ℹ️ No session found");
           setSession(null);
         }
         setLoading(false);
@@ -103,15 +93,21 @@ function MobileApp() {
     );
   }
 
+  const fallback = (
+    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0b141a', color: '#e9edef' }}>
+      <div>Chargement...</div>
+    </div>
+  );
+
   if (isRegisterPage) {
-    return <RegisterPage />;
+    return <Suspense fallback={fallback}><RegisterPage /></Suspense>;
   }
 
   if (!session) {
-    return <MobileLoginPage onLoginSuccess={handleLoginSuccess} />;
+    return <Suspense fallback={fallback}><MobileLoginPage onLoginSuccess={handleLoginSuccess} /></Suspense>;
   }
 
-  return <MobileInboxPage onLogout={handleLogout} />;
+  return <Suspense fallback={fallback}><MobileInboxPage onLogout={handleLogout} /></Suspense>;
 }
 
 // Composant desktop (avec AuthProvider)
@@ -127,33 +123,59 @@ function DesktopApp() {
     return <div className="loading-screen">Chargement...</div>;
   }
 
+  const fallback = <div className="loading-screen">Chargement...</div>;
+
   if (isRegisterPage) {
-    return <RegisterPage />;
+    return <Suspense fallback={fallback}><RegisterPage /></Suspense>;
   }
 
   if (!session) {
-    return <LoginPage />;
+    return <Suspense fallback={fallback}><LoginPage /></Suspense>;
   }
 
   return (
-    <div className="app">
-      <AppHeader />
-      <InboxPage />
-    </div>
+    <Suspense fallback={fallback}>
+      <div className="app">
+        <AppHeader />
+        <InboxPage />
+      </div>
+    </Suspense>
   );
 }
 
 // App principale avec détection de device
 export default function App() {
-  const [deviceType, setDeviceType] = useState(null);
+  const [deviceType, setDeviceType] = useState(() =>
+    typeof window !== "undefined" ? getDeviceType() : null
+  );
 
   useEffect(() => {
-    // Détection initiale + re-détection au resize
     const detect = () => setDeviceType(getDeviceType());
 
     detect();
     window.addEventListener("resize", detect);
-    return () => window.removeEventListener("resize", detect);
+    window.addEventListener("orientationchange", detect);
+
+    const vv = window.visualViewport;
+    if (vv) {
+      vv.addEventListener("resize", detect);
+    }
+
+    const mqPointer = window.matchMedia("(pointer: coarse)");
+    const mqHover = window.matchMedia("(hover: none)");
+    const onMq = () => detect();
+    mqPointer.addEventListener("change", onMq);
+    mqHover.addEventListener("change", onMq);
+
+    return () => {
+      window.removeEventListener("resize", detect);
+      window.removeEventListener("orientationchange", detect);
+      if (vv) {
+        vv.removeEventListener("resize", detect);
+      }
+      mqPointer.removeEventListener("change", onMq);
+      mqHover.removeEventListener("change", onMq);
+    };
   }, []);
 
   if (!deviceType) {
