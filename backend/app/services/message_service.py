@@ -58,7 +58,7 @@ if not logger.handlers:
     logger.propagate = True
 
 
-async def handle_incoming_message(data: dict):
+async def handle_incoming_message(data: dict, *, propagate_errors: bool = False):
     """
     Parse le webhook WhatsApp Cloud API et stocke les messages + statuts.
     
@@ -195,10 +195,14 @@ async def handle_incoming_message(data: dict):
                     for msg_idx, message in enumerate(messages):
                         try:
                             logger.info(f"  Processing message {msg_idx + 1}/{len(messages)}: type={message.get('type')}, from={message.get('from')}")
-                            await _process_incoming_message(account["id"], message, contacts_map)
+                            await _process_incoming_message(
+                                account["id"], message, contacts_map, raise_on_error=propagate_errors
+                            )
                             logger.info(f"  ✅ Message {msg_idx + 1} processed successfully")
                         except Exception as msg_error:
                             logger.error(f"  ❌ Error processing message {msg_idx + 1}: {msg_error}", exc_info=True)
+                            if propagate_errors:
+                                raise
                             # Continue avec les autres messages même si un échoue
 
                     statuses = value.get("statuses", [])
@@ -210,6 +214,8 @@ async def handle_incoming_message(data: dict):
                             logger.debug(f"  ✅ Status {status_idx + 1} processed")
                         except Exception as status_error:
                             logger.error(f"  ❌ Error processing status {status_idx + 1}: {status_error}", exc_info=True)
+                            if propagate_errors:
+                                raise
                             # Continue avec les autres statuts même si un échoue
                             
                 except Exception as change_error:
@@ -228,6 +234,8 @@ async def handle_incoming_message(data: dict):
                         )
                     except:
                         pass
+                    if propagate_errors:
+                        raise
                     # Continue avec les autres changes même si un échoue
                     
     except Exception as e:
@@ -245,6 +253,8 @@ async def handle_incoming_message(data: dict):
             )
         except:
             pass
+        if propagate_errors:
+            raise
         # Ne pas lever l'exception pour que WhatsApp ne réessaie pas indéfiniment
         return True
 
@@ -252,7 +262,11 @@ async def handle_incoming_message(data: dict):
 
 
 async def _process_incoming_message(
-    account_id: str, message: Dict[str, Any], contacts_map: Dict[str, Any]
+    account_id: str,
+    message: Dict[str, Any],
+    contacts_map: Dict[str, Any],
+    *,
+    raise_on_error: bool = False,
 ):
     try:
         logger.debug(
@@ -486,72 +500,57 @@ async def _process_incoming_message(
         message_db_id = None
         try:
             if get_pool():
-                row = await fetch_one(
-                    """
-                    INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, media_id, media_mime_type, media_filename, reply_to_message_id)
-                    VALUES ($1::uuid, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9, $10, $11::uuid)
-                    ON CONFLICT (wa_message_id) DO UPDATE SET
-                        conversation_id = EXCLUDED.conversation_id,
-                        direction = EXCLUDED.direction,
-                        content_text = EXCLUDED.content_text,
-                        timestamp = EXCLUDED.timestamp,
-                        message_type = EXCLUDED.message_type,
-                        status = EXCLUDED.status,
-                        media_id = EXCLUDED.media_id,
-                        media_mime_type = EXCLUDED.media_mime_type,
-                        media_filename = EXCLUDED.media_filename,
-                        reply_to_message_id = EXCLUDED.reply_to_message_id
-                    RETURNING id, conversation_id, direction
-                    """,
-                    message_payload["conversation_id"],
-                    message_payload["direction"],
-                    message_payload["content_text"],
-                    _parse_timestamp_iso(message_payload["timestamp"]),
-                    message_payload["wa_message_id"],
-                    message_payload["message_type"],
-                    message_payload["status"],
-                    message_payload.get("media_id"),
-                    message_payload.get("media_mime_type"),
-                    message_payload.get("media_filename"),
-                    message_payload.get("reply_to_message_id"),
-                )
-                if row:
-                    message_db_id = row["id"]
-                    stored_conv_id = row["conversation_id"]
-                    stored_direction = row["direction"]
-                    logger.info(f"✅ [MESSAGE INSERT] Message upserted (pg): id={message_db_id}, conversation_id={stored_conv_id}, direction={stored_direction}")
-                    if stored_conv_id != conversation["id"]:
-                        logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation! Expected: {conversation['id']}, Got: {stored_conv_id}")
-                    if stored_direction != "inbound":
-                        logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction! Expected: inbound, Got: {stored_direction}")
-            else:
-                upsert_result = await supabase_execute(
-                    supabase.table("messages").upsert(
-                        message_payload,
-                        on_conflict="wa_message_id",
+                try:
+                    row = await fetch_one(
+                        """
+                        INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, media_id, media_mime_type, media_filename, reply_to_message_id)
+                        VALUES ($1::uuid, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9, $10, $11::uuid)
+                        ON CONFLICT (wa_message_id) DO UPDATE SET
+                            conversation_id = EXCLUDED.conversation_id,
+                            direction = EXCLUDED.direction,
+                            content_text = EXCLUDED.content_text,
+                            timestamp = EXCLUDED.timestamp,
+                            message_type = EXCLUDED.message_type,
+                            status = EXCLUDED.status,
+                            media_id = EXCLUDED.media_id,
+                            media_mime_type = EXCLUDED.media_mime_type,
+                            media_filename = EXCLUDED.media_filename,
+                            reply_to_message_id = EXCLUDED.reply_to_message_id
+                        RETURNING id, conversation_id, direction
+                        """,
+                        message_payload["conversation_id"],
+                        message_payload["direction"],
+                        message_payload["content_text"],
+                        _parse_timestamp_iso(message_payload["timestamp"]),
+                        message_payload["wa_message_id"],
+                        message_payload["message_type"],
+                        message_payload["status"],
+                        message_payload.get("media_id"),
+                        message_payload.get("media_mime_type"),
+                        message_payload.get("media_filename"),
+                        message_payload.get("reply_to_message_id"),
                     )
-                )
-                if upsert_result.data and len(upsert_result.data) > 0:
-                    message_db_id = upsert_result.data[0].get("id")
-                    logger.info(f"✅ [MESSAGE INSERT] Message upserted successfully: {message_db_id}")
-                if message.get("id") and not message_db_id:
-                    existing_msg = await supabase_execute(
-                        supabase.table("messages")
-                        .select("id, conversation_id, direction")
-                        .eq("wa_message_id", message.get("id"))
-                        .limit(1)
-                    )
-                    if existing_msg.data:
-                        message_db_id = existing_msg.data[0].get("id")
-                        stored_conv_id = existing_msg.data[0].get("conversation_id")
-                        stored_direction = existing_msg.data[0].get("direction")
-                        logger.info(f"✅ [MESSAGE INSERT] Message ID retrieved: {message_db_id}")
+                    if row:
+                        message_db_id = row["id"]
+                        stored_conv_id = row["conversation_id"]
+                        stored_direction = row["direction"]
+                        logger.info(f"✅ [MESSAGE INSERT] Message upserted (pg): id={message_db_id}, conversation_id={stored_conv_id}, direction={stored_direction}")
                         if stored_conv_id != conversation["id"]:
-                            logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation!")
+                            logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation! Expected: {conversation['id']}, Got: {stored_conv_id}")
                         if stored_direction != "inbound":
-                            logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction!")
-                    else:
-                        logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message upserted but not found by wa_message_id: {message.get('id')}")
+                            logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction! Expected: inbound, Got: {stored_direction}")
+                except Exception as pg_err:
+                    logger.warning(
+                        f"⚠️ [MESSAGE INSERT] PG upsert failed ({pg_err}); falling back to Supabase REST API",
+                        exc_info=True,
+                    )
+                    message_db_id = await _upsert_inbound_message_via_supabase_rest(
+                        message_payload, conversation, message
+                    )
+            else:
+                message_db_id = await _upsert_inbound_message_via_supabase_rest(
+                    message_payload, conversation, message
+                )
         except Exception as upsert_error:
             logger.error(f"❌ [MESSAGE INSERT] CRITICAL: Failed to upsert message: {upsert_error}", exc_info=True)
             raise
@@ -717,6 +716,8 @@ async def _process_incoming_message(
         
     except Exception as e:
         logger.error(f"❌ Error in _process_incoming_message (from={message.get('from', 'unknown')}, account_id={account_id}): {e}", exc_info=True)
+        if raise_on_error:
+            raise
         # Ne pas lever l'exception pour ne pas bloquer le traitement des autres messages
         # Mais on log l'erreur pour le débogage
 
@@ -1117,6 +1118,52 @@ def _parse_timestamp_iso(ts: Optional[str]) -> datetime:
     s = ts.replace("Z", "+00:00")
     dt = datetime.fromisoformat(s)
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+async def _upsert_inbound_message_via_supabase_rest(
+    message_payload: dict,
+    conversation: dict,
+    message: dict,
+) -> Optional[str]:
+    """
+    Upsert inbound message via Supabase PostgREST (same DB as asyncpg).
+    Used when asyncpg path fails (fallback) or when DATABASE_URL pool is not used.
+    """
+    upsert_result = await supabase_execute(
+        supabase.table("messages").upsert(
+            message_payload,
+            on_conflict="wa_message_id",
+        )
+    )
+    message_db_id = None
+    if upsert_result.data and len(upsert_result.data) > 0:
+        message_db_id = upsert_result.data[0].get("id")
+        logger.info(f"✅ [MESSAGE INSERT] Message upserted successfully (supabase): {message_db_id}")
+    if message.get("id") and not message_db_id:
+        existing_msg = await supabase_execute(
+            supabase.table("messages")
+            .select("id, conversation_id, direction")
+            .eq("wa_message_id", message.get("id"))
+            .limit(1)
+        )
+        if existing_msg.data:
+            message_db_id = existing_msg.data[0].get("id")
+            stored_conv_id = existing_msg.data[0].get("conversation_id")
+            stored_direction = existing_msg.data[0].get("direction")
+            logger.info(f"✅ [MESSAGE INSERT] Message ID retrieved: {message_db_id}")
+            if stored_conv_id != conversation["id"]:
+                logger.error(
+                    "❌ [MESSAGE INSERT] CRITICAL: Message stored in wrong conversation!"
+                )
+            if stored_direction != "inbound":
+                logger.error(
+                    "❌ [MESSAGE INSERT] CRITICAL: Message stored with wrong direction!"
+                )
+        else:
+            logger.error(
+                f"❌ [MESSAGE INSERT] CRITICAL: Message upserted but not found by wa_message_id: {message.get('id')}"
+            )
+    return message_db_id
 
 
 async def _update_conversation_timestamp(conversation_id: str, timestamp_iso: Optional[str] = None):

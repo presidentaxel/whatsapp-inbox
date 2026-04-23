@@ -154,10 +154,13 @@ export default function InboxPage() {
           setConversationCursor(null);
           setHasMoreConversations(false);
         }
+        // Garder la sélection si la conv n’est pas dans les N premiers résultats
+        // (ex. find-or-create sur un numéro peu récent → sinon le chat se ferme au refresh).
         setSelectedConversation((prev) => {
           if (!prev) return null;
           if (isPlaygroundSandboxConversation(prev)) return null;
-          return batch.find((c) => c.id === prev.id) ?? null;
+          const found = batch.find((c) => c.id === prev.id);
+          return found ?? prev;
         });
       } catch {
         setConversations([]);

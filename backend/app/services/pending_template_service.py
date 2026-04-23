@@ -13,6 +13,7 @@ from app.services import whatsapp_api_service
 from app.services.template_validator import TemplateValidator
 from app.services.message_service import send_template_message
 from app.services.account_service import get_account_by_id
+from app.services.conversation_service import normalize_phone_number
 
 logger = logging.getLogger(__name__)
 
@@ -1490,14 +1491,15 @@ async def _send_broadcast_template(
             "SELECT id, phone_number, message_id, sent_at FROM broadcast_recipient_stats WHERE campaign_id = $1::uuid",
             campaign_id,
         )
-        stats = {s["phone_number"]: s for s in stats_rows}
     else:
         stats_result = await supabase_execute(
             supabase.table("broadcast_recipient_stats")
             .select("id, phone_number, message_id, sent_at")
             .eq("campaign_id", campaign_id)
         )
-        stats = {stat["phone_number"]: stat for stat in (stats_result.data or [])}
+        stats_rows = stats_result.data or []
+
+    stats = {s["phone_number"]: s for s in stats_rows}
     
     if not stats:
         logger.warning(f"⚠️ [BROADCAST-TEMPLATE] Aucune stat trouvée pour la campagne {campaign_id}")
@@ -1508,12 +1510,32 @@ async def _send_broadcast_template(
 
     stats_by_digits = {_digits_only(k): v for k, v in stats.items()}
 
+    # Même contact avec formats différents (ex. "06 …" vs "336…") : clé unique = normalize_phone_number
+    stats_by_normalized: Dict[str, Any] = {}
+    for s in stats_rows:
+        raw = s.get("phone_number") or ""
+        n = normalize_phone_number(raw)
+        if n:
+            stats_by_normalized[n] = s
+
+    def _resolve_recipient_stat(raw_phone: str):
+        """Aligne groupe / stats sur le même format (ex. FR national 06… vs international 33…)."""
+        if stats.get(raw_phone):
+            return stats[raw_phone]
+        d = _digits_only(raw_phone)
+        if d and stats_by_digits.get(d):
+            return stats_by_digits[d]
+        n = normalize_phone_number(raw_phone or "")
+        if n and stats_by_normalized.get(n):
+            return stats_by_normalized[n]
+        return None
+
     sent_count = 0
     failed_count = 0
     
     for recipient in recipients:
         phone_number = recipient["phone_number"]
-        stat = stats.get(phone_number) or stats_by_digits.get(_digits_only(phone_number))
+        stat = _resolve_recipient_stat(phone_number)
         
         if not stat:
             logger.warning(f"⚠️ [BROADCAST-TEMPLATE] Pas de stat trouvée pour {phone_number}")
@@ -1535,10 +1557,12 @@ async def _send_broadcast_template(
             continue
 
         try:
+            # Meta attend le numéro en format international sans + ; aligné sur normalize_phone_number
+            to_whatsapp = normalize_phone_number(phone_number) or phone_number
             response = await whatsapp_api_service.send_template_message(
                 phone_number_id=phone_number_id,
                 access_token=access_token,
-                to=phone_number,
+                to=to_whatsapp,
                 template_name=template_name,
                 language_code="fr",
                 components=None,

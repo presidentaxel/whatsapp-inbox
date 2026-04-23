@@ -11,6 +11,7 @@ from app.core.circuit_breaker import (
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services import admin_service
 from app.services.account_service import expose_accounts_public
+from app.services.message_service import handle_incoming_message
 
 router = APIRouter()
 
@@ -136,6 +137,18 @@ async def clear_cache(current_user: CurrentUser = Depends(get_current_user)):
     cache = await get_cache()
     await cache.clear()
     return {"status": "cleared"}
+
+
+@router.post("/webhook/replay")
+async def replay_whatsapp_webhook(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
+    """
+    Rejoue un corps JSON identique au webhook Meta (POST /webhook/whatsapp).
+    Utile pour réinjecter des événements après un bug de persistance : coller le JSON
+    depuis les logs ou l’outil de test Meta. Les messages existants sont mis à jour (upsert sur wa_message_id).
+    """
+    current_user.require(PermissionCodes.SETTINGS_MANAGE)
+    await handle_incoming_message(payload, propagate_errors=True)
+    return {"status": "ok"}
 
 
 @router.get("/accounts/all")
