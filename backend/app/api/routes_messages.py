@@ -43,6 +43,7 @@ from app.services.message_service import (
 )
 from app.core.cache import get_cache
 from app.services.media_background_service import process_unsaved_media_for_conversation
+from app.services.audio_transcription_service import transcribe_inbound_audio_on_demand_for_message
 from app.services import whatsapp_api_service
 from app.services.whatsapp_api_service import check_phone_number_has_whatsapp
 from app.services.pending_template_service import create_and_queue_template
@@ -1350,7 +1351,7 @@ async def test_storage_for_message(
         raise HTTPException(status_code=400, detail="message_has_no_media_id")
     
     message_type = message.get("message_type", "").lower()
-    if message_type not in ("image", "video", "audio", "document", "sticker"):
+    if message_type not in ("image", "video", "audio", "voice", "document", "sticker"):
         raise HTTPException(status_code=400, detail="message_is_not_a_media_type")
     
     # Importer la fonction depuis message_service
@@ -2384,3 +2385,34 @@ async def unpin_message(
         logger.error(f"❌ [UNPIN] Exception lors de l'envoi de la notification de désépinglage : {e}", exc_info=True)
     
     return {"status": "unpinned", "message_id": message_id}
+
+
+@router.post("/{message_id}/transcribe-audio")
+async def transcribe_message_audio(
+    message_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Transcription manuelle d’un message audio/voice entrant (Gemini).
+    Idempotent : si audio_transcript est déjà renseigné, renvoie la valeur sans rappeler l’API.
+    """
+    message = await get_message_by_id(message_id)
+    if not message:
+        raise HTTPException(status_code=404, detail="message_not_found")
+
+    conversation = await get_conversation_by_id(message["conversation_id"])
+    if not conversation:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+
+    current_user.require(PermissionCodes.MESSAGES_VIEW, conversation["account_id"])
+
+    result = await transcribe_inbound_audio_on_demand_for_message(message)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=int(result.get("status") or 500),
+            detail=str(result.get("detail") or "transcription_failed"),
+        )
+    return {
+        "transcript": result.get("transcript") or "",
+        "cached": bool(result.get("cached")),
+    }

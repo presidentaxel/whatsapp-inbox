@@ -30,6 +30,9 @@ import {
   addRecipientToGroup
 } from "../api/broadcastApi";
 
+/** Délai avant de rafraîchir la ligne de conversation dans la sidebar quand ce chat est ouvert (sync avec le fil realtime des messages). */
+const SIDEBAR_CHAT_SYNC_DEBOUNCE_MS = 220;
+
 // Lazy-loaded heavy panels (code-split to reduce initial bundle)
 const ContactsPanel = lazy(() => import("../components/contacts/ContactsPanel"));
 const AccountMediaGallery = lazy(() => import("../components/gallery/AccountMediaGallery"));
@@ -65,6 +68,22 @@ export default function InboxPage() {
   const [showGroupEditor, setShowGroupEditor] = useState(false);
   const [editingGroup, setEditingGroup] = useState(null);
   const canViewContacts = hasPermission?.("contacts.view");
+
+  const selectedConversationIdRef = useRef(null);
+  const conversationRealtimeDebounceTimerRef = useRef(null);
+  const inboundDeltaDebounceTimerRef = useRef(null);
+
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversation?.id ?? null;
+  }, [selectedConversation?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (inboundDeltaDebounceTimerRef.current) {
+        clearTimeout(inboundDeltaDebounceTimerRef.current);
+      }
+    };
+  }, []);
   
   const loadAccounts = useCallback(async () => {
     try {
@@ -264,9 +283,26 @@ export default function InboxPage() {
     };
   }, [refreshConversations, optimisticallyMarkRead]);
 
-  const onInboundMessage = useCallback(() => {
-    refreshConversations(activeAccount, { delta: true });
-  }, [activeAccount, refreshConversations]);
+  const onInboundMessage = useCallback(
+    (newMessage) => {
+      if (!activeAccount) return;
+      const convId = newMessage?.conversation_id;
+      const isOpenChat = convId && convId === selectedConversationIdRef.current;
+      const run = () => refreshConversations(activeAccount, { delta: true });
+      if (!isOpenChat) {
+        run();
+        return;
+      }
+      if (inboundDeltaDebounceTimerRef.current) {
+        clearTimeout(inboundDeltaDebounceTimerRef.current);
+      }
+      inboundDeltaDebounceTimerRef.current = setTimeout(() => {
+        inboundDeltaDebounceTimerRef.current = null;
+        run();
+      }, SIDEBAR_CHAT_SYNC_DEBOUNCE_MS);
+    },
+    [activeAccount, refreshConversations]
+  );
 
   useGlobalNotifications(selectedConversation?.id, onInboundMessage);
 
@@ -292,16 +328,30 @@ export default function InboxPage() {
             );
             return;
           }
-          setConversations((prev) => {
-            const idx = prev.findIndex((c) => c.id === updated.id);
-            if (idx === -1) return prev;
-            const next = [...prev];
-            next[idx] = { ...next[idx], ...updated };
-            return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
-          });
-          setSelectedConversation((prev) =>
-            prev?.id === updated.id ? { ...prev, ...updated } : prev
-          );
+          const applyConversationUpdate = () => {
+            setConversations((prev) => {
+              const idx = prev.findIndex((c) => c.id === updated.id);
+              if (idx === -1) return prev;
+              const next = [...prev];
+              next[idx] = { ...next[idx], ...updated };
+              return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
+            });
+            setSelectedConversation((prev) =>
+              prev?.id === updated.id ? { ...prev, ...updated } : prev
+            );
+          };
+          const isOpenChat = selectedConversationIdRef.current === updated.id;
+          if (!isOpenChat) {
+            applyConversationUpdate();
+            return;
+          }
+          if (conversationRealtimeDebounceTimerRef.current) {
+            clearTimeout(conversationRealtimeDebounceTimerRef.current);
+          }
+          conversationRealtimeDebounceTimerRef.current = setTimeout(() => {
+            conversationRealtimeDebounceTimerRef.current = null;
+            applyConversationUpdate();
+          }, SIDEBAR_CHAT_SYNC_DEBOUNCE_MS);
         }
       )
       .on(
@@ -325,6 +375,10 @@ export default function InboxPage() {
       )
       .subscribe();
     return () => {
+      if (conversationRealtimeDebounceTimerRef.current) {
+        clearTimeout(conversationRealtimeDebounceTimerRef.current);
+        conversationRealtimeDebounceTimerRef.current = null;
+      }
       supabaseClient.removeChannel(channel);
     };
   }, [activeAccount]);

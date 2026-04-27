@@ -1,0 +1,194 @@
+.chat-audio-player {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  overflow: visible;
+}
+
+.bubble.me .chat-audio-player {
+  background: rgba(0, 0, 0, 0.18);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="light"] .chat-audio-player {
+  background: rgba(0, 0, 0, 0.06);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .bubble.me .chat-audio-player {
+  background: rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.06);
+}
+
+.chat-audio-player__play {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  width: 42px;
+  height: 42px;
+  border: none;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: #25d366;
+  color: #0b141a;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.chat-audio-player__play:hover {
+  filter: brightness(1.08);
+  transform: scale(1.04);
+}
+
+.chat-audio-player__play:focus-visible {
+  outline: 2px solid rgba(37, 211, 102, 0.8);
+  outline-offset: 2px;
+}
+
+.chat-audio-player__play svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Icône play légèrement décalée pour centrage visuel */
+.chat-audio-player__play .chat-audio-player__icon-play {
+  margin-left: 2px;
+}
+
+.chat-audio-player__main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-audio-player__wave {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2px;
+  height: 28px;
+  padding: 0 2px;
+  opacity: 0.85;
+}
+
+.chat-audio-player__wave-bar {
+  flex: 1;
+  min-width: 2px;
+  max-width: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.45);
+  transform-origin: center bottom;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+[data-theme="light"] .chat-audio-player__wave-bar {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.chat-audio-player--playing .chat-audio-player__wave-bar {
+  background: rgba(37, 211, 102, 0.85);
+  animation: chat-audio-wave-pulse 0.85s ease-in-out infinite;
+}
+
+[data-theme="light"] .chat-audio-player--playing .chat-audio-player__wave-bar {
+  background: rgba(13, 110, 63, 0.75);
+}
+
+.chat-audio-player__wave-bar:nth-child(3n) {
+  animation-delay: 0.05s;
+}
+.chat-audio-player__wave-bar:nth-child(3n + 1) {
+  animation-delay: 0.12s;
+}
+.chat-audio-player__wave-bar:nth-child(3n + 2) {
+  animation-delay: 0.2s;
+}
+
+@keyframes chat-audio-wave-pulse {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.chat-audio-player__track {
+  position: relative;
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+}
+
+[data-theme="light"] .chat-audio-player__track {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.chat-audio-player__track-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: #25d366;
+  pointer-events: none;
+  max-width: 100%;
+}
+
+.chat-audio-player__track:focus-visible {
+  outline: 2px solid rgba(37, 211, 102, 0.6);
+  outline-offset: 2px;
+}
+
+.chat-audio-player__times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+[data-theme="light"] .chat-audio-player__times {
+  color: rgba(0, 0, 0, 0.55);
+}
+
+/*
+ * Rester dans la boîte du lecteur (pas fixed hors écran) : WebKit associe mieux la sortie audio au document.
+ * Très discret mais surface de rendu non nulle.
+ */
+.chat-audio-player__native {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  width: 56px;
+  height: 44px;
+  opacity: 0.02;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.chat-audio-player__error {
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #ffb4b4;
+  margin-top: 2px;
+}
+
+[data-theme="light"] .chat-audio-player__error {
+  color: #b91c1c;
+}

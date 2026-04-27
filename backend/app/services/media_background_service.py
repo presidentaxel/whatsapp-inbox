@@ -55,7 +55,7 @@ async def process_unsaved_media_for_conversation(conversation_id: str, limit: in
             supabase.table("messages")
             .select("id, message_type, media_id, conversation_id, media_mime_type, media_filename, timestamp")
             .eq("conversation_id", conversation_id)
-            .in_("message_type", ["image", "video", "audio", "document", "sticker"])
+            .in_("message_type", ["image", "video", "audio", "voice", "document", "sticker"])
             .is_("storage_url", "null")
             .not_.is_("media_id", "null")
             .gte("timestamp", max_age_iso)  # Seulement les messages récents
@@ -197,7 +197,7 @@ async def process_unsaved_media_messages(limit: int = MAX_MESSAGES_PER_CYCLE) ->
         query = (
             supabase.table("messages")
             .select("id, message_type, media_id, conversation_id, media_mime_type, media_filename, timestamp")
-            .in_("message_type", ["image", "video", "audio", "document", "sticker"])
+            .in_("message_type", ["image", "video", "audio", "voice", "document", "sticker"])
             .is_("storage_url", "null")
             .not_.is_("media_id", "null")
             .gte("timestamp", max_age_iso)  # Seulement les messages récents

@@ -108,7 +108,7 @@ async def check_messages_with_media():
         query = (
             supabase.table("messages")
             .select("id, message_type, media_id, storage_url, timestamp, direction")
-            .in_("message_type", ["image", "video", "audio", "document", "sticker"])
+            .in_("message_type", ["image", "video", "audio", "voice", "document", "sticker"])
             .order("timestamp", desc=True)
             .limit(10)
         )

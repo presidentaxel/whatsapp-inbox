@@ -61,6 +61,12 @@ export default function ChatWindow({
     return [...items].sort((a, b) => msgTs(a) - msgTs(b));
   }, []);
 
+  const handleAudioTranscript = useCallback((messageId, text) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, audio_transcript: text } : m))
+    );
+  }, []);
+
   const conversationId = conversation?.id;
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
@@ -1112,6 +1118,7 @@ export default function ChatWindow({
                   onPin={handlePin}
                   onUnpin={handleUnpin}
                   onDelete={handleDelete}
+                  onAudioTranscript={handleAudioTranscript}
                 />
               </div>
             ))}

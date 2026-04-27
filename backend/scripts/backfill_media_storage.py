@@ -27,7 +27,7 @@ async def backfill_media_storage(limit: int = 50):
     query = (
         supabase.table("messages")
         .select("id, message_type, media_id, conversation_id, media_mime_type, media_filename")
-        .in_("message_type", ["image", "video", "audio", "document", "sticker"])
+        .in_("message_type", ["image", "video", "audio", "voice", "document", "sticker"])
         .is_("storage_url", "null")
         .not_.is_("media_id", "null")
         .order("timestamp", desc=True)

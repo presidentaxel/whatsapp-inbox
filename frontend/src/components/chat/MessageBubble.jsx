@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, memo } from "react";
-import { formatRelativeDateTime } from "../../utils/date";
+import { createPortal } from "react-dom";
+import { formatRelativeDateTime, parseDateAsUTC } from "../../utils/date";
 import {
   FiHeadphones,
   FiImage,
@@ -16,14 +17,49 @@ import {
   FiCornerUpLeft,
   FiCopy,
   FiTrash2,
+  FiX,
+  FiAlertCircle,
+  FiMic,
 } from "react-icons/fi";
 import { MdPushPin } from "react-icons/md";
 import { api } from "../../api/axiosClient";
+import { transcribeMessageAudio } from "../../api/messagesApi";
 import MessageReactions from "./MessageReactions";
 import MessageStatus from "./MessageStatus";
 import PDFThumbnail from "../gallery/PDFThumbnail";
+import ChatAudioPlayer from "./ChatAudioPlayer";
+import "./MediaGallery.css";
 
 const FETCHABLE_MEDIA = new Set(["audio", "voice", "image", "video", "document", "sticker"]);
+
+const MEDIA_PLACEHOLDERS = new Set([
+  "[image]",
+  "[sticker]",
+  "[audio]",
+  "[video]",
+  "[document]",
+  "[voice]",
+]);
+
+function lightboxCaptionFromMessage(message) {
+  const ct = (message?.content_text || "").trim();
+  if (!ct || MEDIA_PLACEHOLDERS.has(ct)) return null;
+  return ct;
+}
+
+const TRANSCRIBE_ERROR_FR = {
+  media_not_available: "Média non disponible ou pas encore téléchargé.",
+  transcription_inbound_only: "La transcription ne s’applique qu’aux messages reçus.",
+  not_audio_message: "Ce message n’est pas un audio.",
+  audio_file_too_large: "Fichier audio trop volumineux.",
+  media_expired_or_invalid: "Le média WhatsApp a expiré ou n’est plus disponible.",
+  media_not_found: "Média introuvable.",
+  gemini_not_configured: "Transcription indisponible (clé Gemini manquante).",
+  audio_transcription_disabled: "La transcription est désactivée.",
+  transcription_failed: "La transcription a échoué. Réessaie plus tard.",
+  transcription_save_failed: "Erreur d’enregistrement de la transcription.",
+  media_fetch_failed: "Impossible de récupérer le fichier audio.",
+};
 
 const _mediaBlobCache = new Map();
 const MEDIA_CACHE_MAX = 200;
@@ -138,12 +174,24 @@ const TYPE_MAP = {
   contacts: { icon: <FiMessageSquare />, label: "Carte de contact" },
   interactive: { icon: <FiMessageSquare />, label: "Réponse interactive" },
   call: { icon: <FiPhone />, label: "Appel WhatsApp" },
+  unsupported: { icon: <FiAlertCircle />, label: "Format non pris en charge" },
 };
 
-function MediaRenderer({ message, messageType, onLoadingChange }) {
+function MediaRenderer({ message, messageType, onLoadingChange, onAudioTranscript }) {
   const [source, setSource] = useState(message._localPreview || message.storage_url || null);
   const [loading, setLoading] = useState(!message._localPreview && !message.storage_url);
   const [error, setError] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [localTranscript, setLocalTranscript] = useState(() =>
+    (message.audio_transcript || "").trim()
+  );
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribeError, setTranscribeError] = useState(null);
+
+  useEffect(() => {
+    setLocalTranscript((message.audio_transcript || "").trim());
+    setTranscribeError(null);
+  }, [message.id, message.audio_transcript]);
 
   useEffect(() => {
     // Si on a un aperçu local, l'utiliser directement
@@ -192,7 +240,23 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
       .get(`/messages/media/${message.id}`, { responseType: "blob" })
       .then((res) => {
         if (cancelled) return;
-        const objectUrl = URL.createObjectURL(res.data);
+        const headerType = res.headers?.["content-type"];
+        const mimeFromHeader = headerType ? headerType.split(";")[0].trim() : "";
+        const fallbackMime =
+          message.media_mime_type ||
+          (messageType === "audio" || messageType === "voice"
+            ? "audio/ogg"
+            : "application/octet-stream");
+        let blob = res.data;
+        if (!(blob instanceof Blob)) {
+          blob = new Blob([blob], { type: mimeFromHeader || fallbackMime });
+        } else if (!blob.type) {
+          blob = new Blob([blob], { type: mimeFromHeader || fallbackMime });
+        }
+        if (blob.size === 0) {
+          throw new Error("empty_media_blob");
+        }
+        const objectUrl = URL.createObjectURL(blob);
         setCachedBlobUrl(message.id, objectUrl);
         setSource(objectUrl);
         setError(false);
@@ -216,8 +280,97 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
     };
   }, [message.id, message.media_id, messageType, message._localPreview, message.storage_url]);
 
+  useEffect(() => {
+    if (!lightboxOpen) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") setLightboxOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [lightboxOpen]);
+
   if (loading) {
     return <span className="media-loading">Chargement…</span>;
+  }
+
+  if (messageType === "audio" || messageType === "voice") {
+    const playerOk = !!(source && !error);
+    const directionIn = (message.direction || "").toLowerCase() === "inbound";
+    const canRequestTranscript =
+      directionIn && !!(message.storage_url || message.media_id);
+    const showTranscribeBtn = canRequestTranscript && !localTranscript;
+
+    const runTranscribe = async (e) => {
+      e.stopPropagation();
+      if (!canRequestTranscript || transcribing) return;
+      setTranscribing(true);
+      setTranscribeError(null);
+      try {
+        const { data } = await transcribeMessageAudio(message.id);
+        const t = (data?.transcript || "").trim();
+        setLocalTranscript(t);
+        onAudioTranscript?.(message.id, t);
+      } catch (err) {
+        const d = err.response?.data?.detail;
+        let msg = "Échec de la transcription";
+        if (typeof d === "string") {
+          msg = TRANSCRIBE_ERROR_FR[d] || d;
+        } else if (Array.isArray(d) && d[0]?.msg) {
+          msg = d[0].msg;
+        }
+        setTranscribeError(msg);
+      } finally {
+        setTranscribing(false);
+      }
+    };
+
+    const showFooter =
+      showTranscribeBtn || transcribing || !!transcribeError || !!localTranscript;
+
+    return (
+      <div
+        className="bubble-media__audio-card"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="bubble-media__audio-card-main">
+          {playerOk ? (
+            <ChatAudioPlayer src={source} mimeType={message.media_mime_type} />
+          ) : (
+            <span className="bubble-media__audio-card-error">
+              {message.content_text || "Média non disponible"}
+            </span>
+          )}
+        </div>
+        {showFooter ? (
+          <div className="bubble-media__audio-card-footer">
+            {showTranscribeBtn || transcribing ? (
+              <button
+                type="button"
+                className="bubble-media__transcribe-btn"
+                disabled={transcribing || !canRequestTranscript}
+                onClick={runTranscribe}
+              >
+                <FiMic className="bubble-media__transcribe-btn-icon" aria-hidden />
+                {transcribing ? "Transcription en cours…" : "Transcrire le message"}
+              </button>
+            ) : null}
+            {transcribeError ? (
+              <p className="bubble-media__transcribe-error" role="alert">
+                {transcribeError}
+              </p>
+            ) : null}
+            {localTranscript ? (
+              <div className="bubble-media__transcript-block">
+                <span className="bubble-media__transcript-label">Transcription</span>
+                <p className="bubble-media__transcript-text" dir="auto">
+                  {localTranscript}
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   if (!source || error) {
@@ -225,15 +378,58 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
   }
 
   if (messageType === "image" || messageType === "sticker") {
-    return <img src={source} alt="" className="bubble-media__image" />;
+    const caption = lightboxCaptionFromMessage(message);
+    return (
+      <>
+        <img
+          src={source}
+          alt=""
+          className="bubble-media__image bubble-media__image--clickable"
+          role="button"
+          tabIndex={0}
+          aria-label="Agrandir l’image"
+          onClick={(e) => {
+            e.stopPropagation();
+            setLightboxOpen(true);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              setLightboxOpen(true);
+            }
+          }}
+        />
+        {lightboxOpen &&
+          createPortal(
+            <div
+              className="media-gallery__modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Aperçu image"
+              onClick={() => setLightboxOpen(false)}
+            >
+              <div className="media-gallery__modal-content" onClick={(e) => e.stopPropagation()}>
+                <button
+                  type="button"
+                  className="media-gallery__modal-close"
+                  onClick={() => setLightboxOpen(false)}
+                  aria-label="Fermer"
+                >
+                  <FiX />
+                </button>
+                <img src={source} alt="" className="media-gallery__modal-image" />
+                {caption ? <div className="media-gallery__modal-caption">{caption}</div> : null}
+              </div>
+            </div>,
+            document.body
+          )}
+      </>
+    );
   }
 
   if (messageType === "video") {
     return <video src={source} controls className="bubble-media__video" />;
-  }
-
-  if (messageType === "audio" || messageType === "voice") {
-    return <audio src={source} controls className="bubble-media__audio" />;
   }
 
   if (messageType === "document") {
@@ -286,7 +482,7 @@ function MediaRenderer({ message, messageType, onLoadingChange }) {
   return <span>{message.content_text}</span>;
 }
 
-function RichMediaBubble({ message, messageType }) {
+function RichMediaBubble({ message, messageType, onAudioTranscript }) {
   // Si on a déjà storage_url ou _localPreview, ne pas afficher l'icône
   const hasSource = !!(message.storage_url || message._localPreview);
   const [showIcon, setShowIcon] = useState(!hasSource);
@@ -297,7 +493,9 @@ function RichMediaBubble({ message, messageType }) {
     (message.content_text.trim() === '[image]' || 
      message.content_text.trim() === '[audio]' ||
      message.content_text.trim() === '[video]' ||
-     message.content_text.trim() === '[document]');
+     message.content_text.trim() === '[document]' ||
+     message.content_text.trim() === '[voice]' ||
+     message.content_text.trim() === '[sticker]');
   
   const caption = isPlaceholder ? null : message.content_text;
   
@@ -329,8 +527,14 @@ function RichMediaBubble({ message, messageType }) {
   }
 
   const handleLoadingChange = (loading, error) => {
-    // Cacher l'icône si l'image/vidéo est chargée sans erreur
-    if (messageType === 'image' || messageType === 'video' || messageType === 'sticker') {
+    // Cacher l'icône si le média est chargé sans erreur
+    if (
+      messageType === "image" ||
+      messageType === "video" ||
+      messageType === "sticker" ||
+      messageType === "audio" ||
+      messageType === "voice"
+    ) {
       setShowIcon(loading || error);
     }
   };
@@ -346,6 +550,7 @@ function RichMediaBubble({ message, messageType }) {
             message={message} 
             messageType={messageType}
             onLoadingChange={handleLoadingChange}
+            onAudioTranscript={onAudioTranscript}
           />
           {caption && (
             <p className="bubble-media__caption" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'break-word' }}>
@@ -460,7 +665,7 @@ function InteractiveBubble({ message }) {
   );
 }
 
-function renderBody(message) {
+function renderBody(message, { onAudioTranscript } = {}) {
   const messageType = (message.message_type || "text").toLowerCase();
   const typeEntry = TYPE_MAP[messageType];
 
@@ -475,7 +680,7 @@ function renderBody(message) {
   if ((isMediaType || isTemplateWithImage) && hasMedia) {
     // Utiliser "image" comme type pour l'affichage si c'est un template avec image
     const displayType = isTemplateWithImage ? "image" : messageType;
-    const result = RichMediaBubble({ message, messageType: displayType });
+    const result = RichMediaBubble({ message, messageType: displayType, onAudioTranscript });
     return result;
   }
 
@@ -565,7 +770,9 @@ function renderBody(message) {
 
   return {
     content: (
-      <div className="bubble-media">
+      <div
+        className={`bubble-media${messageType === "unsupported" ? " bubble-media--unsupported" : ""}`}
+      >
         <div className="bubble-media__icon">{typeEntry.icon}</div>
         <div className="bubble-media__content">
           <strong>{typeEntry.label}</strong>
@@ -577,9 +784,22 @@ function renderBody(message) {
   };
 }
 
-function MessageBubbleInner({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend, onReply, onCopy, onPin, onUnpin, onDelete, onOpenMenu }) {
+function MessageBubbleInner({ message, conversation, onReactionChange, onContextMenu, forceReactionOpen = false, onResend, onReply, onCopy, onPin, onUnpin, onDelete, onOpenMenu, onAudioTranscript }) {
   const mine = message.direction === "outbound";
   const timestamp = message.timestamp ? formatRelativeDateTime(message.timestamp) : "";
+  const timestampDetail = (() => {
+    const d = message.timestamp ? parseDateAsUTC(message.timestamp) : null;
+    if (!d) return undefined;
+    return d.toLocaleString("fr-FR", {
+      timeZone: "Europe/Paris",
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  })();
 
   const messageType = (message.message_type || "text").toLowerCase();
   const hasMedia = message.media_id || message.storage_url;
@@ -597,7 +817,7 @@ function MessageBubbleInner({ message, conversation, onReactionChange, onContext
   const menuRef = useRef(null);
   const menuIconRef = useRef(null);
 
-  const bodyResult = renderBody(message);
+  const bodyResult = renderBody(message, { onAudioTranscript });
   const bodyContent = bodyResult?.content || bodyResult;
   const buttons = bodyResult?.buttons || null;
 
@@ -993,7 +1213,7 @@ function MessageBubbleInner({ message, conversation, onReactionChange, onContext
         )}
         <div className="bubble__footer">
           <div className="bubble__footer-left">
-            <small className="bubble__timestamp">
+            <small className="bubble__timestamp" title={timestampDetail}>
               {timestamp}
               {isEdited && !isDeletedForAll ? " · modifié" : ""}
             </small>
@@ -1027,6 +1247,7 @@ const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
     prev.message.id === next.message.id &&
     prev.message.status === next.message.status &&
     prev.message.content_text === next.message.content_text &&
+    prev.message.audio_transcript === next.message.audio_transcript &&
     prev.message.storage_url === next.message.storage_url &&
     prev.message.is_pinned === next.message.is_pinned &&
     prev.message.reactions === next.message.reactions &&
@@ -1035,7 +1256,8 @@ const MessageBubble = memo(MessageBubbleInner, (prev, next) => {
     JSON.stringify(prev.message.outbound_meta ?? null) ===
       JSON.stringify(next.message.outbound_meta ?? null) &&
     prev.forceReactionOpen === next.forceReactionOpen &&
-    prev.conversation?.id === next.conversation?.id
+    prev.conversation?.id === next.conversation?.id &&
+    prev.onAudioTranscript === next.onAudioTranscript
   );
 });
 

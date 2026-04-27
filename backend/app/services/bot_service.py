@@ -31,12 +31,22 @@ logger.setLevel(logging.INFO)
 _BOT_CONFIDENCE_MIN_THRESHOLD = 0.72
 
 
+def _ai_history_line_content(row: Dict[str, Any]) -> str:
+    """Texte vu par l’IA : transcription pour audio/voice si disponible, sinon content_text."""
+    base = (row.get("content_text") or "").strip()
+    mt = (row.get("message_type") or "").lower()
+    tr = (row.get("audio_transcript") or "").strip()
+    if mt in ("audio", "voice") and tr:
+        return tr
+    return base
+
+
 async def fetch_message_history_rows_for_ai(conversation_id: str) -> List[Dict[str, Any]]:
     """Derniers messages de la conversation (ordre chronologique), pour Gemini."""
     lim = max(1, int(getattr(settings, "GEMINI_CONVERSATION_HISTORY_LIMIT", 200) or 200))
     res = await supabase_execute(
         supabase.table("messages")
-        .select("direction, content_text")
+        .select("direction, content_text, message_type, audio_transcript")
         .eq("conversation_id", conversation_id)
         .order("timestamp", desc=True)
         .limit(lim)
@@ -56,7 +66,7 @@ async def conversation_transcript_for_flow_variables(conversation_id: str) -> st
     rows = await fetch_message_history_rows_for_ai(conversation_id)
     lines: List[str] = []
     for row in rows:
-        content = (row.get("content_text") or "").strip()
+        content = _ai_history_line_content(row)
         if not content:
             continue
         role = "Client" if row.get("direction") == "inbound" else "Entreprise"
@@ -342,13 +352,16 @@ async def generate_bot_reply_with_confidence(
 
     conversation_parts: List[Dict[str, Any]] = []
     for row in history_rows:
-        content = (row.get("content_text") or "").strip()
+        content = _ai_history_line_content(row)
         if not content:
             continue
         role = "user" if row.get("direction") == "inbound" else "model"
         conversation_parts.append({"role": role, "parts": [{"text": content}]})
 
-    if not conversation_parts or conversation_parts[-1]["role"] != "user":
+    # Dernier tour utilisateur = message courant (ex. transcription d’un vocal, pas le placeholder [voice])
+    if conversation_parts and conversation_parts[-1]["role"] == "user":
+        conversation_parts[-1] = {"role": "user", "parts": [{"text": latest_user_message}]}
+    else:
         conversation_parts.append({"role": "user", "parts": [{"text": latest_user_message}]})
 
     logger.debug(
@@ -379,7 +392,9 @@ async def generate_bot_reply_with_confidence(
         "- N'invente jamais de prix, délais, disponibilités ou conditions absents des sources.\n"
         "\n"
         "Contenus non textuels :\n"
-        "- Si l'utilisateur envoie une image, une vidéo, un audio ou tout contenu non textuel, tu réponds : "
+        "- Les messages vocaux sont transcrits automatiquement : le texte que tu reçois pour un vocal est "
+        "la transcription ; réponds normalement à ce contenu.\n"
+        "- Si l'utilisateur envoie une image ou une vidéo (sans texte utile), tu réponds : "
         "\"Je ne peux pas lire ce type de contenu, pouvez-vous me l'écrire ?\".\n"
         "\n"
         "Contraintes métier :\n"
@@ -914,7 +929,7 @@ async def generate_flow_gemini_text_reply(
     try:
         history_rows = await fetch_message_history_rows_for_ai(conversation_id)
         for row in history_rows:
-            content = (row.get("content_text") or "").strip()
+            content = _ai_history_line_content(row)
             if not content:
                 continue
             role = "user" if row.get("direction") == "inbound" else "model"
@@ -922,8 +937,11 @@ async def generate_flow_gemini_text_reply(
     except Exception as hist_exc:
         logger.warning("Flow Gemini text: could not load history: %s", hist_exc)
 
-    if not conversation_parts or conversation_parts[-1]["role"] != "user":
-        conversation_parts.append({"role": "user", "parts": [{"text": user_text or "Rédige la réponse demandée."}]})
+    ut = user_text or "Rédige la réponse demandée."
+    if conversation_parts and conversation_parts[-1]["role"] == "user":
+        conversation_parts[-1] = {"role": "user", "parts": [{"text": ut}]}
+    else:
+        conversation_parts.append({"role": "user", "parts": [{"text": ut}]})
 
     payload_v1beta = {
         "system_instruction": {

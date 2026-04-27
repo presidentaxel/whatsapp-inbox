@@ -318,7 +318,11 @@ export default function MobileConversationsList({
                           return <><FiMapPin /> Localisation</>;
                         } else if (lastMessage === "[contact]") {
                           return <><FiUser /> Contact</>;
-                        } else if (lastMessage === "[interactive]") {
+                        } else if (
+                          lastMessage === "[interactive]" ||
+                          lastMessage === "Message interactif (boutons ou liste)" ||
+                          lastMessage.startsWith("Message interactif")
+                        ) {
                           return <><FiZap /> Message interactif</>;
                         }
                         return lastMessage;

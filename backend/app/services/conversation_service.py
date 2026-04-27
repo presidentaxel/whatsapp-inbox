@@ -20,6 +20,11 @@ def _format_last_message(last_message_type: Optional[str], last_content_text: Op
     """Formate le dernier message pour l'affichage liste."""
     if not last_message_type:
         return ""
+    mt = (last_message_type or "").lower()
+    ct = (last_content_text or "").strip()
+    # Accusés WhatsApp (webhook statut sans message réel encore en base) — ne pas afficher comme dernier message
+    if mt == "status" or ct == "[status update]":
+        return ""
     if last_message_type == "text":
         content = (last_content_text or "")[:60]
         return content + "..." if len(last_content_text or "") > 60 else content
@@ -29,6 +34,8 @@ def _format_last_message(last_message_type: Optional[str], last_content_text: Op
         return "[video]"
     if last_message_type == "audio":
         return "[audio]"
+    if last_message_type == "voice":
+        return "[vocal]"
     if last_message_type == "document":
         return "[document]"
     if last_message_type == "location":
@@ -36,7 +43,9 @@ def _format_last_message(last_message_type: Optional[str], last_content_text: Op
     if last_message_type == "contacts":
         return "[contact]"
     if last_message_type == "interactive":
-        return "[interactive]"
+        return "Message interactif (boutons ou liste)"
+    if last_message_type == "unsupported":
+        return "[non supporté]"
     content = (last_content_text or "")[:60]
     return content + "..." if len(last_content_text or "") > 60 else content
 
@@ -70,7 +79,11 @@ async def get_all_conversations(
             LEFT JOIN LATERAL (
                 SELECT m.content_text, m.message_type
                 FROM messages m
-                WHERE m.conversation_id = c.id AND m.message_type != 'reaction'
+                WHERE m.conversation_id = c.id
+                  AND m.message_type IS DISTINCT FROM 'reaction'
+                  AND m.message_type IS DISTINCT FROM 'status'
+                  AND (m.is_system IS NOT TRUE)
+                  AND COALESCE(m.content_text, '') <> '[status update]'
                 ORDER BY m.timestamp DESC
                 LIMIT 1
             ) lm ON true
@@ -143,7 +156,7 @@ async def get_all_conversations(
         chunk = conversation_ids[i : i + SUPABASE_IN_CLAUSE_CHUNK_SIZE]
         messages_query = (
             supabase.table("messages")
-            .select("conversation_id, content_text, message_type, timestamp")
+            .select("conversation_id, content_text, message_type, timestamp, is_system")
             .in_("conversation_id", chunk)
             .neq("message_type", "reaction")
             .order("timestamp", desc=True)
@@ -153,13 +166,26 @@ async def get_all_conversations(
         chunk_data = messages_res.data if messages_res.data else []
         all_messages.extend(chunk_data)
     
+    def _skip_conversation_preview_row(msg: dict) -> bool:
+        mt = (msg.get("message_type") or "").lower()
+        if mt in ("reaction", "status"):
+            return True
+        if msg.get("is_system") is True:
+            return True
+        if (msg.get("content_text") or "").strip() == "[status update]":
+            return True
+        return False
+
     last_messages_map = {}
     seen_conversations = set()
     for msg in all_messages:
         conv_id = msg["conversation_id"]
-        if conv_id not in seen_conversations:
-            last_messages_map[conv_id] = msg
-            seen_conversations.add(conv_id)
+        if conv_id in seen_conversations:
+            continue
+        if _skip_conversation_preview_row(msg):
+            continue
+        last_messages_map[conv_id] = msg
+        seen_conversations.add(conv_id)
     
     for conv in conversations:
         last_msg = last_messages_map.get(conv["id"])

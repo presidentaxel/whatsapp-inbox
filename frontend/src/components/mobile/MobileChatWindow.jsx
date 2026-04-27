@@ -70,6 +70,12 @@ export default function MobileChatWindow({
     return [...items].sort((a, b) => mobileTs(a) - mobileTs(b));
   }, []);
 
+  const handleAudioTranscript = useCallback((messageId, text) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, audio_transcript: text } : m))
+    );
+  }, []);
+
   const MESSAGES_PAGE_SIZE = 50;
 
   const refreshMessages = useCallback(() => {
@@ -664,14 +670,21 @@ export default function MobileChatWindow({
                 {filteredMessages.length} résultat{filteredMessages.length > 1 ? 's' : ''} trouvé{filteredMessages.length > 1 ? 's' : ''}
               </div>
               {filteredMessages.map((msg) => {
-                if (!mediaVisibility && msg.message_type && ['image', 'video', 'document', 'audio'].includes(msg.message_type)) {
+                if (!mediaVisibility && msg.message_type && ['image', 'video', 'document', 'audio', 'voice'].includes(msg.message_type)) {
                   return (
                     <div key={msg.id} style={{ padding: '0.5rem 1rem', color: '#8696a0', fontStyle: 'italic', fontSize: '0.875rem' }}>
                       [Média masqué - Activez l'aperçu dans les paramètres]
                     </div>
                   );
                 }
-                return <MessageBubble key={msg.id} message={msg} conversation={conversation} />;
+                return (
+                  <MessageBubble
+                    key={msg.id}
+                    message={msg}
+                    conversation={conversation}
+                    onAudioTranscript={handleAudioTranscript}
+                  />
+                );
               })}
             </>
           )
@@ -688,14 +701,21 @@ export default function MobileChatWindow({
           )}
           {messages.map((msg) => {
           // Masquer les médias si mediaVisibility est false
-          if (!mediaVisibility && msg.message_type && ['image', 'video', 'document', 'audio'].includes(msg.message_type)) {
+          if (!mediaVisibility && msg.message_type && ['image', 'video', 'document', 'audio', 'voice'].includes(msg.message_type)) {
             return (
               <div key={msg.id} style={{ padding: '0.5rem 1rem', color: '#8696a0', fontStyle: 'italic', fontSize: '0.875rem' }}>
                 [Média masqué - Activez l'aperçu dans les paramètres]
               </div>
             );
           }
-          return <MessageBubble key={msg.id} message={msg} conversation={conversation} />;
+          return (
+            <MessageBubble
+              key={msg.id}
+              message={msg}
+              conversation={conversation}
+              onAudioTranscript={handleAudioTranscript}
+            />
+          );
           })}
           </>
         )}
@@ -777,7 +797,7 @@ export default function MobileChatWindow({
           <div className="mobile-chat__media-content">
             {(() => {
               const mediaMessages = messages.filter(msg => 
-                ['image', 'video', 'document', 'audio'].includes(msg.message_type) || 
+                ['image', 'video', 'document', 'audio', 'voice'].includes(msg.message_type) || 
                 (msg.content_text && msg.content_text.match(/https?:\/\//))
               );
               
@@ -794,13 +814,13 @@ export default function MobileChatWindow({
                 <div className="mobile-chat__media-grid">
                   {mediaMessages.map(msg => (
                     <div key={msg.id} className="mobile-chat__media-item">
-                      {msg.message_type && ['image', 'video', 'document', 'audio'].includes(msg.message_type) ? (
+                      {msg.message_type && ['image', 'video', 'document', 'audio', 'voice'].includes(msg.message_type) ? (
                         <div className="mobile-chat__media-item-content">
                           <div className="mobile-chat__media-item-icon">
                             {msg.message_type === 'image' && <FiImage />}
                             {msg.message_type === 'video' && <FiVideo />}
                             {msg.message_type === 'document' && <FiFileText />}
-                            {msg.message_type === 'audio' && <FiHeadphones />}
+                            {(msg.message_type === 'audio' || msg.message_type === 'voice') && <FiHeadphones />}
                           </div>
                           <div className="mobile-chat__media-item-info">
                             <div className="mobile-chat__media-item-type">{msg.message_type}</div>

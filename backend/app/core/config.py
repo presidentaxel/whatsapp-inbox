@@ -18,6 +18,24 @@ for candidate in dotenv_candidates:
 if not loaded_any:
     load_dotenv()
 
+
+def _normalize_gemini_model_id(model: str) -> str:
+    """
+    Remplace les IDs retirés pour les nouveaux comptes / projets (API Generative Language).
+    Voir https://ai.google.dev/gemini-api/docs/deprecations
+    """
+    m = (model or "").strip()
+    if not m:
+        return m
+    legacy = {
+        "gemini-2.0-flash": "gemini-2.5-flash",
+        "gemini-2.0-flash-001": "gemini-2.5-flash",
+        "gemini-2.0-flash-lite": "gemini-2.5-flash-lite",
+        "gemini-2.0-flash-lite-001": "gemini-2.5-flash-lite",
+    }
+    return legacy.get(m.lower(), m)
+
+
 class Settings:
     # Supabase
     SUPABASE_URL: str | None = os.getenv("SUPABASE_URL")
@@ -41,7 +59,18 @@ class Settings:
     
     # Gemini Bot
     GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    GEMINI_MODEL: str = _normalize_gemini_model_id(os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
+    # Transcription audio : ex. gemini-2.5-flash ou gemini-2.5-flash-lite (gemini-2.0-flash est mappé automatiquement).
+    # Vide = même modèle que GEMINI_MODEL.
+    GEMINI_TRANSCRIPTION_MODEL: str = _normalize_gemini_model_id(
+        (os.getenv("GEMINI_TRANSCRIPTION_MODEL") or "").strip()
+    )
+    GEMINI_AUDIO_TRANSCRIPTION_ENABLED: bool = (
+        os.getenv("GEMINI_AUDIO_TRANSCRIPTION_ENABLED", "true").lower() == "true"
+    )
+    GEMINI_AUDIO_TRANSCRIPTION_MAX_BYTES: int = int(
+        os.getenv("GEMINI_AUDIO_TRANSCRIPTION_MAX_BYTES", str(20 * 1024 * 1024)) or str(20 * 1024 * 1024)
+    )
     HUMAN_BACKUP_NUMBER: str | None = os.getenv("HUMAN_BACKUP_NUMBER")
     # Contexte conversation : messages chargés depuis la DB (bot + nœuds flow / {{flow_recent_user_text}})
     GEMINI_CONVERSATION_HISTORY_LIMIT: int = max(

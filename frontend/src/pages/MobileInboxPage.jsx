@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings, FiUserCheck } from "react-icons/fi";
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
@@ -22,6 +22,8 @@ import MobileTeamPanel from "../components/mobile/MobileTeamPanel";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import "../styles/mobile-inbox.css";
 
+const SIDEBAR_CHAT_SYNC_DEBOUNCE_MS = 220;
+
 export default function MobileInboxPage({ onLogout }) {
   const [activeTab, setActiveTab] = useState("conversations");
   const [accounts, setAccounts] = useState([]);
@@ -33,6 +35,22 @@ export default function MobileInboxPage({ onLogout }) {
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [contacts, setContacts] = useState([]);
   const [selectedContactFromChat, setSelectedContactFromChat] = useState(null);
+
+  const selectedConversationIdRef = useRef(null);
+  const conversationRealtimeDebounceTimerRef = useRef(null);
+  const inboundFullRefreshDebounceTimerRef = useRef(null);
+
+  useEffect(() => {
+    selectedConversationIdRef.current = selectedConversation?.id ?? null;
+  }, [selectedConversation?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (inboundFullRefreshDebounceTimerRef.current) {
+        clearTimeout(inboundFullRefreshDebounceTimerRef.current);
+      }
+    };
+  }, []);
 
   // Charger les comptes
   const loadAccounts = useCallback(async () => {
@@ -141,9 +159,26 @@ export default function MobileInboxPage({ onLogout }) {
     }
   }, [activeAccount, refreshConversations]);
 
-  const onInboundMessage = useCallback(() => {
-    refreshConversations(activeAccount);
-  }, [activeAccount, refreshConversations]);
+  const onInboundMessage = useCallback(
+    (newMessage) => {
+      if (!activeAccount) return;
+      const convId = newMessage?.conversation_id;
+      const isOpenChat = convId && convId === selectedConversationIdRef.current;
+      const run = () => refreshConversations(activeAccount);
+      if (!isOpenChat) {
+        run();
+        return;
+      }
+      if (inboundFullRefreshDebounceTimerRef.current) {
+        clearTimeout(inboundFullRefreshDebounceTimerRef.current);
+      }
+      inboundFullRefreshDebounceTimerRef.current = setTimeout(() => {
+        inboundFullRefreshDebounceTimerRef.current = null;
+        run();
+      }, SIDEBAR_CHAT_SYNC_DEBOUNCE_MS);
+    },
+    [activeAccount, refreshConversations]
+  );
 
   useGlobalNotifications(selectedConversation?.id, onInboundMessage);
 
@@ -169,16 +204,30 @@ export default function MobileInboxPage({ onLogout }) {
             );
             return;
           }
-          setConversations((prev) => {
-            const idx = prev.findIndex((c) => c.id === updated.id);
-            if (idx === -1) return prev;
-            const next = [...prev];
-            next[idx] = { ...next[idx], ...updated };
-            return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
-          });
-          setSelectedConversation((prev) =>
-            prev?.id === updated.id ? { ...prev, ...updated } : prev
-          );
+          const applyConversationUpdate = () => {
+            setConversations((prev) => {
+              const idx = prev.findIndex((c) => c.id === updated.id);
+              if (idx === -1) return prev;
+              const next = [...prev];
+              next[idx] = { ...next[idx], ...updated };
+              return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
+            });
+            setSelectedConversation((prev) =>
+              prev?.id === updated.id ? { ...prev, ...updated } : prev
+            );
+          };
+          const isOpenChat = selectedConversationIdRef.current === updated.id;
+          if (!isOpenChat) {
+            applyConversationUpdate();
+            return;
+          }
+          if (conversationRealtimeDebounceTimerRef.current) {
+            clearTimeout(conversationRealtimeDebounceTimerRef.current);
+          }
+          conversationRealtimeDebounceTimerRef.current = setTimeout(() => {
+            conversationRealtimeDebounceTimerRef.current = null;
+            applyConversationUpdate();
+          }, SIDEBAR_CHAT_SYNC_DEBOUNCE_MS);
         }
       )
       .on(
@@ -202,6 +251,10 @@ export default function MobileInboxPage({ onLogout }) {
       )
       .subscribe();
     return () => {
+      if (conversationRealtimeDebounceTimerRef.current) {
+        clearTimeout(conversationRealtimeDebounceTimerRef.current);
+        conversationRealtimeDebounceTimerRef.current = null;
+      }
       supabaseClient.removeChannel(channel);
     };
   }, [activeAccount]);

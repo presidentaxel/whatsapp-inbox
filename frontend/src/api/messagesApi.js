@@ -29,3 +29,6 @@ export const getAccountMediaGallery = (accountId, mediaType = "image", limit = 5
   api.get(`/messages/media-gallery-account/${accountId}`, { params: { media_type: mediaType, limit } });
 export const pinMessage = (messageId) => api.post(`/messages/${messageId}/pin`);
 export const unpinMessage = (messageId) => api.post(`/messages/${messageId}/unpin`);
+/** Transcription manuelle (Gemini) d’un message audio/voice entrant. */
+export const transcribeMessageAudio = (messageId) =>
+  api.post(`/messages/${messageId}/transcribe-audio`);

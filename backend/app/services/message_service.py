@@ -560,7 +560,7 @@ async def _process_incoming_message(
         # Si c'est un média, télécharger et stocker dans Supabase Storage en arrière-plan
         # IMPORTANT: Le téléchargement se fait automatiquement dès la réception, sans attendre que l'utilisateur ouvre le chat
         has_media_id = bool(media_meta.get("media_id"))
-        is_supported_type = msg_type in ("image", "video", "audio", "document", "sticker")
+        is_supported_type = msg_type in ("image", "video", "audio", "voice", "document", "sticker")
         
         if has_media_id and is_supported_type:
             logger.info(f"📥 [AUTO-DOWNLOAD] Media detected on message receipt: wa_message_id={message.get('id')}, media_id={media_meta.get('media_id')}, type={msg_type}")
@@ -701,6 +701,7 @@ async def _process_incoming_message(
             contact,
             message.get("type"),
             wa_message=message,
+            message_db_id=str(message_db_id) if message_db_id else None,
         )
         
         logger.info(f"✅ Message processed successfully: conversation_id={conversation['id']}, type={msg_type}, from={wa_id}")
@@ -893,8 +894,8 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
         else:
             await execute(
                 """
-                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status)
-                VALUES ($1::uuid, 'outbound', '[status update]', $2::timestamptz, $3, $4, $5)
+                INSERT INTO messages (conversation_id, direction, content_text, timestamp, wa_message_id, message_type, status, is_system)
+                VALUES ($1::uuid, 'outbound', '[status update]', $2::timestamptz, $3, $4, $5, TRUE)
                 ON CONFLICT (wa_message_id) DO UPDATE SET status = EXCLUDED.status, timestamp = EXCLUDED.timestamp
                 """,
                 conv["id"],
@@ -938,6 +939,7 @@ async def _process_status(status_payload: Dict[str, Any], account: Dict[str, Any
                         "wa_message_id": message_id,
                         "message_type": status_payload.get("type") or "status",
                         "status": status_value,
+                        "is_system": True,
                     },
                     on_conflict="wa_message_id",
                 )
@@ -1083,8 +1085,18 @@ def _extract_content_text(message: Dict[str, Any]) -> str:
         caption = message.get("image", {}).get("caption")
         return caption or "[image]"
 
+    if msg_type == "video":
+        caption = message.get("video", {}).get("caption")
+        return caption or "[video]"
+
     if msg_type == "audio":
         return "[audio]"
+
+    if msg_type == "voice":
+        return "[voice]"
+
+    if msg_type == "sticker":
+        return "[sticker]"
 
     if msg_type == "document":
         caption = message.get("document", {}).get("caption")
@@ -1095,8 +1107,51 @@ def _extract_content_text(message: Dict[str, Any]) -> str:
         # Ne pas retourner de contenu texte pour les réactions
         return ""
 
-    # fallback: conserver la totalité du payload
-    return json.dumps(message)
+    if msg_type == "unsupported":
+        # Meta envoie type "unsupported" quand le message n'est pas exposé à l'API Cloud (ex. code 131051).
+        # Aucun média / texte exploitable : message lisible pour l'équipe et le fil de discussion.
+        return _format_unsupported_inbound_text(message)
+
+    # fallback: éviter d'afficher du JSON brut dans l'UI — message générique
+    logger.warning(
+        "incoming message type without explicit extractor: type=%s wa_id=%s",
+        msg_type,
+        message.get("id"),
+    )
+    return (
+        "Le contact a envoyé un type de message non géré par l’application pour l’instant. "
+        "Le détail technique n’est pas disponible."
+    )
+
+
+def _format_unsupported_inbound_text(message: Dict[str, Any]) -> str:
+    errors = message.get("errors") or []
+    detail = ""
+    if isinstance(errors, list) and errors:
+        e0 = errors[0]
+        if isinstance(e0, dict):
+            detail = (e0.get("title") or e0.get("message") or "").strip()
+            code = e0.get("code")
+            if not detail and code is not None:
+                detail = f"code {code}"
+    inner = message.get("unsupported")
+    inner_type = ""
+    if isinstance(inner, dict):
+        inner_type = (inner.get("type") or "").strip()
+
+    base = (
+        "Le contact a envoyé un format que WhatsApp Business ne transmet pas à cette application "
+        "(message non pris en charge côté Meta). Le contenu n’est pas disponible ici — "
+        "demandez au contact d’utiliser un message texte, une image, une note vocale ou un document classique."
+    )
+    extras = []
+    if inner_type and inner_type.lower() != "unknown":
+        extras.append(f"type signalé : {inner_type}")
+    if detail:
+        extras.append(f"Meta : {detail}")
+    if extras:
+        base = f"{base} ({' · '.join(extras)})"
+    return base
 
 
 def _timestamp_to_iso(raw_ts: Optional[str]) -> str:
@@ -1678,6 +1733,7 @@ async def _maybe_trigger_bot_reply(
     message_type: Optional[str] = "text",
     wa_message: Optional[Dict[str, Any]] = None,
     flow_trace: Optional[List[Dict[str, Any]]] = None,
+    message_db_id: Optional[str] = None,
 ):
     logger.debug(
         "_maybe_trigger_bot_reply: conversation_id=%s content_len=%s message_type=%s",
@@ -1686,8 +1742,9 @@ async def _maybe_trigger_bot_reply(
         message_type,
     )
 
+    mt = (message_type or "text").lower() if message_type else "text"
     message_text = (content_text or "").strip()
-    if not message_text:
+    if not message_text and mt not in ("audio", "voice"):
         logger.debug("bot skip: empty message for conversation %s", conversation_id)
         return
 
@@ -1711,7 +1768,30 @@ async def _maybe_trigger_bot_reply(
 
     account_id = conversation["account_id"]
 
-    mt = (message_type or "text").lower() if message_type else "text"
+    if mt in ("audio", "voice"):
+        if not message_db_id:
+            logger.warning(
+                "bot skip: audio/voice sans message_db_id conversation=%s",
+                conversation_id,
+            )
+            return
+        from app.services.audio_transcription_service import ensure_inbound_audio_transcript_for_bot
+
+        transcript = await ensure_inbound_audio_transcript_for_bot(str(message_db_id))
+        if not transcript:
+            logger.warning(
+                "bot skip: transcription vocale impossible message_id=%s conversation=%s",
+                message_db_id,
+                conversation_id,
+            )
+            return
+        message_text = transcript
+        mt = "text"
+
+    if not message_text:
+        logger.debug("bot skip: empty message for conversation %s", conversation_id)
+        return
+
     if mt not in ("text", "button", "interactive"):
         fallback = "Je ne peux pas lire ce type de contenu, peux-tu me l'écrire ?"
         logger.debug(
@@ -1735,7 +1815,7 @@ async def _maybe_trigger_bot_reply(
                 contact,
                 wa_message or {},
                 message_text,
-                message_type,
+                mt,
                 flow_trace=flow_trace,
             )
             if flow_done:
@@ -3388,7 +3468,7 @@ async def _send_media_message_normal(
             logger.warning("⚠️ Outbound message has no wa_message_id, cannot retrieve database ID")
     
     # Télécharger et stocker le média dans Supabase Storage en arrière-plan
-    if message_db_id and media_id and media_type in ("image", "video", "audio", "document", "sticker"):
+    if message_db_id and media_id and media_type in ("image", "video", "audio", "voice", "document", "sticker"):
         logger.info(f"📥 Outbound media detected: message_id={message_db_id}, media_id={media_id}, type={media_type}")
         
         # Créer la tâche avec gestion d'erreur
@@ -3963,7 +4043,7 @@ async def backfill_media_to_google_drive(account_id: str, limit: int = 100) -> D
             .select("id, storage_url, media_filename, media_mime_type, conversation_id")
             .not_.is_("storage_url", "null")
             .in_("conversation_id", chunk)
-            .in_("message_type", ["image", "video", "audio", "document", "sticker"])
+            .in_("message_type", ["image", "video", "audio", "voice", "document", "sticker"])
         )
         if column_exists:
             query = query.is_("google_drive_file_id", "null")
