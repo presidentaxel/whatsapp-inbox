@@ -3,6 +3,7 @@ CRUD flux Playground (graphes par compte WABA), défaut, copie et collage de sou
 """
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import logging
@@ -12,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.db import supabase, supabase_execute
 from app.core.cache import invalidate_cache_pattern
-from app.core.pg import fetch_one, fetch_all, execute, get_pool
+from app.core.pg import fetch_one, fetch_all, execute, get_pool, is_transient_pg_pool_error
 
 logger = logging.getLogger("uvicorn.error").getChild("playground_flows")
 
@@ -616,27 +617,38 @@ async def create_scheduled_flow_launch(
 async def _claim_next_scheduled_flow_launch(now_utc: datetime) -> Optional[Dict[str, Any]]:
     pool = get_pool()
     if pool:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    """
-                    WITH cte AS (
-                      SELECT id FROM playground_scheduled_flow_launches
-                      WHERE schedule_status = 'scheduled'
-                        AND scheduled_for <= $1::timestamptz
-                      ORDER BY scheduled_for ASC
-                      LIMIT 1
-                      FOR UPDATE SKIP LOCKED
+        for attempt in range(2):
+            try:
+                async with pool.acquire() as conn:
+                    async with conn.transaction():
+                        row = await conn.fetchrow(
+                            """
+                            WITH cte AS (
+                              SELECT id FROM playground_scheduled_flow_launches
+                              WHERE schedule_status = 'scheduled'
+                                AND scheduled_for <= $1::timestamptz
+                              ORDER BY scheduled_for ASC
+                              LIMIT 1
+                              FOR UPDATE SKIP LOCKED
+                            )
+                            UPDATE playground_scheduled_flow_launches b
+                            SET schedule_status = 'sending'
+                            FROM cte
+                            WHERE b.id = cte.id AND b.schedule_status = 'scheduled'
+                            RETURNING b.*
+                            """,
+                            now_utc,
+                        )
+                        return dict(row) if row else None
+            except Exception as e:
+                if attempt == 0 and is_transient_pg_pool_error(e):
+                    logger.warning(
+                        "claim_next_scheduled_flow_launch: transient DB error, retrying: %s",
+                        e,
                     )
-                    UPDATE playground_scheduled_flow_launches b
-                    SET schedule_status = 'sending'
-                    FROM cte
-                    WHERE b.id = cte.id AND b.schedule_status = 'scheduled'
-                    RETURNING b.*
-                    """,
-                    now_utc,
-                )
-                return dict(row) if row else None
+                    await asyncio.sleep(0.12)
+                    continue
+                raise
 
     res = await supabase_execute(
         supabase.table("playground_scheduled_flow_launches")
@@ -754,13 +766,17 @@ async def process_due_playground_scheduled_launches_once() -> int:
 
 
 async def periodic_playground_scheduled_launches() -> None:
-    import asyncio
-
     while True:
         try:
             await asyncio.sleep(30)
             await process_due_playground_scheduled_launches_once()
         except asyncio.CancelledError:
             break
-        except Exception:
-            logger.exception("periodic_playground_scheduled_launches tick failed")
+        except Exception as e:
+            if is_transient_pg_pool_error(e):
+                logger.warning(
+                    "periodic_playground_scheduled_launches: DB connection dropped (retry next tick): %s",
+                    e,
+                )
+            else:
+                logger.exception("periodic_playground_scheduled_launches tick failed")

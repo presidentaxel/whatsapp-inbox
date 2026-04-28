@@ -1335,7 +1335,7 @@ async def update_recipient_stat(
             reply_time = dt.fromisoformat(update_data["replied_at"].replace("Z", "+00:00"))
             update_data["time_to_reply"] = str(reply_time - sent_time)
     result = await supabase_execute(
-        supabase.table("broadcast_recipient_stats").update(update_data).eq("id", stat_id).select()
+        supabase.table("broadcast_recipient_stats").update(update_data).eq("id", stat_id)
     )
     return result.data[0] if result.data else None
 

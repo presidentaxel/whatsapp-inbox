@@ -60,6 +60,21 @@ cd /opt/whatsapp-inbox/deploy
 docker compose -f docker-compose.prod.yml stop backend
 docker compose -f docker-compose.prod.yml build --no-cache backend
 docker compose -f docker-compose.prod.yml up -d backend
+
+#caddy
+ssh ubuntu@217.182.65.32
+cd /opt/whatsapp-inbox/deploy
+docker compose -f docker-compose.prod.yml stop caddy
+docker compose -f docker-compose.prod.yml pull caddy
+docker compose -f docker-compose.prod.yml up -d --force-recreate caddy
+
+#rebuild complet
+ssh ubuntu@217.182.65.32
+cd /opt/whatsapp-inbox/deploy
+docker compose -f docker-compose.prod.yml stop
+docker compose -f docker-compose.prod.yml build --no-cache backend frontend
+docker compose -f docker-compose.prod.yml pull caddy prometheus grafana
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ## Grafana reset

@@ -16,6 +16,31 @@ logger = logging.getLogger(__name__)
 _pool: Any = None
 
 
+def is_transient_pg_pool_error(exc: BaseException) -> bool:
+    """
+    True when the asyncpg pool handed out a dead connection (idle timeout, network reset, etc.).
+    Safe to retry on a new acquire(). Does not mean the query itself was invalid.
+    """
+    try:
+        import asyncpg
+
+        if isinstance(
+            exc,
+            (
+                asyncpg.exceptions.ConnectionDoesNotExistError,
+                asyncpg.exceptions.InterfaceError,
+            ),
+        ):
+            return True
+    except ImportError:
+        pass
+    if isinstance(exc, ConnectionResetError):
+        return True
+    if isinstance(exc, OSError) and getattr(exc, "winerror", None) == 10054:
+        return True
+    return False
+
+
 def _safe_url_for_log(url: str) -> str:
     """Retourne l'URL avec mot de passe masqué (pour les logs)."""
     try:
@@ -41,6 +66,9 @@ async def init_pool() -> None:
             min_size=5,
             max_size=20,
             command_timeout=30,
+            # Recycle idle connections so we use the pooler less often with half-dead TCP sockets
+            # (common on Windows / VPN when the server closed the session).
+            max_inactive_connection_lifetime=120.0,
         )
         logger.info("PostgreSQL pool created (min=5, max=20)")
     except Exception as e:

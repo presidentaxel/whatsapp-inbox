@@ -212,8 +212,7 @@ def _user_visible_gemini_failure(exc: BaseException) -> str:
     return "Erreur réseau ou inattendue lors de l’appel à l’IA. Réessaie plus tard."
 
 
-@retry_on_gemini_transient(max_attempts=5, min_wait=2.0, max_wait=45.0)
-async def _call_gemini_api(
+async def _call_gemini_api_once(
     endpoint: str,
     payload: dict,
     conversation_id: str,
@@ -221,12 +220,9 @@ async def _call_gemini_api(
     read_timeout: float = _GEMINI_DEFAULT_READ_TIMEOUT_S,
 ) -> dict:
     """
-    Appelle l'API Gemini avec retry sur les erreurs réseau.
+    Un POST Gemini sans retry Tenacity.
 
-    Raises:
-        httpx.HTTPStatusError: Si l'API retourne une erreur HTTP
-        httpx.TimeoutException: Si le timeout est dépassé
-        httpx.NetworkError: Si problème réseau
+    À utiliser pour la classification Axelia (un timeout ne doit pas enchaîner 5 rounds).
     """
     client = await get_http_client()
 
@@ -257,11 +253,19 @@ async def _call_gemini_api(
         response.raise_for_status()
         return response.json()
     except httpx.TimeoutException:
-        logger.error(
-            "Gemini timeout for conversation %s (read=%ss)",
-            conversation_id,
-            read_s,
-        )
+        is_classify = str(conversation_id).startswith("classify-")
+        if is_classify:
+            logger.warning(
+                "Gemini read timeout for %s (read=%ss)",
+                conversation_id,
+                read_s,
+            )
+        else:
+            logger.error(
+                "Gemini timeout for conversation %s (read=%ss)",
+                conversation_id,
+                read_s,
+            )
         raise
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
@@ -273,6 +277,27 @@ async def _call_gemini_api(
             body,  # Log full body, not truncated
         )
         raise
+
+
+@retry_on_gemini_transient(max_attempts=5, min_wait=2.0, max_wait=45.0)
+async def _call_gemini_api(
+    endpoint: str,
+    payload: dict,
+    conversation_id: str,
+    *,
+    read_timeout: float = _GEMINI_DEFAULT_READ_TIMEOUT_S,
+) -> dict:
+    """
+    Appelle l'API Gemini avec retry sur les erreurs réseau.
+
+    Raises:
+        httpx.HTTPStatusError: Si l'API retourne une erreur HTTP
+        httpx.TimeoutException: Si le timeout est dépassé
+        httpx.NetworkError: Si problème réseau
+    """
+    return await _call_gemini_api_once(
+        endpoint, payload, conversation_id, read_timeout=read_timeout
+    )
 
 
 async def generate_bot_reply(
@@ -1668,17 +1693,20 @@ _TEMPLATE_STATUS_ALLOWED = frozenset(
 )
 
 
+_PENDING_USER_CONFIRM_SKILLS = frozenset({"create_template", "meta_block_contact"})
+
+
 def _partition_playground_tool_calls(
     tool_calls: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Sépare les appels create_template (confirmation utilisateur requise) des autres skills."""
+    """Sépare les appels create_template / meta_block_contact (confirmation utilisateur requise) des autres skills."""
     safe: List[Dict[str, Any]] = []
     pending_create: List[Dict[str, Any]] = []
     for tc in tool_calls:
         if not isinstance(tc, dict):
             continue
         name = (tc.get("skill") or tc.get("name") or "").strip()
-        if name == "create_template":
+        if name in _PENDING_USER_CONFIRM_SKILLS:
             pending_create.append(tc)
         else:
             safe.append(tc)

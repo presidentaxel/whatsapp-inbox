@@ -1,4 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
+import {
+  lazy,
+  Suspense,
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { FiSearch } from "react-icons/fi";
+import { useNavigate, useLocation } from "react-router-dom";
+import { INBOX_PATH_BY_MODE, inboxPathToMode } from "../routes/inboxRoutes";
 import {
   getConversations,
   markConversationRead,
@@ -8,16 +20,18 @@ import {
   findOrCreateConversation,
 } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
-import { getContacts } from "../api/contactsApi";
+import { getContacts, getMetaBlockedWaIds, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
 import ConversationList from "../components/conversations/ConversationList";
 import ChatWindow from "../components/chat/ChatWindow";
 import AccountSelector from "../components/accounts/AccountSelector";
+import MetaBlockAccountModal from "../components/contacts/MetaBlockAccountModal";
 import SidebarNav from "../components/layout/SidebarNav";
 import { useAuth } from "../context/AuthContext";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
 import { clearConversationNotification } from "../registerSW";
 import { supabaseClient } from "../api/supabaseClient";
+import { filterContactsBySearch } from "../utils/contactSearch";
 import {
   excludePlaygroundSandboxConversations,
   isPlaygroundSandboxConversation,
@@ -33,12 +47,16 @@ import {
 /** Délai avant de rafraîchir la ligne de conversation dans la sidebar quand ce chat est ouvert (sync avec le fil realtime des messages). */
 const SIDEBAR_CHAT_SYNC_DEBOUNCE_MS = 220;
 
+/** Mettre à `true` pour réafficher l’entrée Axelia dans la barre latérale (et permettre `/axelia`). */
+const AXELIA_SIDEBAR_ENABLED = false;
+
 // Lazy-loaded heavy panels (code-split to reduce initial bundle)
 const ContactsPanel = lazy(() => import("../components/contacts/ContactsPanel"));
 const AccountMediaGallery = lazy(() => import("../components/gallery/AccountMediaGallery"));
 const SettingsPanel = lazy(() => import("../components/settings/SettingsPanel"));
 const AssistantPanel = lazy(() => import("../components/assistant/AssistantPanel"));
 const WhatsAppBusinessPanel = lazy(() => import("../components/whatsapp/WhatsAppBusinessPanel"));
+const AxeliaChat = lazy(() => import("../components/axelia/AxeliaChat"));
 const BroadcastGroupsList = lazy(() => import("../components/broadcast/BroadcastGroupsList"));
 const BroadcastGroupEditor = lazy(() => import("../components/broadcast/BroadcastGroupEditor"));
 const BroadcastGroupChat = lazy(() => import("../components/broadcast/BroadcastGroupChat"));
@@ -46,6 +64,8 @@ const BroadcastGroupChat = lazy(() => import("../components/broadcast/BroadcastG
 
 export default function InboxPage() {
   const { signOut, profile, hasPermission, refreshProfile } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [accounts, setAccounts] = useState([]);
   const [activeAccount, setActiveAccount] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -53,14 +73,30 @@ export default function InboxPage() {
   const [conversationCursor, setConversationCursor] = useState(null);
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
   const [selectedConversation, setSelectedConversation] = useState(null);
-  const [navMode, setNavMode] = useState("chat");
+
+  const navMode = useMemo(() => {
+    const mode = inboxPathToMode(location.pathname);
+    return mode ?? "chat";
+  }, [location.pathname]);
+
+  const handleNavSelect = useCallback(
+    (id) => {
+      const path = INBOX_PATH_BY_MODE[id];
+      if (path) navigate(path);
+    },
+    [navigate]
+  );
   const [filter, setFilter] = useState("all");
   const [contacts, setContacts] = useState([]);
   const [contactSearch, setContactSearch] = useState("");
+  const [debouncedContactSearch, setDebouncedContactSearch] = useState("");
   const [selectedContact, setSelectedContact] = useState(null);
   const [selectedContacts, setSelectedContacts] = useState(new Set());
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [isWindowActive, setIsWindowActive] = useState(true);
+  const [blockedByAccount, setBlockedByAccount] = useState({});
+  const [metaBlockBusyId, setMetaBlockBusyId] = useState(null);
+  const [metaBlockModal, setMetaBlockModal] = useState(null);
   const [conversationSearch, setConversationSearch] = useState("");
   const [showGallery, setShowGallery] = useState(false);
   const [broadcastGroups, setBroadcastGroups] = useState([]);
@@ -68,6 +104,121 @@ export default function InboxPage() {
   const [showGroupEditor, setShowGroupEditor] = useState(false);
   const [editingGroup, setEditingGroup] = useState(null);
   const canViewContacts = hasPermission?.("contacts.view");
+
+  const normalizeWaDigits = useCallback((phone) => String(phone || "").replace(/\D/g, ""), []);
+
+  const suppressInboundForConversationRef = useRef(() => false);
+  useEffect(() => {
+    suppressInboundForConversationRef.current = (conversation) => {
+      if (!conversation?.account_id) return false;
+      const wa = normalizeWaDigits(
+        conversation.contacts?.whatsapp_number ?? conversation.client_number ?? ""
+      );
+      if (!wa) return false;
+      return (blockedByAccount[conversation.account_id] || []).includes(wa);
+    };
+  }, [blockedByAccount, normalizeWaDigits]);
+
+  const blockedByAccountRef = useRef({});
+  useEffect(() => {
+    blockedByAccountRef.current = blockedByAccount;
+  }, [blockedByAccount]);
+
+  const loadAllBlockedWaForContacts = useCallback(async () => {
+    if (!accounts.length) {
+      setBlockedByAccount({});
+      return;
+    }
+    const targets = accounts.filter((a) => hasPermission?.("messages.view", a.id));
+    try {
+      const results = await Promise.all(
+        targets.map(async (a) => {
+          try {
+            const res = await getMetaBlockedWaIds(a.id);
+            const ids = (res.data?.wa_ids ?? []).map((x) => normalizeWaDigits(x));
+            return [a.id, ids];
+          } catch {
+            return [a.id, []];
+          }
+        })
+      );
+      setBlockedByAccount(Object.fromEntries(results));
+    } catch (error) {
+      console.error("meta block list:", error);
+      setBlockedByAccount({});
+    }
+  }, [accounts, hasPermission, normalizeWaDigits]);
+
+  const mergedBlockedWaIds = useMemo(() => {
+    const s = new Set();
+    Object.values(blockedByAccount).forEach((arr) => {
+      (arr || []).forEach((id) => s.add(id));
+    });
+    return s;
+  }, [blockedByAccount]);
+
+  const conversationInternallyBlocked = useMemo(() => {
+    const c = selectedConversation;
+    if (!c?.account_id) return false;
+    const wa = normalizeWaDigits(c.contacts?.whatsapp_number ?? c.client_number ?? "");
+    if (!wa) return false;
+    return (blockedByAccount[c.account_id] || []).includes(wa);
+  }, [selectedConversation, blockedByAccount, normalizeWaDigits]);
+
+  const accountWriteOk = useCallback(
+    (accountId) => {
+      if (!hasPermission?.("messages.send", accountId)) return false;
+      const level = profile?.permissions?.account_access_levels?.[accountId];
+      return level !== "aucun" && level !== "lecture";
+    },
+    [hasPermission, profile]
+  );
+
+  const canModerateWaAny = useMemo(
+    () => accounts.some((a) => accountWriteOk(a.id)),
+    [accounts, accountWriteOk]
+  );
+
+  const metaBlockModalAccounts = useMemo(() => {
+    if (!metaBlockModal?.contact) return [];
+    const w = normalizeWaDigits(metaBlockModal.contact.whatsapp_number);
+    if (metaBlockModal.action === "block") {
+      return accounts.filter((a) => accountWriteOk(a.id));
+    }
+    return accounts.filter(
+      (a) => accountWriteOk(a.id) && (blockedByAccount[a.id] || []).includes(w)
+    );
+  }, [metaBlockModal, accounts, accountWriteOk, blockedByAccount, normalizeWaDigits]);
+
+  const handleMetaBlockModalConfirm = useCallback(
+    async (accountId) => {
+      const contact = metaBlockModal?.contact;
+      const action = metaBlockModal?.action;
+      if (!contact?.id || !action) return;
+      setMetaBlockBusyId(contact.id);
+      try {
+        if (action === "block") {
+          await metaBlockContact(contact.id, accountId);
+        } else {
+          await metaUnblockContact(contact.id, accountId);
+        }
+        await loadAllBlockedWaForContacts();
+        setMetaBlockModal(null);
+      } catch (error) {
+        const detail = error.response?.data?.detail;
+        alert(
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((d) => d.msg || d).join(", ")
+              : "Erreur lors du blocage / déblocage WhatsApp"
+        );
+      } finally {
+        setMetaBlockBusyId(null);
+      }
+    },
+    [metaBlockModal, loadAllBlockedWaForContacts]
+  );
 
   const selectedConversationIdRef = useRef(null);
   const conversationRealtimeDebounceTimerRef = useRef(null);
@@ -139,19 +290,21 @@ export default function InboxPage() {
             const res = await getConversations(accountId, { limit: 200, updated_since: newest });
             const updated = excludePlaygroundSandboxConversations(res.data || []);
             if (updated.length > 0) {
-              setConversations((prev) => {
-                const map = new Map(
-                  excludePlaygroundSandboxConversations(prev).map((c) => [c.id, c])
-                );
-                updated.forEach((c) => map.set(c.id, c));
-                return Array.from(map.values()).sort(
-                  (a, b) => (b.updated_at > a.updated_at ? 1 : -1)
-                );
-              });
-              setSelectedConversation((prev) => {
-                if (!prev) return null;
-                if (isPlaygroundSandboxConversation(prev)) return null;
-                return updated.find((c) => c.id === prev.id) ?? prev;
+              startTransition(() => {
+                setConversations((prev) => {
+                  const map = new Map(
+                    excludePlaygroundSandboxConversations(prev).map((c) => [c.id, c]),
+                  );
+                  updated.forEach((c) => map.set(c.id, c));
+                  return Array.from(map.values()).sort((a, b) =>
+                    b.updated_at > a.updated_at ? 1 : -1,
+                  );
+                });
+                setSelectedConversation((prev) => {
+                  if (!prev) return null;
+                  if (isPlaygroundSandboxConversation(prev)) return null;
+                  return updated.find((c) => c.id === prev.id) ?? prev;
+                });
               });
             }
           } catch {
@@ -304,7 +457,7 @@ export default function InboxPage() {
     [activeAccount, refreshConversations]
   );
 
-  useGlobalNotifications(selectedConversation?.id, onInboundMessage);
+  useGlobalNotifications(selectedConversation?.id, onInboundMessage, suppressInboundForConversationRef);
 
   // Realtime: refresh conversation list instantly when any conversation changes
   useEffect(() => {
@@ -326,6 +479,14 @@ export default function InboxPage() {
             setSelectedConversation((prev) =>
               prev?.id === updated.id ? null : prev
             );
+            return;
+          }
+          const waUpd = normalizeWaDigits(updated.client_number ?? "");
+          if (
+            updated.account_id &&
+            waUpd &&
+            (blockedByAccountRef.current[updated.account_id] || []).includes(waUpd)
+          ) {
             return;
           }
           const applyConversationUpdate = () => {
@@ -381,7 +542,7 @@ export default function InboxPage() {
       }
       supabaseClient.removeChannel(channel);
     };
-  }, [activeAccount]);
+  }, [activeAccount, normalizeWaDigits]);
 
   useEffect(() => {
     loadAccounts();
@@ -462,28 +623,40 @@ export default function InboxPage() {
     refreshConversations(activeAccount);
   }, [activeAccount, refreshConversations]);
 
+  // Liste des WA bloqués (app) : nécessaire pour le chat (bandeau, suppression realtime) — pas seulement sur l’onglet contacts.
+  useEffect(() => {
+    loadAllBlockedWaForContacts();
+  }, [loadAllBlockedWaForContacts]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedContactSearch(contactSearch), 320);
+    return () => window.clearTimeout(t);
+  }, [contactSearch]);
+
   useEffect(() => {
     if (navMode === "contacts" && canViewContacts) {
-      getContacts({ limit: 1000 }).then((res) => {
-        const items = res.data?.items || res.data || [];
-        setContacts(items);
-        setSelectedContact((prev) => prev ?? items[0] ?? null);
-      });
+      const trimmed = debouncedContactSearch.trim();
+      const params = trimmed ? { q: trimmed, limit: 8000 } : { limit: 15000 };
+      getContacts(params)
+        .then((res) => {
+          const items = res.data?.items || res.data || [];
+          setContacts(items);
+          setSelectedContact((prev) => {
+            if (prev && items.some((c) => c.id === prev.id)) return prev;
+            return items[0] ?? null;
+          });
+        })
+        .catch(() => setContacts([]));
     } else if (navMode === "contacts" && !canViewContacts) {
       setContacts([]);
       setSelectedContact(null);
     }
-  }, [navMode, canViewContacts]);
+  }, [navMode, canViewContacts, debouncedContactSearch]);
 
-  const filteredContacts = useMemo(() => {
-    if (!contactSearch.trim()) return contacts;
-    const term = contactSearch.toLowerCase();
-    return contacts.filter((contact) => {
-      const name =
-        contact.display_name?.toLowerCase() || contact.whatsapp_number?.toLowerCase();
-      return name?.includes(term);
-    });
-  }, [contacts, contactSearch]);
+  const filteredContacts = useMemo(
+    () => filterContactsBySearch(contacts, contactSearch),
+    [contacts, contactSearch]
+  );
 
   // Ne pas réinitialiser la sélection lors de la recherche si on est en mode multi-sélection
   useEffect(() => {
@@ -580,18 +753,19 @@ export default function InboxPage() {
     }
     let cancelled = false;
     let timeoutId;
-    const poll = async () => {
-      await refreshConversations(activeAccount, { delta: true });
-      if (!cancelled) {
-        timeoutId = setTimeout(poll, 45000);
-      }
+    const scheduleNext = () => {
+      if (cancelled) return;
+      timeoutId = window.setTimeout(run, 45000);
     };
-    timeoutId = setTimeout(poll, 45000);
+    const run = () => {
+      void refreshConversations(activeAccount, { delta: true }).finally(() => {
+        scheduleNext();
+      });
+    };
+    timeoutId = window.setTimeout(run, 45000);
     return () => {
       cancelled = true;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
+      if (timeoutId) window.clearTimeout(timeoutId);
     };
   }, [activeAccount, navMode, isWindowActive, refreshConversations]);
 
@@ -681,6 +855,9 @@ export default function InboxPage() {
     if (canViewContacts) {
       items.push("contacts");
     }
+    if (AXELIA_SIDEBAR_ENABLED) {
+      items.push("axelia");
+    }
     items.push("whatsapp"); // Nouveau: WhatsApp Business
     if (canAccessGemini) {
       items.push("assistant");
@@ -690,10 +867,17 @@ export default function InboxPage() {
   }, [canViewContacts, canAccessGemini]);
 
   useEffect(() => {
-    if (!allowedNavItems.includes(navMode)) {
-      setNavMode("chat");
+    const modeFromUrl = inboxPathToMode(location.pathname);
+    if (modeFromUrl === null) {
+      navigate(INBOX_PATH_BY_MODE.chat, { replace: true });
     }
-  }, [allowedNavItems, navMode]);
+  }, [location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!allowedNavItems.includes(navMode)) {
+      navigate(INBOX_PATH_BY_MODE.chat, { replace: true });
+    }
+  }, [allowedNavItems, navMode, navigate]);
 
   const canSendMessage =
     selectedConversation && selectedConversation.account_id
@@ -705,7 +889,7 @@ export default function InboxPage() {
   return (
     <div className="app-shell">
       <div className="workspace">
-        <SidebarNav active={navMode} onSelect={setNavMode} allowedItems={allowedNavItems} onSignOut={signOut} />
+        <SidebarNav active={navMode} onSelect={handleNavSelect} allowedItems={allowedNavItems} onSignOut={signOut} />
         <Suspense fallback={lazyFallback}>
 
         {navMode === "contacts" ? (
@@ -725,7 +909,7 @@ export default function InboxPage() {
                     ) : (
                       <>
                         <span className="selection-count">
-                          {selectedContacts.size} sélectionné{selectedContacts.size > 1 ? 's' : ''}
+                          {selectedContacts.size} sélectionné{selectedContacts.size > 1 ? "s" : ""}
                         </span>
                         {selectedContacts.size > 0 && activeAccount && (
                           <button
@@ -748,12 +932,21 @@ export default function InboxPage() {
                     )}
                   </div>
                 </div>
-                <div className="conversation-search">
-                  <input
-                    placeholder="Trouver un contact"
-                    value={contactSearch}
-                    onChange={(e) => setContactSearch(e.target.value)}
-                  />
+                <div className="contacts-search">
+                  <div className="contacts-search__inner">
+                    <span className="contacts-search__icon" aria-hidden>
+                      <FiSearch size={18} />
+                    </span>
+                    <input
+                      type="search"
+                      className="contacts-search__input"
+                      placeholder="Nom, prénom, numéro…"
+                      value={contactSearch}
+                      onChange={(e) => setContactSearch(e.target.value)}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </div>
                 </div>
                 <ContactsPanel
                   contacts={filteredContacts}
@@ -762,6 +955,18 @@ export default function InboxPage() {
                   selectedContacts={selectedContacts}
                   onToggleSelect={handleToggleContactSelect}
                   multiSelect={multiSelectMode}
+                  canModerateWaAny={canModerateWaAny}
+                  metaBlockedNormalizedIds={mergedBlockedWaIds}
+                  metaBlockBusyId={metaBlockBusyId}
+                  onMetaBlockOpen={(contact, action) => setMetaBlockModal({ contact, action })}
+                />
+                <MetaBlockAccountModal
+                  open={Boolean(metaBlockModal)}
+                  onClose={() => !metaBlockBusyId && setMetaBlockModal(null)}
+                  action={metaBlockModal?.action}
+                  accounts={metaBlockModalAccounts}
+                  busy={Boolean(metaBlockBusyId && metaBlockModal?.contact?.id === metaBlockBusyId)}
+                  onConfirm={handleMetaBlockModalConfirm}
                 />
               </div>
             </div>
@@ -773,6 +978,15 @@ export default function InboxPage() {
               </div>
             </div>
           )
+        ) : navMode === "axelia" ? (
+          <div className="workspace-main settings-mode">
+            <AxeliaChat
+              accounts={accounts}
+              initialAccountId={activeAccount}
+              profile={profile}
+              hasPermission={hasPermission}
+            />
+          </div>
         ) : navMode === "settings" ? (
           <div className="workspace-main settings-mode">
             <SettingsPanel
@@ -918,6 +1132,7 @@ export default function InboxPage() {
                 onMarkRead={optimisticallyMarkRead}
                 isWindowActive={isWindowActive && navMode === "chat"}
                 canSend={canSendMessage}
+                conversationInternallyBlocked={conversationInternallyBlocked}
               />
             )}
             {filter === "groups" && (

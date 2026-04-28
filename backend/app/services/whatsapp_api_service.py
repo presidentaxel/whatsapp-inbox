@@ -30,6 +30,40 @@ class WhatsAppAPIError(Exception):
         self.is_token_expired = is_token_expired
 
 
+def _meta_error_codes(exc: WhatsAppAPIError) -> set:
+    """Normalise code / error_subcode Meta (int ou str dans le JSON Graph)."""
+    out: set = set()
+    for c in (exc.error_code, exc.error_subcode):
+        if c is None:
+            continue
+        out.add(c)
+        try:
+            out.add(int(c))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def http_status_and_detail_for_whatsapp_api_error(exc: WhatsAppAPIError) -> tuple[int, str]:
+    """
+    Mappe les erreurs WhatsApp Cloud API vers un statut HTTP et un message API.
+    (#133010) Account not registered : ligne ou phone_number_id non enregistré / invalide côté Meta.
+    """
+    codes = _meta_error_codes(exc)
+    msg_lower = str(exc).lower()
+    # Meta: OAuthException (#133010) Account not registered
+    if 133010 in codes or "133010" in msg_lower or "account not registered" in msg_lower:
+        return (
+            422,
+            "whatsapp_meta_account_not_registered — Cette ligne WhatsApp n’est pas enregistrée sur Meta "
+            "(Cloud API), ou le phone_number_id / le token ne correspond plus à un actif valide. "
+            "Vérifie la ligne dans Meta Business Suite et les identifiants du compte dans l’app.",
+        )
+    if exc.is_token_expired:
+        return 401, str(exc)
+    return 502, str(exc)
+
+
 def parse_whatsapp_error(response: httpx.Response) -> WhatsAppAPIError:
     """
     Parse une réponse d'erreur de l'API WhatsApp et retourne une exception appropriée
@@ -1267,6 +1301,124 @@ async def get_contact_info(
             "name": None,
             "phone_number": phone_number.replace("+", "").replace(" ", "").replace("-", "")
         }
+
+
+def normalize_whatsapp_user_id(phone: str) -> str:
+    """E.164 digits only, no + (aligné sur le stockage contacts / champ user Meta)."""
+    if not phone:
+        return ""
+    return phone.replace("+", "").replace(" ", "").replace("-", "").strip()
+
+
+# ============================================================================
+# Block users (WhatsApp Cloud API) — POST/DELETE/GET .../block_users
+# ============================================================================
+
+
+@retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)
+async def block_whatsapp_users(
+    phone_number_id: str,
+    access_token: str,
+    user_phone_numbers: List[str],
+) -> Dict[str, Any]:
+    client = await get_http_client()
+    users = [{"user": normalize_whatsapp_user_id(p)} for p in user_phone_numbers if normalize_whatsapp_user_id(p)]
+    if not users:
+        raise ValueError("no_valid_user_phone_numbers")
+    payload = {"messaging_product": "whatsapp", "block_users": users}
+    response = await client.post(
+        f"{GRAPH_API_BASE}/{phone_number_id}/block_users",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json=payload,
+    )
+    if response.status_code >= 400:
+        raise parse_whatsapp_error(response)
+    return response.json()
+
+
+@retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)
+async def unblock_whatsapp_users(
+    phone_number_id: str,
+    access_token: str,
+    user_phone_numbers: List[str],
+) -> Dict[str, Any]:
+    client = await get_http_client()
+    users = [{"user": normalize_whatsapp_user_id(p)} for p in user_phone_numbers if normalize_whatsapp_user_id(p)]
+    if not users:
+        raise ValueError("no_valid_user_phone_numbers")
+    payload = {"messaging_product": "whatsapp", "block_users": users}
+    response = await client.request(
+        "DELETE",
+        f"{GRAPH_API_BASE}/{phone_number_id}/block_users",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json=payload,
+    )
+    if response.status_code >= 400:
+        raise parse_whatsapp_error(response)
+    return response.json()
+
+
+@retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)
+async def list_blocked_whatsapp_users_page(
+    phone_number_id: str,
+    access_token: str,
+    limit: int = 100,
+    after: Optional[str] = None,
+) -> Dict[str, Any]:
+    client = await get_http_client()
+    params: Dict[str, Any] = {"limit": min(max(limit, 1), 500)}
+    if after:
+        params["after"] = after
+    response = await client.get(
+        f"{GRAPH_API_BASE}/{phone_number_id}/block_users",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params=params,
+    )
+    if response.status_code >= 400:
+        raise parse_whatsapp_error(response)
+    return response.json()
+
+
+async def list_all_blocked_wa_ids(
+    phone_number_id: str,
+    access_token: str,
+    max_pages: int = 100,
+) -> List[str]:
+    """
+    Agrège tous les wa_id bloqués pour ce numéro Business (pagination Graph).
+    """
+    out: List[str] = []
+    after: Optional[str] = None
+    for _ in range(max_pages):
+        page = await list_blocked_whatsapp_users_page(
+            phone_number_id, access_token, limit=100, after=after
+        )
+        for item in page.get("data") or []:
+            wid = item.get("wa_id")
+            if wid is not None:
+                norm = normalize_whatsapp_user_id(str(wid))
+                if norm:
+                    out.append(norm)
+        paging = page.get("paging") or {}
+        cursors = paging.get("cursors") or {}
+        after = cursors.get("after")
+        if not after:
+            break
+    return out
+
+
+def block_users_response_failed_for_input(body: Dict[str, Any], normalized_input: str) -> Optional[str]:
+    """Si Meta renvoie l'utilisateur dans failed_users, extrait un message d'erreur."""
+    bu = body.get("block_users") or {}
+    failed = bu.get("failed_users") or []
+    for f in failed:
+        inp = normalize_whatsapp_user_id(str(f.get("input") or ""))
+        if inp == normalized_input:
+            errs = f.get("errors") or []
+            if errs and isinstance(errs[0], dict):
+                return str(errs[0].get("message") or "block_failed")
+            return "block_failed"
+    return None
 
 
 @retry_on_network_error(max_attempts=2, min_wait=1.0, max_wait=3.0)

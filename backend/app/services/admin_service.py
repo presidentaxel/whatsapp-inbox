@@ -67,9 +67,7 @@ async def list_roles() -> Sequence[Dict[str, Any]]:
 
 async def create_role(payload: Dict[str, Any]) -> Dict[str, Any]:
     permissions = payload.pop("permissions", [])
-    res = await supabase_execute(
-        supabase.table("app_roles").insert(payload).select()
-    )
+    res = await supabase_execute(supabase.table("app_roles").insert(payload))
     role = res.data[0]
     if permissions:
         await supabase_execute(

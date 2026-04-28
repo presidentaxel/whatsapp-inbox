@@ -3,7 +3,17 @@ import { FiArrowLeft, FiTrash2, FiSave, FiX, FiEdit } from "react-icons/fi";
 import { updateContact, deleteContact, getContactWhatsAppInfo } from "../../api/contactsApi";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 
-export default function MobileContactDetail({ contact, activeAccount, onBack, onUpdate, onDelete }) {
+export default function MobileContactDetail({
+  contact,
+  activeAccount,
+  onBack,
+  onUpdate,
+  onDelete,
+  metaBlocked = false,
+  canModerateWaAny = false,
+  metaBlockBusy = false,
+  onMetaBlockOpen,
+}) {
   const [isEditing, setIsEditing] = useState(false);
   const [displayName, setDisplayName] = useState(contact?.display_name || "");
   const [whatsappNumber, setWhatsappNumber] = useState(contact?.whatsapp_number || "");
@@ -185,9 +195,53 @@ export default function MobileContactDetail({ contact, activeAccount, onBack, on
                   </div>
                 </div>
               )}
+              {!loadingWhatsAppInfo && metaBlocked && (
+                <div className="mobile-contact-detail__field">
+                  <div className="mobile-contact-detail__value" style={{ color: "#8696a0", fontSize: "0.9rem" }}>
+                    Numéro bloqué sur au moins une ligne dans l’app (ban interne ; pas de blocage Meta).
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
+
+        {!isEditing && canModerateWaAny && (
+          <div
+            className="mobile-contact-detail__actions"
+            style={{ borderTop: "1px solid rgba(134, 150, 160, 0.15)", paddingTop: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}
+          >
+            <button
+              type="button"
+              className="mobile-contact-detail__delete-btn"
+              style={{
+                width: "100%",
+                justifyContent: "center",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                background: "rgba(37, 211, 102, 0.15)",
+                color: "#25d366",
+                border: "1px solid rgba(37, 211, 102, 0.35)",
+              }}
+              disabled={metaBlockBusy || loading}
+              onClick={() => onMetaBlockOpen?.("block")}
+            >
+              Bloquer sur cette ligne
+            </button>
+            {metaBlocked && (
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ width: "100%", justifyContent: "center", display: "flex", alignItems: "center", gap: "0.5rem" }}
+                disabled={metaBlockBusy || loading}
+                onClick={() => onMetaBlockOpen?.("unblock")}
+              >
+                Débloquer sur cette ligne
+              </button>
+            )}
+          </div>
+        )}
 
         {!isEditing && (
           <div className="mobile-contact-detail__actions">

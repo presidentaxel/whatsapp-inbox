@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid as uuid_module
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -9,6 +10,14 @@ from app.core.db import supabase, supabase_execute
 from app.services.contact_service import list_contacts, count_contacts
 from app.services.account_service import get_account_by_id
 from app.services.profile_picture_service import update_all_contacts_profile_pictures
+from app.services.internal_block_service import (
+    InternalBlocksTableNotMigrated,
+    list_blocked_wa_ids_for_account,
+    remove_internal_block,
+    upsert_internal_block,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -25,16 +34,125 @@ class ContactUpdate(BaseModel):
 
 @router.get("")
 async def fetch_contacts(
-    limit: int = Query(200, ge=1, le=1000),
+    limit: int = Query(8000, ge=1, le=20000),
     offset: int = Query(0, ge=0),
+    q: str | None = Query(None, max_length=200, description="Filtre texte (nom, prénom, numéro)"),
     current_user: CurrentUser = Depends(get_current_user),
 ):
     current_user.require(PermissionCodes.CONTACTS_VIEW)
+    qn = (q or "").strip() or None
     items, total = await asyncio.gather(
-        list_contacts(limit=limit, offset=offset),
+        list_contacts(limit=limit, offset=offset, search=qn),
         count_contacts(),
     )
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
+    return {"items": items, "total": total, "limit": limit, "offset": offset, "q": qn}
+
+
+@router.get("/meta-blocked")
+async def get_meta_blocked_wa_ids(
+    account_id: str = Query(..., description="Compte WhatsApp — liste des contacts bloqués internes (app)"),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Liste les identifiants WhatsApp (chiffres) bloqués **dans l'app** pour ce compte (pas Meta global).
+    """
+    current_user.require(PermissionCodes.MESSAGES_VIEW, account_id)
+    access_level = current_user.permissions.account_access_levels.get(account_id)
+    if access_level == "aucun":
+        raise HTTPException(status_code=403, detail="account_access_denied")
+
+    account = await get_account_by_id(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+
+    wa_ids = await list_blocked_wa_ids_for_account(account_id)
+    return {"wa_ids": wa_ids}
+
+
+@router.post("/{contact_id}/meta-block")
+async def meta_block_contact(
+    contact_id: str,
+    account_id: str = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Bloque le contact pour ce compte **dans l'app uniquement** (réception conservée ; pas Meta)."""
+    _validate_contact_id(contact_id)
+    current_user.require(PermissionCodes.MESSAGES_SEND, account_id)
+    access_level = current_user.permissions.account_access_levels.get(account_id)
+    if access_level in ("aucun", "lecture"):
+        raise HTTPException(status_code=403, detail="write_access_denied")
+
+    contact_res = await supabase_execute(
+        supabase.table("contacts").select("id, whatsapp_number").eq("id", contact_id).limit(1)
+    )
+    if not contact_res.data:
+        raise HTTPException(status_code=404, detail="contact_not_found")
+    wa_num = contact_res.data[0].get("whatsapp_number")
+    if not wa_num:
+        raise HTTPException(status_code=400, detail="contact_has_no_whatsapp_number")
+
+    account = await get_account_by_id(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+
+    from app.services.whatsapp_api_service import normalize_whatsapp_user_id
+
+    norm = normalize_whatsapp_user_id(str(wa_num))
+    try:
+        await upsert_internal_block(contact_id, account_id)
+    except InternalBlocksTableNotMigrated:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "internal_contact_blocks_table_missing — Exécute sur Postgres le fichier "
+                "supabase/migrations/050_internal_contact_blocks.sql (table internal_contact_blocks)."
+            ),
+        ) from None
+
+    return {"success": True, "blocked": True, "whatsapp_number": norm}
+
+
+@router.delete("/{contact_id}/meta-block")
+async def meta_unblock_contact(
+    contact_id: str,
+    account_id: str = Query(...),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Retire le blocage interne app pour ce contact × compte."""
+    _validate_contact_id(contact_id)
+    current_user.require(PermissionCodes.MESSAGES_SEND, account_id)
+    access_level = current_user.permissions.account_access_levels.get(account_id)
+    if access_level in ("aucun", "lecture"):
+        raise HTTPException(status_code=403, detail="write_access_denied")
+
+    contact_res = await supabase_execute(
+        supabase.table("contacts").select("id, whatsapp_number").eq("id", contact_id).limit(1)
+    )
+    if not contact_res.data:
+        raise HTTPException(status_code=404, detail="contact_not_found")
+    wa_num = contact_res.data[0].get("whatsapp_number")
+    if not wa_num:
+        raise HTTPException(status_code=400, detail="contact_has_no_whatsapp_number")
+
+    account = await get_account_by_id(account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="account_not_found")
+
+    from app.services.whatsapp_api_service import normalize_whatsapp_user_id
+
+    norm = normalize_whatsapp_user_id(str(wa_num))
+    try:
+        await remove_internal_block(contact_id, account_id)
+    except InternalBlocksTableNotMigrated:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "internal_contact_blocks_table_missing — Exécute sur Postgres le fichier "
+                "supabase/migrations/050_internal_contact_blocks.sql (table internal_contact_blocks)."
+            ),
+        ) from None
+
+    return {"success": True, "blocked": False, "whatsapp_number": norm}
 
 
 @router.post("")

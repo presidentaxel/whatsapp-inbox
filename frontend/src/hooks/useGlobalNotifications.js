@@ -11,8 +11,16 @@ import { useAuth } from '../context/AuthContext';
  * Hook global pour écouter TOUS les nouveaux messages et afficher des notifications
  * Vérifie les permissions avant d'envoyer une notification
  * Ne notifie que si l'utilisateur a accès au compte/conversation
+ *
+ * `suppressInboundForConversation` (optionnel): ref mutable vers une fonction
+ * `(conversation) => boolean` ; si true, pas de notification ni d'callback onInboundMessage
+ * (ex. conversation « bannie » dans l'app uniquement).
  */
-export function useGlobalNotifications(selectedConversationId = null, onInboundMessage = null) {
+export function useGlobalNotifications(
+  selectedConversationId = null,
+  onInboundMessage = null,
+  suppressInboundForConversationRef = null
+) {
   const { hasPermission, profile } = useAuth();
   const channelRef = useRef(null);
   const lastNotifiedRef = useRef(new Set());
@@ -57,7 +65,7 @@ export function useGlobalNotifications(selectedConversationId = null, onInboundM
             lastNotifiedRef.current.delete(messageKey);
           }, 5 * 60 * 1000);
 
-          // Charger la conversation pour obtenir les infos du contact
+            // Charger la conversation pour obtenir les infos du contact
           try {
             const { data: conversation, error } = await supabaseClient
               .from('conversations')
@@ -66,6 +74,14 @@ export function useGlobalNotifications(selectedConversationId = null, onInboundM
               .single();
 
             if (error || !conversation) {
+              return;
+            }
+
+            const suppress =
+              suppressInboundForConversationRef &&
+              typeof suppressInboundForConversationRef.current === 'function' &&
+              suppressInboundForConversationRef.current(conversation);
+            if (suppress) {
               return;
             }
 
@@ -141,6 +157,6 @@ export function useGlobalNotifications(selectedConversationId = null, onInboundM
       }
       lastNotifiedRef.current.clear();
     };
-  }, [selectedConversationId, hasPermission, profile, onInboundMessage]);
+  }, [selectedConversationId, hasPermission, profile, onInboundMessage, suppressInboundForConversationRef]);
 }
 

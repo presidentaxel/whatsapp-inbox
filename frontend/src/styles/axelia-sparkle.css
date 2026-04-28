@@ -1,0 +1,39 @@
+.axelia-sparkle-glyph {
+  position: relative;
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.axelia-sparkle-glyph__star {
+  display: block;
+}
+
+.axelia-sparkle-glyph__orbit {
+  position: absolute;
+  inset: -8px;
+  width: calc(100% + 16px);
+  height: calc(100% + 16px);
+  animation: axelia-orbit-spin 1.05s linear infinite;
+  pointer-events: none;
+}
+
+.axelia-sparkle-glyph--animate .axelia-sparkle-glyph__orbit {
+  opacity: 1;
+}
+
+.axelia-sparkle-glyph:not(.axelia-sparkle-glyph--animate) .axelia-sparkle-glyph__orbit {
+  display: none;
+}
+
+@keyframes axelia-orbit-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

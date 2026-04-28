@@ -15,6 +15,7 @@ export default function MobileChatWindow({
   onRefresh,
   onShowContact,
   onBotSettingsUpdated,
+  conversationInternallyBlocked = false,
 }) {
   const [messages, setMessages] = useState([]);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
@@ -270,7 +271,7 @@ export default function MobileChatWindow({
 
   // Polling régulier pour mobile (plus fiable que realtime sur mobile)
   useEffect(() => {
-    if (!conversation?.id) return;
+    if (!conversation?.id || conversationInternallyBlocked) return;
 
     const pollInterval = setInterval(() => {
       refreshMessages();
@@ -279,7 +280,7 @@ export default function MobileChatWindow({
     return () => {
       clearInterval(pollInterval);
     };
-  }, [conversation?.id, refreshMessages]);
+  }, [conversation?.id, refreshMessages, conversationInternallyBlocked]);
 
   // Realtime updates
   useEffect(() => {
@@ -306,6 +307,7 @@ export default function MobileChatWindow({
         },
         (payload) => {
           const incoming = payload.new;
+          if (conversationInternallyBlocked) return;
           if (incoming.message_type === "reaction" || incoming.is_system === true) return;
 
           setMessages((prev) => {
@@ -331,6 +333,7 @@ export default function MobileChatWindow({
         },
         (payload) => {
           const updated = payload.new;
+          if (conversationInternallyBlocked) return;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === updated.id || (updated.wa_message_id && m.wa_message_id === updated.wa_message_id)
@@ -345,7 +348,7 @@ export default function MobileChatWindow({
     return () => {
       supabaseClient.removeChannel(channel);
     };
-  }, [conversation?.id]);
+  }, [conversation?.id, conversationInternallyBlocked]);
 
   // Réinitialiser le scroll quand on change de conversation
   useEffect(() => {
@@ -729,11 +732,19 @@ export default function MobileChatWindow({
 
       {/* Input mobile simplifié */}
       <div className="mobile-chat__input">
-        <MobileMessageInput
-          conversationId={conversation?.id}
-          accountId={conversation?.account_id}
-          onSend={handleSendMessage}
-          onMediaSent={(optimisticMessage) => {
+        {conversationInternallyBlocked ? (
+          <div className="chat-internal-block-banner" role="status">
+            <p>
+              Contact <strong>bloqué dans l’app</strong> sur cette ligne — envoi désactivé. Les nouveaux
+              messages restent traités côté serveur sans mise à jour de cette vue.
+            </p>
+          </div>
+        ) : (
+          <MobileMessageInput
+            conversationId={conversation?.id}
+            accountId={conversation?.account_id}
+            onSend={handleSendMessage}
+            onMediaSent={(optimisticMessage) => {
             // Si null = signal de fin d'envoi -> supprimer optimiste + refresh
             if (!optimisticMessage) {
               setMessages((prev) => prev.filter(msg => !msg._isOptimistic && !msg.id?.startsWith('temp-')));
@@ -761,6 +772,7 @@ export default function MobileChatWindow({
           messages={messages}
           disabled={false}
         />
+        )}
       </div>
 
       {/* Modales */}

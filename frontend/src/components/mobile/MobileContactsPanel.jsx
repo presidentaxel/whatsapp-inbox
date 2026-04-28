@@ -1,21 +1,49 @@
-import { useState, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { FiSearch, FiUserPlus } from "react-icons/fi";
 import { formatPhoneNumber } from "../../utils/formatPhone";
+import { filterContactsBySearch } from "../../utils/contactSearch";
 import MobileContactForm from "./MobileContactForm";
 import MobileContactDetail from "./MobileContactDetail";
 
-export default function MobileContactsPanel({ contacts, activeAccount, onRefresh, initialContact }) {
+export default function MobileContactsPanel({
+  contacts,
+  activeAccount,
+  onRefresh,
+  initialContact,
+  metaBlockedNormalizedIds = [],
+  canModerateWaAny = false,
+  metaBlockBusyId = null,
+  onMetaBlockOpen,
+  onContactsSearchQuery,
+}) {
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [selectedContact, setSelectedContact] = useState(initialContact || null);
 
-  const filteredContacts = contacts.filter(contact => {
-    if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
-    const name = (contact.display_name || "").toLowerCase();
-    const phone = (contact.whatsapp_number || "").toLowerCase();
-    return name.includes(term) || phone.includes(term);
-  });
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchTerm), 320);
+    return () => window.clearTimeout(t);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    onContactsSearchQuery?.(debouncedSearch);
+  }, [debouncedSearch, onContactsSearchQuery]);
+
+  const blockedSet =
+    metaBlockedNormalizedIds instanceof Set
+      ? metaBlockedNormalizedIds
+      : new Set(metaBlockedNormalizedIds || []);
+
+  const normalizeWaDigits = (phone) => String(phone || "").replace(/\D/g, "");
+
+  const isMetaBlocked = (contact) =>
+    blockedSet.has(normalizeWaDigits(contact?.whatsapp_number));
+
+  const filteredContacts = useMemo(
+    () => filterContactsBySearch(contacts, searchTerm),
+    [contacts, searchTerm]
+  );
 
   const handleContactCreated = () => {
     setShowForm(false);
@@ -45,13 +73,6 @@ export default function MobileContactsPanel({ contacts, activeAccount, onRefresh
     }
   }, [initialContact]);
 
-  // Si un contact initial est fourni, l'afficher
-  useEffect(() => {
-    if (initialContact) {
-      setSelectedContact(initialContact);
-    }
-  }, [initialContact]);
-
   if (showForm) {
     return (
       <MobileContactForm
@@ -69,6 +90,10 @@ export default function MobileContactsPanel({ contacts, activeAccount, onRefresh
         onBack={() => setSelectedContact(null)}
         onUpdate={handleContactUpdated}
         onDelete={handleContactDeleted}
+        metaBlocked={isMetaBlocked(selectedContact)}
+        canModerateWaAny={canModerateWaAny}
+        metaBlockBusy={metaBlockBusyId === selectedContact.id}
+        onMetaBlockOpen={(action) => onMetaBlockOpen?.(selectedContact, action)}
       />
     );
   }
@@ -86,14 +111,16 @@ export default function MobileContactsPanel({ contacts, activeAccount, onRefresh
         </button>
       </header>
 
-      <div className="mobile-panel-search">
-        <div className="search-box">
-          <FiSearch />
+      <div className="mobile-panel-search mobile-panel-search--contacts">
+        <div className="search-box search-box--contacts">
+          <FiSearch aria-hidden />
           <input
-            type="text"
-            placeholder="Rechercher un contact..."
+            type="search"
+            placeholder="Nom, prénom, numéro…"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
           />
         </div>
       </div>
@@ -116,6 +143,7 @@ export default function MobileContactsPanel({ contacts, activeAccount, onRefresh
               <div className="mobile-contact-item__info">
                 <span className="mobile-contact-item__name">
                   {contact.display_name || "Sans nom"}
+                  {isMetaBlocked(contact) ? " · Bloqué" : ""}
                 </span>
                 <span className="mobile-contact-item__phone">
                   {formatPhoneNumber(contact.whatsapp_number)}

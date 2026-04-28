@@ -27,6 +27,7 @@ export default function ChatWindow({
   onMarkRead,
   canSend = true,
   isWindowActive = true,
+  conversationInternallyBlocked = false,
 }) {
   const { profile } = useAuth();
   const [messages, setMessages] = useState([]);
@@ -314,7 +315,7 @@ export default function ChatWindow({
 
 
   useEffect(() => {
-    if (!conversationId || !isWindowActive) {
+    if (!conversationId || !isWindowActive || conversationInternallyBlocked) {
       return;
     }
     let cancelled = false;
@@ -332,7 +333,7 @@ export default function ChatWindow({
         clearTimeout(timeoutId);
       }
     };
-  }, [conversationId, refreshMessages, isWindowActive]);
+  }, [conversationId, refreshMessages, isWindowActive, conversationInternallyBlocked]);
 
   // Détecter si l'autre personne est en train d'écrire
   // Basé sur le timing des messages entrants récents
@@ -412,6 +413,7 @@ export default function ChatWindow({
         },
         (payload) => {
           const incoming = payload.new;
+          if (conversationInternallyBlocked) return;
           if (incoming.message_type === "reaction" || incoming.is_system === true) return;
 
           setMessages((prev) => {
@@ -449,6 +451,7 @@ export default function ChatWindow({
         },
         (payload) => {
           const updated = payload.new;
+          if (conversationInternallyBlocked) return;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === updated.id || (updated.wa_message_id && m.wa_message_id === updated.wa_message_id)
@@ -467,7 +470,7 @@ export default function ChatWindow({
         },
         (payload) => {
           const msgId = payload.new?.message_id || payload.old?.message_id;
-          if (!msgId) return;
+          if (!msgId || conversationInternallyBlocked) return;
           setMessages((prev) => {
             if (prev.some((m) => m.id === msgId || m.wa_message_id === msgId)) {
               refreshMessages();
@@ -481,7 +484,7 @@ export default function ChatWindow({
     return () => {
       supabaseClient.removeChannel(channel);
     };
-  }, [conversationId]);
+  }, [conversationId, conversationInternallyBlocked, refreshMessages]);
 
   const onSend = async (text, forceRefresh = false, optimisticMessageOverride = null) => {
     if (!conversationId) return;
@@ -1157,7 +1160,7 @@ export default function ChatWindow({
       </div>
 
       {/* Affichage du message quoted au-dessus de la barre de saisie */}
-      {replyingToMessage && (
+      {replyingToMessage && !conversationInternallyBlocked && (
         <div className="message-input__reply-preview">
           <div className="message-input__reply-content">
             <div className="message-input__reply-indicator"></div>
@@ -1180,15 +1183,23 @@ export default function ChatWindow({
         </div>
       )}
       
-      <AdvancedMessageInput 
-        conversation={conversation}
-        onSend={onSend}
-        disabled={!canSend || !conversationId}
-        accountId={conversation?.account_id}
-        messages={messages}
-        replyingToMessage={replyingToMessage}
-        onCancelReply={() => setReplyingToMessage(null)}
-      />
+      {conversationInternallyBlocked ? (
+        <div className="chat-internal-block-banner" role="status">
+          <p>
+            Ce contact est <strong>bloqué dans l’app</strong> sur cette ligne.
+          </p>
+        </div>
+      ) : (
+        <AdvancedMessageInput
+          conversation={conversation}
+          onSend={onSend}
+          disabled={!canSend || !conversationId}
+          accountId={conversation?.account_id}
+          messages={messages}
+          replyingToMessage={replyingToMessage}
+          onCancelReply={() => setReplyingToMessage(null)}
+        />
+      )}
 
     </div>
   );

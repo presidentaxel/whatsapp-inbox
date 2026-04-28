@@ -59,6 +59,98 @@ SKILLS_CATALOG: List[Dict[str, Any]] = [
     },
 ]
 
+# Skills additionnels réservés au hub Axelia (inbox CRM / actions sensibles).
+AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
+    {
+        "name": "search_inbox_messages",
+        "description": (
+            "Recherche dans les messages texte du compte WABA courant (toutes conversations) "
+            "pour retrouver des échanges mentionnant des sujets ou mots-clés."
+        ),
+        "parameters": [
+            {"name": "query", "type": "string", "required": True},
+            {"name": "limit", "type": "integer", "required": False},
+        ],
+        "use_when": (
+            "l’utilisateur cherche qui a évoqué un sujet, un produit, un prénom dans l’historique."
+        ),
+    },
+    {
+        "name": "get_conversation_digest",
+        "description": (
+            "Récupère les derniers messages texte d’une conversation inbox (résumé ou contexte), "
+            "pour le conversation_id UUID connu."
+        ),
+        "parameters": [
+            {"name": "conversation_id", "type": "string", "required": True},
+            {"name": "max_messages", "type": "integer", "required": False},
+        ],
+        "use_when": (
+            "résumer ou relire une discussion précise après l’avoir identifiée (souvent via search_inbox_messages)."
+        ),
+    },
+    {
+        "name": "meta_block_contact",
+        "description": (
+            "Bloque un contact sur la ligne WhatsApp Business (API Meta block_users). "
+            "Action sensible : le backend ne l’exécute pas tant que l’utilisateur n’a pas confirmé dans l’interface."
+        ),
+        "parameters": [
+            {"name": "contact_id", "type": "string", "required": True},
+        ],
+        "use_when": (
+            "l’utilisateur confirme vouloir bloquer quelqu’un ; contact_id doit provenir des données CRM "
+            "(jamais inventé). Si plusieurs comptes WABA, demande explicitement sur quel compte "
+            "(doit correspondre au périmètre sélectionné dans l’UI)."
+        ),
+    },
+]
+
+
+def get_axelia_skills_prompt_section() -> str:
+    """
+    Version Axelia (hub IA) : mêmes outils que le Playground, sans graphe ni todo.
+    """
+    lines = [
+        "OUTILS DISPONIBLES (skills) — Playground + inbox CRM Axelia :",
+        "Tu réponds par un **unique** objet JSON ( MIME application/json ) avec les champs :",
+        '  {"reply": "<texte visible pour l’utilisateur>", "tool_calls": []}',
+        'Chaque entrée de tool_calls : {"skill": "nom_du_skill", "args": { ... } }',
+        "Le backend exécute les skills et te renvoie les résultats dans un message suivant.",
+        "Ne devine pas les noms de templates, groupes ou UUID : appelle les skills.",
+        "Pour create_template et meta_block_contact : confirmation utilisateur obligatoire dans l’UI "
+        "(tu inclus tool_calls avec les args ; tu n’exécutes pas toi‑même l’action sensible).",
+        "Tu agis uniquement dans le périmètre du compte WABA sélectionné par l’utilisateur dans l’interface "
+        "(pas d’action sur un autre compte). Si le périmètre est « tous les comptes », demande de choisir une ligne avant.",
+        "",
+    ]
+    for sk in [*SKILLS_CATALOG, *AXELIA_ONLY_SKILLS]:
+        params_str = "aucun"
+        if sk["parameters"]:
+            parts = []
+            for p in sk["parameters"]:
+                s = f"{p['name']} ({p['type']})"
+                if p.get("enum"):
+                    s += f" [{' | '.join(p['enum'])}]"
+                if not p.get("required"):
+                    s += " optionnel"
+                parts.append(s)
+            params_str = ", ".join(parts)
+        lines.append(f"- {sk['name']} : {sk['description']}")
+        lines.append(f"  Paramètres : {params_str}")
+        lines.append(f"  Utilise quand : {sk['use_when']}")
+        lines.append("")
+    lines.extend([
+        "Règles compactes :",
+        "- Templates : list_templates → get_template_status si besoin → create_template après accord explicite.",
+        "- Campagnes / ciblage : list_broadcast_groups dès que les groupes ou volumes comptent.",
+        "- Inbox : search_inbox_messages avec une requête en mots-clés ; affine avec des questions si trop de résultats.",
+        "- Résumés : get_conversation_digest une fois conversation_id connu.",
+        "- Blocage Meta : meta_block_contact seulement avec contact_id réel ; jamais sans confirmation UI.",
+        "- Réponse reply : française, concise, utile ; pas de bloc Markdown avec dièses en titres.",
+    ])
+    return "\n".join(lines)
+
 
 def get_skills_prompt_section() -> str:
     """Texte injecté dans le prompt système pour décrire les skills disponibles."""
@@ -391,11 +483,63 @@ async def _skill_list_broadcast_groups(
     return {"total": len(summaries), "groups": summaries}
 
 
+async def _skill_search_inbox_messages(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    from app.services.axelia_inbox_tools import search_messages_text_for_account
+
+    q = (args.get("query") or "").strip()
+    lim_raw = args.get("limit")
+    try:
+        lim_i = int(lim_raw) if lim_raw is not None else 25
+    except (TypeError, ValueError):
+        lim_i = 25
+    aid = str(account.get("id") or "")
+    if not aid:
+        return {"error": "Compte WABA manquant pour la recherche."}
+    return await search_messages_text_for_account(aid, q, limit=lim_i)
+
+
+async def _skill_get_conversation_digest(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    from app.services.axelia_inbox_tools import get_conversation_digest_for_account
+
+    cid = (args.get("conversation_id") or "").strip()
+    lim_raw = args.get("max_messages")
+    try:
+        cap = int(lim_raw) if lim_raw is not None else 40
+    except (TypeError, ValueError):
+        cap = 40
+    aid = str(account.get("id") or "")
+    if not aid:
+        return {"error": "Compte WABA manquant."}
+    return await get_conversation_digest_for_account(aid, cid, max_messages=cap)
+
+
+async def _skill_meta_block_contact_stub(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    _ = args, account
+    return {
+        "error": (
+            "Le blocage Meta est réservé à la file de confirmation utilisateur dans Axelia "
+            "(ne peut pas être exécuté directement ici)."
+        )
+    }
+
+
 _SKILL_HANDLERS = {
     "list_templates": _skill_list_templates,
     "get_template_status": _skill_get_template_status,
     "create_template": _skill_create_template,
     "list_broadcast_groups": _skill_list_broadcast_groups,
+    "search_inbox_messages": _skill_search_inbox_messages,
+    "get_conversation_digest": _skill_get_conversation_digest,
+    "meta_block_contact": _skill_meta_block_contact_stub,
 }
 
 

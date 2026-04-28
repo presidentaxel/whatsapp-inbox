@@ -75,6 +75,15 @@
     reverse_proxy frontend:80
   }
 
+  # Erreurs générées par Caddy (ex. upstream injoignable → 502) : page HTML statique du frontend
+  # Les réponses HTTP 5xx renvoyées "normalement" par l'upstream ne passent pas par handle_errors.
+  handle_errors 5xx {
+    rewrite * /50x.html
+    reverse_proxy frontend:80 {
+      replace_status {err.status_code}
+    }
+  }
+
   header {
     Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
     X-Content-Type-Options "nosniff"

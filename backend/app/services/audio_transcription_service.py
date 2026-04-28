@@ -1,9 +1,10 @@
 """
-Transcription manuelle des messages audio/voice entrants via Gemini (inline audio).
-Déclenchée par l’API à la demande, pas à la réception du média.
+Transcription des messages audio/voice entrants via Gemini (inline audio).
+À la demande (API) et automatiquement pour le bot (Gemini ou Playground) si bot activé sur la conversation.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,6 +22,16 @@ from app.services.conversation_service import get_conversation_by_id
 from app.services.message_service import fetch_message_media_content
 
 logger = logging.getLogger(__name__)
+
+# Nouvelles tentatives après réception (API médias WhatsApp / Gemini parfois instables).
+_RETRYABLE_BOT_TRANSCRIPTION_DETAILS = frozenset(
+    {
+        "media_fetch_failed",
+        "transcription_failed",
+        "media_not_available",
+    }
+)
+_BOT_TRANSCRIPTION_RETRY_DELAYS_S = (0.0, 0.8, 2.0, 4.0)
 
 _TRANSCRIBE_PROMPT = (
     "Transcris intégralement ce message audio en français. "
@@ -274,18 +285,36 @@ async def ensure_inbound_audio_transcript_for_bot(message_id: str) -> Optional[s
     """
     Transcrit un vocal entrant pour alimenter Gemini / playground (même logique que l’API manuelle).
     Réutilise audio_transcript en base si déjà présent.
+    Retente quelques fois en cas d’erreur réseau / média non prêt pour laisser le bot avancer.
     """
     from app.services.message_service import get_message_by_id
 
-    message = await get_message_by_id(message_id)
-    if not message:
-        return None
-    result = await transcribe_inbound_audio_on_demand_for_message(message, for_bot=True)
-    if result.get("ok"):
-        return (result.get("transcript") or "").strip()
+    last_detail: Optional[str] = None
+    for attempt, delay_s in enumerate(_BOT_TRANSCRIPTION_RETRY_DELAYS_S):
+        if delay_s:
+            await asyncio.sleep(delay_s)
+        message = await get_message_by_id(message_id)
+        if not message:
+            return None
+        existing = (message.get("audio_transcript") or "").strip()
+        if existing:
+            return existing
+        result = await transcribe_inbound_audio_on_demand_for_message(message, for_bot=True)
+        if result.get("ok"):
+            return (result.get("transcript") or "").strip()
+        last_detail = str(result.get("detail") or "")
+        if last_detail not in _RETRYABLE_BOT_TRANSCRIPTION_DETAILS:
+            break
+        logger.info(
+            "bot: transcription audio nouvel essai message_id=%s attempt=%s/%s detail=%s",
+            message_id,
+            attempt + 1,
+            len(_BOT_TRANSCRIPTION_RETRY_DELAYS_S),
+            last_detail,
+        )
     logger.warning(
         "bot: transcription audio échouée message_id=%s detail=%s",
         message_id,
-        result.get("detail"),
+        last_detail,
     )
     return None

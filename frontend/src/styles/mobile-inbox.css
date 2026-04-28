@@ -203,6 +203,24 @@
   color: #667781;
 }
 
+.search-box--contacts {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.search-box--contacts:focus-within {
+  border-color: rgba(37, 211, 102, 0.45);
+  box-shadow: 0 0 0 2px rgba(37, 211, 102, 0.12);
+}
+
+.search-box--contacts input {
+  color: #e9edef;
+}
+
+.mobile-panel-search--contacts {
+  padding-top: 0.25rem;
+}
+
 .mobile-conversations__account-selector {
   padding: 0.5rem 1rem;
   background: #0b1014;

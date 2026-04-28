@@ -403,6 +403,50 @@ async def set_conversation_bot_mode(
     return raw
 
 
+async def force_human_mode_for_contact_account(contact_id: str, account_id: str) -> None:
+    """
+    Passe en mode humain (bot désactivé) pour toutes les conversations de ce couple contact × compte.
+    À appeler lors d'un blocage interne app pour éviter tout délire du bot quel que soit l'état précédent.
+    """
+    cid = str(contact_id or "").strip()
+    aid = str(account_id or "").strip()
+    if not cid or not aid:
+        return
+
+    if get_pool():
+        rows = await fetch_all(
+            """
+            UPDATE conversations SET bot_enabled = false
+            WHERE contact_id = $1::uuid AND account_id = $2::uuid
+            RETURNING id::text AS id
+            """,
+            cid,
+            aid,
+        )
+        for row in rows or []:
+            rid = row.get("id")
+            if rid:
+                await invalidate_cache_pattern(f"conversation:{rid}")
+        return
+
+    ids_res = await supabase_execute(
+        supabase.table("conversations")
+        .select("id")
+        .eq("contact_id", cid)
+        .eq("account_id", aid)
+    )
+    row_ids = [str(r["id"]) for r in ids_res.data or [] if r.get("id")]
+    if not row_ids:
+        return
+    await supabase_execute(
+        supabase.table("conversations").update({"bot_enabled": False}).eq("contact_id", cid).eq(
+            "account_id", aid
+        )
+    )
+    for rid in row_ids:
+        await invalidate_cache_pattern(f"conversation:{rid}")
+
+
 async def ensure_playground_sandbox_conversation(
     account_id: str, flow_id: str
 ) -> Optional[dict]:

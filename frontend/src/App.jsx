@@ -1,4 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { supabaseClient } from "./api/supabaseClient";
 import { getDeviceType } from "./utils/deviceDetection";
 import { getAuthSession, saveAuthSession, clearAuthSession } from "./utils/secureStorage";
@@ -12,6 +13,7 @@ const LoginPage = lazy(() => import("./pages/LoginPage"));
 const MobileLoginPage = lazy(() => import("./pages/MobileLoginPage"));
 const MobileInboxPage = lazy(() => import("./pages/MobileInboxPage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
+const HttpErrorPage = lazy(() => import("./pages/HttpErrorPage"));
 
 // Composant mobile (sans AuthProvider, gestion directe)
 function MobileApp() {
@@ -107,7 +109,13 @@ function MobileApp() {
     return <Suspense fallback={fallback}><MobileLoginPage onLoginSuccess={handleLoginSuccess} /></Suspense>;
   }
 
-  return <Suspense fallback={fallback}><MobileInboxPage onLogout={handleLogout} /></Suspense>;
+  return (
+    <Suspense fallback={fallback}>
+      <AuthProvider>
+        <MobileInboxPage onLogout={handleLogout} />
+      </AuthProvider>
+    </Suspense>
+  );
 }
 
 // Composant desktop (avec AuthProvider)
@@ -135,10 +143,25 @@ function DesktopApp() {
 
   return (
     <Suspense fallback={fallback}>
-      <div className="app">
-        <AppHeader />
-        <InboxPage />
-      </div>
+      <BrowserRouter
+        future={{
+          v7_startTransition: true,
+          v7_relativeSplatPath: true,
+        }}
+      >
+        <div className="app">
+          <AppHeader />
+          <Routes>
+            <Route path="/" element={<Navigate to="/discussions" replace />} />
+            <Route path="/404" element={<HttpErrorPage code={404} />} />
+            <Route path="/500" element={<HttpErrorPage code={500} />} />
+            <Route path="/502" element={<HttpErrorPage code={502} />} />
+            <Route path="/503" element={<HttpErrorPage code={503} />} />
+            <Route path="/:inboxSection" element={<InboxPage />} />
+            <Route path="*" element={<HttpErrorPage code={404} />} />
+          </Routes>
+        </div>
+      </BrowserRouter>
     </Suspense>
   );
 }

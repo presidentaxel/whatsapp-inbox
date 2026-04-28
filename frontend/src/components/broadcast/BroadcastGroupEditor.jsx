@@ -11,6 +11,7 @@ import {
   importBroadcastRecipientsCsv,
 } from "../../api/broadcastApi";
 import { formatPhoneNumber } from "../../utils/formatPhone";
+import { contactMatchesSearch, foldString } from "../../utils/contactSearch";
 
 function normalizePhoneDigits(raw) {
   let d = String(raw || "").replace(/\D/g, "");
@@ -85,7 +86,7 @@ export default function BroadcastGroupEditor({
 
   const loadContacts = async () => {
     try {
-      const res = await getContacts({ limit: 1000 });
+      const res = await getContacts({ limit: 15000 });
       setContacts(res.data?.items || res.data || []);
     } catch (error) {
       console.error("Error loading contacts:", error);
@@ -290,45 +291,40 @@ export default function BroadcastGroupEditor({
   };
 
   const filteredContacts = contacts
-    .filter((c) => {
-      const term = searchTerm.toLowerCase();
-      const name = (c.display_name || "").toLowerCase();
-      const phone = (c.whatsapp_number || "").toLowerCase();
-      return name.includes(term) || phone.includes(term);
-    })
+    .filter((c) => contactMatchesSearch(c, searchTerm))
     .sort((a, b) => {
-      const term = searchTerm.toLowerCase();
-      const aName = (a.display_name || "").toLowerCase();
-      const bName = (b.display_name || "").toLowerCase();
-      const aPhone = (a.whatsapp_number || "").toLowerCase();
-      const bPhone = (b.whatsapp_number || "").toLowerCase();
-      
-      // Prioriser les correspondances exactes
+      const termRaw = searchTerm.trim();
+      if (!termRaw) {
+        return foldString(a.display_name || "").localeCompare(foldString(b.display_name || ""));
+      }
+      const term = foldString(termRaw);
+      const termDigits = termRaw.replace(/\D/g, "");
+      const aName = foldString(a.display_name || "");
+      const bName = foldString(b.display_name || "");
+      const aD = (a.whatsapp_number || "").replace(/\D/g, "");
+      const bD = (b.whatsapp_number || "").replace(/\D/g, "");
+
       const aNameExact = aName === term;
       const bNameExact = bName === term;
-      const aPhoneExact = aPhone === term;
-      const bPhoneExact = bPhone === term;
-      
-      // Correspondance exacte du nom en premier
+      const aPhoneExact = termDigits.length >= 2 && aD === termDigits;
+      const bPhoneExact = termDigits.length >= 2 && bD === termDigits;
+
       if (aNameExact && !bNameExact) return -1;
       if (!aNameExact && bNameExact) return 1;
-      
-      // Correspondance exacte du téléphone en deuxième
+
       if (aPhoneExact && !bPhoneExact) return -1;
       if (!aPhoneExact && bPhoneExact) return 1;
-      
-      // Prioriser les correspondances qui commencent par le terme
+
       const aNameStarts = aName.startsWith(term);
       const bNameStarts = bName.startsWith(term);
-      const aPhoneStarts = aPhone.startsWith(term);
-      const bPhoneStarts = bPhone.startsWith(term);
-      
+      const aPhoneStarts = termDigits.length >= 1 && aD.startsWith(termDigits);
+      const bPhoneStarts = termDigits.length >= 1 && bD.startsWith(termDigits);
+
       if (aNameStarts && !bNameStarts && !bPhoneStarts) return -1;
       if (!aNameStarts && !aPhoneStarts && bNameStarts) return 1;
       if (aPhoneStarts && !bPhoneStarts && !bNameStarts) return -1;
       if (!aPhoneStarts && !aNameStarts && bPhoneStarts) return 1;
-      
-      // Sinon, ordre alphabétique
+
       return aName.localeCompare(bName);
     });
 
@@ -450,7 +446,7 @@ export default function BroadcastGroupEditor({
                         <FiSearch />
                         <input
                           type="text"
-                          placeholder="Nom ou numéro..."
+                          placeholder="Nom, prénom, numéro…"
                           value={searchTerm}
                           onChange={(e) => setSearchTerm(e.target.value)}
                         />

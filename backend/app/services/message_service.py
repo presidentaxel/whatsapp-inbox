@@ -1433,6 +1433,24 @@ def _is_playground_sandbox_conversation(conversation: Optional[Dict[str, Any]]) 
     return n == SANDBOX_PLAYGROUND_CLIENT_NUMBER
 
 
+async def _internal_block_error(conversation: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Blocage « ban app » uniquement ; ne s’applique pas au sandbox Playground."""
+    if not conversation or _is_playground_sandbox_conversation(conversation):
+        return None
+    cid = conversation.get("contact_id")
+    aid = conversation.get("account_id")
+    if not cid or not aid:
+        return None
+    from app.services.internal_block_service import is_internally_blocked
+
+    if await is_internally_blocked(str(cid), str(aid)):
+        return {
+            "error": "contact_internally_blocked",
+            "message": "Ce contact est bloqué sur cette ligne (paramètre dans l’app).",
+        }
+    return None
+
+
 async def _send_message_sandbox_internal(
     payload: dict,
     conversation: Dict[str, Any],
@@ -1743,6 +1761,12 @@ async def _maybe_trigger_bot_reply(
     )
 
     mt = (message_type or "text").lower() if message_type else "text"
+    wm = wa_message or {}
+    wm_type_raw = wm.get("type")
+    if isinstance(wm_type_raw, str):
+        wmt = wm_type_raw.lower()
+        if wmt in ("audio", "voice"):
+            mt = wmt
     message_text = (content_text or "").strip()
     if not message_text and mt not in ("audio", "voice"):
         logger.debug("bot skip: empty message for conversation %s", conversation_id)
@@ -1767,6 +1791,12 @@ async def _maybe_trigger_bot_reply(
         return
 
     account_id = conversation["account_id"]
+
+    from app.services.internal_block_service import is_internally_blocked
+
+    if await is_internally_blocked(str(conversation.get("contact_id")), str(account_id)):
+        logger.debug("bot skip: internally blocked contact conversation %s", conversation_id)
+        return
 
     if mt in ("audio", "voice"):
         if not message_db_id:
@@ -2421,6 +2451,10 @@ async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send
             is_system=is_system,
         )
 
+    blocked = await _internal_block_error(conversation)
+    if blocked:
+        return blocked
+
     # Vérifier si on est dans la fenêtre gratuite
     is_free, last_inbound_time = await is_within_free_window(conv_id)
     
@@ -2962,6 +2996,10 @@ async def send_message_with_template_fallback(payload: dict, skip_bot_trigger: b
             is_system=False,
         )
 
+    blocked = await _internal_block_error(conversation)
+    if blocked:
+        return blocked
+
     # Vérifier si on est dans la fenêtre gratuite
     is_free, last_inbound_time = await is_within_free_window(conv_id)
     
@@ -3172,6 +3210,10 @@ async def send_interactive_message_with_storage(
             outbound_meta=outbound_meta,
         )
 
+    blocked_ic = await _internal_block_error(conversation)
+    if blocked_ic:
+        return blocked_ic
+
     to_number = conversation["client_number"]
     account_id = conversation.get("account_id")
 
@@ -3325,6 +3367,12 @@ async def send_media_message_with_storage(
     """
     if not conversation_id or not media_id:
         return {"error": "invalid_payload"}
+
+    conv_precheck = await get_conversation_by_id(conversation_id)
+    if conv_precheck:
+        blocked = await _internal_block_error(conv_precheck)
+        if blocked:
+            return blocked
 
     # Vérifier si on est dans la fenêtre gratuite
     is_free, last_inbound_time = await is_within_free_window(conversation_id)

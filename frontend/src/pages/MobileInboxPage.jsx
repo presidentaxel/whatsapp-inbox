@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings, FiUserCheck } from "react-icons/fi";
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
-import { getContacts } from "../api/contactsApi";
+import { getContacts, getMetaBlockedWaIds, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
 import { supabaseClient } from "../api/supabaseClient";
 import { clearAuthSession } from "../utils/secureStorage";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
@@ -19,12 +19,15 @@ import MobileNotificationSettings from "../components/mobile/MobileNotificationS
 import MobileSettings from "../components/mobile/MobileSettings";
 import MobileConnectedDevices from "../components/mobile/MobileConnectedDevices";
 import MobileTeamPanel from "../components/mobile/MobileTeamPanel";
+import MetaBlockAccountModal from "../components/contacts/MetaBlockAccountModal";
+import { useAuth } from "../context/AuthContext";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import "../styles/mobile-inbox.css";
 
 const SIDEBAR_CHAT_SYNC_DEBOUNCE_MS = 220;
 
 export default function MobileInboxPage({ onLogout }) {
+  const { hasPermission, profile } = useAuth();
   const [activeTab, setActiveTab] = useState("conversations");
   const [accounts, setAccounts] = useState([]);
   const [activeAccount, setActiveAccount] = useState(null);
@@ -35,6 +38,10 @@ export default function MobileInboxPage({ onLogout }) {
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [contacts, setContacts] = useState([]);
   const [selectedContactFromChat, setSelectedContactFromChat] = useState(null);
+  const [contactsListQ, setContactsListQ] = useState("");
+  const [blockedByAccount, setBlockedByAccount] = useState({});
+  const [metaBlockBusyId, setMetaBlockBusyId] = useState(null);
+  const [metaBlockModal, setMetaBlockModal] = useState(null);
 
   const selectedConversationIdRef = useRef(null);
   const conversationRealtimeDebounceTimerRef = useRef(null);
@@ -51,6 +58,121 @@ export default function MobileInboxPage({ onLogout }) {
       }
     };
   }, []);
+
+  const normalizeWaDigits = useCallback((phone) => String(phone || "").replace(/\D/g, ""), []);
+
+  const loadAllBlockedWaForContacts = useCallback(async () => {
+    if (!accounts.length) {
+      setBlockedByAccount({});
+      return;
+    }
+    const targets = accounts.filter((a) => hasPermission?.("messages.view", a.id));
+    try {
+      const results = await Promise.all(
+        targets.map(async (a) => {
+          try {
+            const res = await getMetaBlockedWaIds(a.id);
+            const ids = (res.data?.wa_ids ?? []).map((x) => normalizeWaDigits(x));
+            return [a.id, ids];
+          } catch {
+            return [a.id, []];
+          }
+        })
+      );
+      setBlockedByAccount(Object.fromEntries(results));
+    } catch (e) {
+      console.error("meta block list:", e);
+      setBlockedByAccount({});
+    }
+  }, [accounts, hasPermission, normalizeWaDigits]);
+
+  const mergedBlockedWaIds = useMemo(() => {
+    const s = new Set();
+    Object.values(blockedByAccount).forEach((arr) => {
+      (arr || []).forEach((id) => s.add(id));
+    });
+    return s;
+  }, [blockedByAccount]);
+
+  const suppressInboundForConversationRef = useRef(() => false);
+  useEffect(() => {
+    suppressInboundForConversationRef.current = (conversation) => {
+      if (!conversation?.account_id) return false;
+      const wa = normalizeWaDigits(
+        conversation.contacts?.whatsapp_number ?? conversation.client_number ?? ""
+      );
+      if (!wa) return false;
+      return (blockedByAccount[conversation.account_id] || []).includes(wa);
+    };
+  }, [blockedByAccount, normalizeWaDigits]);
+
+  const blockedByAccountRef = useRef({});
+  useEffect(() => {
+    blockedByAccountRef.current = blockedByAccount;
+  }, [blockedByAccount]);
+
+  const conversationInternallyBlocked = useMemo(() => {
+    const c = selectedConversation;
+    if (!c?.account_id) return false;
+    const wa = normalizeWaDigits(c.contacts?.whatsapp_number ?? c.client_number ?? "");
+    if (!wa) return false;
+    return (blockedByAccount[c.account_id] || []).includes(wa);
+  }, [selectedConversation, blockedByAccount, normalizeWaDigits]);
+
+  const accountWriteOk = useCallback(
+    (accountId) => {
+      if (!hasPermission?.("messages.send", accountId)) return false;
+      const level = profile?.permissions?.account_access_levels?.[accountId];
+      return level !== "aucun" && level !== "lecture";
+    },
+    [hasPermission, profile]
+  );
+
+  const canModerateWaAny = useMemo(
+    () => accounts.some((a) => accountWriteOk(a.id)),
+    [accounts, accountWriteOk]
+  );
+
+  const metaBlockModalAccounts = useMemo(() => {
+    if (!metaBlockModal?.contact) return [];
+    const w = normalizeWaDigits(metaBlockModal.contact.whatsapp_number);
+    if (metaBlockModal.action === "block") {
+      return accounts.filter((a) => accountWriteOk(a.id));
+    }
+    return accounts.filter(
+      (a) => accountWriteOk(a.id) && (blockedByAccount[a.id] || []).includes(w)
+    );
+  }, [metaBlockModal, accounts, accountWriteOk, blockedByAccount, normalizeWaDigits]);
+
+  const handleMetaBlockModalConfirm = useCallback(
+    async (accountId) => {
+      const contact = metaBlockModal?.contact;
+      const action = metaBlockModal?.action;
+      if (!contact?.id || !action) return;
+      setMetaBlockBusyId(contact.id);
+      try {
+        if (action === "block") {
+          await metaBlockContact(contact.id, accountId);
+        } else {
+          await metaUnblockContact(contact.id, accountId);
+        }
+        await loadAllBlockedWaForContacts();
+        setMetaBlockModal(null);
+      } catch (error) {
+        const detail = error.response?.data?.detail;
+        alert(
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((d) => d.msg || d).join(", ")
+              : "Erreur blocage WhatsApp"
+        );
+      } finally {
+        setMetaBlockBusyId(null);
+      }
+    },
+    [metaBlockModal, loadAllBlockedWaForContacts]
+  );
 
   // Charger les comptes
   const loadAccounts = useCallback(async () => {
@@ -127,20 +249,27 @@ export default function MobileInboxPage({ onLogout }) {
     }
   }, [activeAccount, hasMoreConversations, loadingMoreConversations, conversationCursor]);
 
-  // Charger les contacts
+  // Charger les contacts (liste alignée avec la recherche serveur)
   const loadContacts = useCallback(async () => {
     try {
-      const res = await getContacts({ limit: 1000 });
+      const trimmed = contactsListQ.trim();
+      const params = trimmed ? { q: trimmed, limit: 8000 } : { limit: 15000 };
+      const res = await getContacts(params);
       setContacts(res.data?.items || res.data || []);
     } catch (error) {
       console.error("Erreur chargement contacts:", error);
     }
-  }, []);
+  }, [contactsListQ]);
 
   useEffect(() => {
     loadAccounts();
-    loadContacts();
-  }, [loadAccounts, loadContacts]);
+  }, [loadAccounts]);
+
+  useEffect(() => {
+    if (activeTab === "contacts") {
+      loadContacts();
+    }
+  }, [activeTab, contactsListQ, loadContacts]);
 
   // Sauvegarder le compte actif quand il change
   useEffect(() => {
@@ -148,6 +277,11 @@ export default function MobileInboxPage({ onLogout }) {
       saveActiveAccount(activeAccount);
     }
   }, [activeAccount]);
+
+  // Chargé au démarrage avec les comptes : le chat a besoin de l’état bloqué sans passer par l’onglet contacts.
+  useEffect(() => {
+    loadAllBlockedWaForContacts();
+  }, [loadAllBlockedWaForContacts]);
 
   useEffect(() => {
     if (activeAccount) {
@@ -180,7 +314,7 @@ export default function MobileInboxPage({ onLogout }) {
     [activeAccount, refreshConversations]
   );
 
-  useGlobalNotifications(selectedConversation?.id, onInboundMessage);
+  useGlobalNotifications(selectedConversation?.id, onInboundMessage, suppressInboundForConversationRef);
 
   // Realtime: refresh conversation list instantly when any conversation changes
   useEffect(() => {
@@ -202,6 +336,14 @@ export default function MobileInboxPage({ onLogout }) {
             setSelectedConversation((prev) =>
               prev?.id === updated.id ? null : prev
             );
+            return;
+          }
+          const waUpd = normalizeWaDigits(updated.client_number ?? "");
+          if (
+            updated.account_id &&
+            waUpd &&
+            (blockedByAccountRef.current[updated.account_id] || []).includes(waUpd)
+          ) {
             return;
           }
           const applyConversationUpdate = () => {
@@ -257,7 +399,7 @@ export default function MobileInboxPage({ onLogout }) {
       }
       supabaseClient.removeChannel(channel);
     };
-  }, [activeAccount]);
+  }, [activeAccount, normalizeWaDigits]);
 
   const optimisticallyMarkRead = useCallback((conversationIds) => {
     const ids = new Set(Array.isArray(conversationIds) ? conversationIds : [conversationIds]);
@@ -340,6 +482,7 @@ export default function MobileInboxPage({ onLogout }) {
         onRefresh={() => refreshConversations(activeAccount)}
         onShowContact={handleShowContact}
         onBotSettingsUpdated={handleBotSettingsUpdated}
+        conversationInternallyBlocked={conversationInternallyBlocked}
       />
     );
   }
@@ -367,12 +510,27 @@ export default function MobileInboxPage({ onLogout }) {
       
       case "contacts":
         return (
-          <MobileContactsPanel
-            contacts={contacts}
-            activeAccount={activeAccount}
-            onRefresh={loadContacts}
-            initialContact={selectedContactFromChat}
-          />
+          <>
+            <MobileContactsPanel
+              contacts={contacts}
+              activeAccount={activeAccount}
+              onRefresh={loadContacts}
+              initialContact={selectedContactFromChat}
+              metaBlockedNormalizedIds={mergedBlockedWaIds}
+              canModerateWaAny={canModerateWaAny}
+              metaBlockBusyId={metaBlockBusyId}
+              onMetaBlockOpen={(contact, action) => setMetaBlockModal({ contact, action })}
+              onContactsSearchQuery={setContactsListQ}
+            />
+            <MetaBlockAccountModal
+              open={Boolean(metaBlockModal)}
+              onClose={() => !metaBlockBusyId && setMetaBlockModal(null)}
+              action={metaBlockModal?.action}
+              accounts={metaBlockModalAccounts}
+              busy={Boolean(metaBlockBusyId && metaBlockModal?.contact?.id === metaBlockBusyId)}
+              onConfirm={handleMetaBlockModalConfirm}
+            />
+          </>
         );
       
       case "whatsapp":

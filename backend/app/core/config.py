@@ -87,6 +87,25 @@ class Settings:
         int(os.getenv("GEMINI_FLOW_RECENT_CONTEXT_CHARS", "32000") or "32000"),
     )
 
+    # Axelia (hub IA) — routage fast / pro (évaluation de difficulté avec le modèle rapide)
+    AXELIA_FAST_MODEL: str = _normalize_gemini_model_id(
+        (os.getenv("AXELIA_FAST_MODEL") or "").strip() or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    )
+    AXELIA_PRO_MODEL: str = _normalize_gemini_model_id(
+        (os.getenv("AXELIA_PRO_MODEL") or "").strip() or "gemini-2.5-pro"
+    )
+    AXELIA_DIFFICULTY_THRESHOLD: float = float(
+        os.getenv("AXELIA_DIFFICULTY_THRESHOLD", "0.42") or "0.42"
+    )
+    # Classification (un seul appel, sans retry HTTP) — latence Gemini variable
+    AXELIA_CLASSIFY_READ_TIMEOUT: float = float(
+        os.getenv("AXELIA_CLASSIFY_READ_TIMEOUT", "42") or "42"
+    )
+    # Si classify échoue (timeout, etc.) : score utilisé pour le routage (>= seuil → pro)
+    AXELIA_CLASSIFY_FALLBACK_DIFFICULTY: float = float(
+        os.getenv("AXELIA_CLASSIFY_FALLBACK_DIFFICULTY", "0.52") or "0.52"
+    )
+
     # Prometheus
     PROMETHEUS_ENABLED: bool = os.getenv("PROMETHEUS_ENABLED", "true").lower() == "true"
     PROMETHEUS_METRICS_PATH: str = os.getenv("PROMETHEUS_METRICS_PATH", "/metrics")
