@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.auth import get_current_user
 from app.core.cache import get_cache
@@ -12,6 +12,12 @@ from app.core.permissions import CurrentUser, PermissionCodes
 from app.services import admin_service
 from app.services.account_service import expose_accounts_public
 from app.services.message_service import handle_incoming_message
+from app.services.webhook_event_service import (
+    get_webhook_event_detail,
+    get_webhook_event_stats,
+    list_webhook_events,
+    retry_webhook_event,
+)
 
 router = APIRouter()
 
@@ -188,5 +194,109 @@ async def update_user_account_access(
         raise HTTPException(status_code=400, detail="access_level_required")
     await admin_service.set_user_account_access(user_id, account_id, access_level)
     return {"status": "ok", "user_id": user_id, "account_id": account_id, "access_level": access_level}
+
+
+@router.put("/users/{user_id}/axelia-access")
+async def update_user_axelia_access(
+    user_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Autoriser ou révoquer l'accès à Axelia (/axelia) pour un utilisateur."""
+    current_user.require(PermissionCodes.PERMISSIONS_MANAGE)
+    if "allowed" not in payload:
+        raise HTTPException(status_code=400, detail="allowed_required")
+    await admin_service.set_user_axelia_access(user_id, bool(payload["allowed"]))
+    return {"status": "ok", "user_id": user_id}
+
+
+@router.put("/users/{user_id}/playground-access")
+async def update_user_playground_access(
+    user_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Autoriser ou révoquer l'accès au Playground (/playground) pour un utilisateur."""
+    current_user.require(PermissionCodes.PERMISSIONS_MANAGE)
+    if "allowed" not in payload:
+        raise HTTPException(status_code=400, detail="allowed_required")
+    await admin_service.set_user_playground_access(user_id, bool(payload["allowed"]))
+    return {"status": "ok", "user_id": user_id}
+
+
+# === Observabilité de la file durable webhook_events ========================
+#
+# Pourquoi : la table `webhook_events` est notre filet de sécurité contre la
+# perte d'évènements Meta. Un endpoint d'observation évite d'avoir à se
+# connecter à la DB pour comprendre l'état de la file.
+#
+# Permissions : SETTINGS_MANAGE (cohérent avec /admin/webhook/replay au-dessus
+# qui sert le même besoin de débogage opérationnel).
+# ===========================================================================
+
+
+@router.get("/webhook-events/stats")
+async def webhook_events_stats(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Snapshot rapide : compteurs par status + plus vieil évènement non drainé.
+    Utile pour vérifier en un coup d'œil que la file ne s'accumule pas.
+    """
+    current_user.require(PermissionCodes.SETTINGS_MANAGE)
+    return await get_webhook_event_stats()
+
+
+@router.get("/webhook-events")
+async def webhook_events_list(
+    status: str | None = Query(
+        None,
+        description="Filtre: pending | processing | done | failed",
+        regex="^(pending|processing|done|failed)$",
+    ),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Liste paginée des évènements (sans le champ `payload` pour rester léger).
+    """
+    current_user.require(PermissionCodes.SETTINGS_MANAGE)
+    return {
+        "items": await list_webhook_events(status=status, limit=limit, offset=offset),
+        "limit": limit,
+        "offset": offset,
+        "status_filter": status,
+    }
+
+
+@router.get("/webhook-events/{event_id}")
+async def webhook_events_detail(
+    event_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Détail complet (incluant `payload` JSONB). Utile pour rejouer / debug forensic."""
+    current_user.require(PermissionCodes.SETTINGS_MANAGE)
+    detail = await get_webhook_event_detail(event_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="webhook_event_not_found")
+    return detail
+
+
+@router.post("/webhook-events/{event_id}/retry")
+async def webhook_events_retry(
+    event_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Force le retry d'un évènement échoué.
+    Met la ligne en `pending` avec `attempts = max_attempts - 1` pour laisser
+    une dernière chance avant l'arrêt définitif.
+    """
+    current_user.require(PermissionCodes.SETTINGS_MANAGE)
+    ok = await retry_webhook_event(event_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="webhook_event_not_found")
+    return {"status": "queued_for_retry", "event_id": event_id}
 
 

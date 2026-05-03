@@ -30,7 +30,12 @@ async def conv_create(user_id: str, account_context: str, title: str = "Nouvelle
     return (res.data or [{}])[0]
 
 
-async def conv_list_visible(user_id: str) -> List[Dict[str, Any]]:
+async def conv_list_visible(
+    user_id: str,
+    *,
+    limit: Optional[int] = None,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
     res = await supabase_execute(
         supabase.table("axelia_conversations")
         .select("id,user_id,account_context,title,pinned,created_at,updated_at,hidden_at")
@@ -42,7 +47,12 @@ async def conv_list_visible(user_id: str) -> List[Dict[str, Any]]:
     unpinned = [r for r in rows if not r.get("pinned")]
     pinned.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
     unpinned.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
-    return pinned + unpinned
+    ordered = pinned + unpinned
+    if limit is None:
+        return ordered
+    off = max(0, int(offset or 0))
+    lim = max(1, int(limit))
+    return ordered[off : off + lim]
 
 
 async def conv_get_owned(user_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:

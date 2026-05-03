@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class AxeliaAttachment(BaseModel):
     mime_type: str
-    data_base64: str = Field(..., max_length=12_000_000)
+    data_base64: str = Field(..., max_length=18_000_000)
 
 
 class AxeliaChatRequest(BaseModel):
@@ -17,6 +17,11 @@ class AxeliaChatRequest(BaseModel):
     sector: Optional[str] = None
     """Confirmation des tool_calls create_template (même flux que le Playground)."""
     approve_tool_calls: Optional[List[Dict[str, Any]]] = None
+    """Libellé optionnel affiché dans l’UI (sélecteur de compte), pour cohérence avec le prompt serveur."""
+    ui_perimeter_hint: Optional[str] = Field(None, max_length=500)
+    """Identifiant opaque (UUID v4 côté client) pour récupérer la progression
+    `phase / skill courant` via GET /axelia/chat/progress/{progress_key} pendant l'attente."""
+    progress_key: Optional[str] = Field(None, max_length=80)
 
     @field_validator("user_message")
     @classmethod

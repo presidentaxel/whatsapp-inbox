@@ -239,7 +239,7 @@ function FlowEditorInner({ accountId }) {
     accountIdRef.current = accountId;
   }, [accountId]);
 
-  // Empreinte du contenu logique (data) par nœud — pas la position. Sinon les champs hors
+  // Empreinte du contenu logique (data) par nœud - pas la position. Sinon les champs hors
   // varKey/template (condition, routes, intents, body, etc.) ne font pas évoluer les dérivés
   // (liste de variables, etc.) alors que le texte sur le canevas peut sembler à jour.
   // Réutilise la même chaîne si seules les positions changent (glisser-déposer).

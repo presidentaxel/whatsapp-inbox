@@ -1,11 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from starlette.responses import Response
 from pydantic import BaseModel
 import logging
 
 from app.core.auth import get_current_user
+from app.core.config import settings
 from app.core.permissions import CurrentUser
 from app.core.db import supabase, supabase_execute
 from app.core.pg import execute as pg_execute, fetch_one, get_pool
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +21,12 @@ class ProfileUpdate(BaseModel):
 
 
 @router.get("/me")
-async def read_profile(current_user: CurrentUser = Depends(get_current_user)):
+@limiter.limit(settings.RATE_LIMIT_AUTH)
+async def read_profile(
+    request: Request,
+    response: Response,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     permissions = current_user.permissions
     app_profile = current_user.app_profile or {}
     return {
@@ -41,9 +49,12 @@ async def read_profile(current_user: CurrentUser = Depends(get_current_user)):
 
 
 @router.put("/me")
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 async def update_profile(
+    request: Request,
+    response: Response,
     profile_update: ProfileUpdate,
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """Met à jour le profil utilisateur"""
     update_data = {}
@@ -79,9 +90,12 @@ async def update_profile(
 
 
 @router.post("/me/profile-picture")
+@limiter.limit(settings.RATE_LIMIT_AUTH)
 async def upload_profile_picture(
+    request: Request,
+    response: Response,
     file: UploadFile = File(...),
-    current_user: CurrentUser = Depends(get_current_user)
+    current_user: CurrentUser = Depends(get_current_user),
 ):
     """Upload une photo de profil"""
     # Vérifier le type de fichier

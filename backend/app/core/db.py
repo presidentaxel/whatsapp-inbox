@@ -50,7 +50,7 @@ def _is_transient_supabase_edge_response(exc: BaseException) -> bool:
     """
     PostgREST attend du JSON ; Cloudflare (ou l'edge) peut renvoyer du HTML 400/502,
     ce qui remonte comme APIError « JSON could not be generated » avec du HTML dans details.
-    Souvent transitoire ou lié à une requête trop longue / WAF — on retente.
+    Souvent transitoire ou lié à une requête trop longue / WAF - on retente.
     """
     if isinstance(exc, APIError):
         det = str(exc.details or "")

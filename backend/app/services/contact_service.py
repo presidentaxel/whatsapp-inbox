@@ -61,7 +61,7 @@ async def list_contacts(limit: int = 200, offset: int = 0, search: Optional[str]
         .range(offset, offset + limit - 1)
     )
     if q:
-        # PostgREST or_ : pas de virgule dans les valeurs — plusieurs mots → %mot1%mot2%
+        # PostgREST or_ : pas de virgule dans les valeurs - plusieurs mots → %mot1%mot2%
         safe = re.sub(r"[%]", "", q.replace(",", " "))
         parts = [p for p in safe.split() if p]
         if len(parts) > 1:

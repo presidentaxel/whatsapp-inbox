@@ -42,7 +42,12 @@ from app.services.playground_flow_service import (
     update_flow,
 )
 
-router = APIRouter()
+def require_playground_hub_access(current_user: CurrentUser = Depends(get_current_user)) -> None:
+    """Toutes les routes Playground exigent la permission globale playground.access."""
+    current_user.require(PermissionCodes.PLAYGROUND_ACCESS)
+
+
+router = APIRouter(dependencies=[Depends(require_playground_hub_access)])
 
 
 @router.post("/{flow_id}/sandbox-session")

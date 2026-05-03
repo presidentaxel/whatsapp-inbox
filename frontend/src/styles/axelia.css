@@ -1,4 +1,4 @@
-/* Page Axelia — thème Gemini (noir centré vide, composer ancré en mode fil) */
+/* Page Axelia - thème Gemini (noir centré vide, composer ancré en mode fil) */
 
 .workspace-main.settings-mode:has(.axelia-page) {
   background: #000000;
@@ -13,6 +13,8 @@
   --axelia-text: #ffffff;
   --axelia-muted: #9aa0a6;
   --axelia-border: #3c4043;
+  /* Aligné sur la largeur ouverte de `.axelia-sidebar--open` (desktop) */
+  --axelia-sidebar-width: min(300px, 44vw);
 
   flex: 1;
   display: flex;
@@ -93,6 +95,9 @@
   box-sizing: border-box;
   scrollbar-width: none;
   -ms-overflow-style: none;
+  color: var(--axelia-text);
+  position: relative;
+  z-index: 1;
 }
 
 .axelia-messages.axelia-messages--thread::-webkit-scrollbar {
@@ -163,13 +168,18 @@
 
 .axelia-bubble {
   box-sizing: border-box;
-  max-width: min(560px, 92%);
-  width: fit-content;
+  /* La largeur max est bornée par `.axelia-user-stack` (parent flex, max-width fixe).
+     `max-content` = une seule ligne tant que le texte tient ; `max-width: 100%` du parent
+     coupe les longs messages - sans dépendance circulaire (pas de `calc(100% - …)`
+     qui provoquait des retours à la ligne en boucle avec le parent dimensionné au contenu). */
+  max-width: 100%;
+  width: max-content;
   padding: 12px 16px;
   border-radius: 18px;
   margin-bottom: 12px;
   line-height: 1.5;
   font-size: 0.95rem;
+  color: var(--axelia-text);
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
@@ -181,6 +191,24 @@
   margin-right: 0;
   background: var(--axelia-surface-hover);
   border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--axelia-text);
+}
+
+.axelia-bubble--pending {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.axelia-bubble__pending-img {
+  display: block;
+  max-width: min(280px, 85vw);
+  max-height: 200px;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  object-fit: contain;
 }
 
 .axelia-bubble--model {
@@ -188,6 +216,7 @@
   margin-right: 10%;
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--axelia-text);
 }
 
 .axelia-bubble-row {
@@ -496,6 +525,23 @@
   cursor: not-allowed;
 }
 
+/* Affichage du compte courant quand le périmètre est figé (discussion en cours) */
+.axelia-context-select--readonly {
+  display: inline-flex;
+  align-items: center;
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(255, 255, 255, 0.05);
+  box-sizing: border-box;
+}
+
+.axelia-context-select--readonly:hover,
+.axelia-context-select--readonly:focus {
+  background: rgba(255, 255, 255, 0.05);
+}
+
 .axelia-context-select option {
   background: #1e1e1e;
   color: #fff;
@@ -586,12 +632,98 @@
 
 /* Barre du haut (menu discussions) */
 .axelia-topbar {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 0;
   padding: 10px 12px;
   flex-shrink: 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+/* Bande décorative sous la zone du menu : même fond que le panneau discussions (sans déplacer le bouton) */
+.axelia-topbar__sidebar-strip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  max-width: var(--axelia-sidebar-width);
+  background: var(--axelia-surface);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    width 0.22s ease,
+    opacity 0.18s ease;
+}
+
+.axelia-topbar--sidebar-open .axelia-topbar__sidebar-strip {
+  width: var(--axelia-sidebar-width);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axelia-topbar__sidebar-strip {
+    transition: none;
+  }
+}
+
+.axelia-topbar > *:not(.axelia-topbar__sidebar-strip) {
+  position: relative;
+  z-index: 1;
+}
+
+.axelia-topbar__side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.axelia-topbar__side:first-of-type {
+  justify-content: flex-start;
+}
+
+.axelia-topbar__lead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.axelia-topbar__discussions-heading {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.axelia-topbar__side:last-of-type {
+  justify-content: flex-end;
+}
+
+.axelia-topbar__center {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(560px, 72vw);
+  display: flex;
+  justify-content: center;
+}
+
+.axelia-topbar__title {
+  margin: 0;
+  width: 100%;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--axelia-text);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .axelia-topbar__iconbtn,
@@ -602,7 +734,7 @@
   padding: 8px 12px;
   border-radius: 999px;
   border: none;
-  background: rgba(255, 255, 255, 0.06);
+  background: transparent;
   color: #e8eaed;
   font-size: 0.9rem;
   cursor: pointer;
@@ -633,9 +765,9 @@
 .axelia-sidebar {
   flex: 0 0 auto;
   width: 0;
-  max-width: min(300px, 44vw);
+  max-width: var(--axelia-sidebar-width);
   z-index: 20;
-  background: #1e1e1e;
+  background: var(--axelia-surface);
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   transition:
     width 0.22s ease,
@@ -647,19 +779,22 @@
 }
 
 .axelia-sidebar--open {
-  width: min(300px, 44vw);
+  width: var(--axelia-sidebar-width);
   opacity: 1;
 }
 
 @media (max-width: 720px) {
+  .axelia-page {
+    --axelia-sidebar-width: min(300px, 88vw);
+  }
+
   .axelia-shell.axelia-shell--sidebar-open .axelia-sidebar-overlay {
     display: block;
     position: absolute;
     inset: 0;
     z-index: 25;
     background: rgba(0, 0, 0, 0.45);
-    border: none;
-    cursor: pointer;
+    cursor: default;
   }
 
   .axelia-sidebar {
@@ -667,8 +802,8 @@
     top: 0;
     left: 0;
     bottom: 0;
-    max-width: min(300px, 88vw);
-    width: min(300px, 88vw);
+    max-width: var(--axelia-sidebar-width);
+    width: var(--axelia-sidebar-width);
     transform: translateX(-104%);
     opacity: 1;
     transition: transform 0.22s ease;
@@ -678,30 +813,24 @@
 
   .axelia-sidebar--open {
     transform: translateX(0);
-    width: min(300px, 88vw);
+    width: var(--axelia-sidebar-width);
+  }
+
+  /* Même ombre sur le bord droit de la bande topbar pour raccorder le drawer mobile */
+  .axelia-topbar--sidebar-open .axelia-topbar__sidebar-strip {
+    box-shadow: 8px 0 24px rgba(0, 0, 0, 0.22);
   }
 }
 
-.axelia-sidebar__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+@media (prefers-reduced-motion: reduce) {
+  .axelia-sidebar {
+    transition: none;
+  }
 }
 
 .axelia-sidebar__title {
   font-weight: 500;
   font-size: 1rem;
-}
-
-.axelia-sidebar__close {
-  border: none;
-  background: transparent;
-  color: #9aa0a6;
-  font-size: 1.4rem;
-  line-height: 1;
-  cursor: pointer;
 }
 
 .axelia-sidebar__list {
@@ -733,24 +862,77 @@
 }
 
 .axelia-sidebar-row {
+  position: relative;
+  padding: 4px 10px;
+}
+
+.axelia-sidebar-row__track {
   display: flex;
   align-items: stretch;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: transparent;
+  overflow: hidden;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
-.axelia-sidebar-row--active .axelia-sidebar-row__main {
-  background: rgba(138, 180, 248, 0.12);
+.axelia-sidebar-row:not(.axelia-sidebar-row--active):hover .axelia-sidebar-row__track {
+  background: rgba(255, 255, 255, 0.08);
 }
 
-.axelia-sidebar-row__main {
+.axelia-sidebar-row--active .axelia-sidebar-row__track {
+  background: rgba(55, 120, 220, 0.42);
+  border-color: rgba(110, 170, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 0 1px rgba(25, 90, 200, 0.25);
+}
+
+.axelia-sidebar-row--active:hover .axelia-sidebar-row__track {
+  background: rgba(65, 130, 232, 0.52);
+  border-color: rgba(130, 185, 255, 0.65);
+}
+
+.axelia-sidebar-row--active .axelia-sidebar-row__pick,
+.axelia-sidebar-row--active .axelia-sidebar-row__menu-trigger {
+  color: #dbeaff;
+}
+
+.axelia-sidebar-row__pick {
   flex: 1;
-  text-align: left;
-  padding: 12px 12px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 10px 4px 10px 14px;
   border: none;
   background: transparent;
   color: #e8eaed;
   cursor: pointer;
   font-size: 0.9rem;
+  text-align: left;
+  transition: color 0.15s ease;
+}
+
+.axelia-sidebar-row__pick:hover {
+  color: #ffffff;
+}
+
+.axelia-sidebar-row__pick:focus-visible {
+  outline: none;
+}
+
+.axelia-sidebar-row__track:focus-within {
+  outline: 2px solid rgba(138, 180, 248, 0.55);
+  outline-offset: 2px;
+}
+
+.axelia-sidebar-row__pin {
+  flex-shrink: 0;
 }
 
 .axelia-sidebar-row__title {
@@ -758,34 +940,92 @@
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  word-break: break-word;
 }
 
-.axelia-sidebar-row__menu {
-  position: relative;
-  display: flex;
-  align-items: flex-start;
-  padding: 8px 4px;
-}
-
-.axelia-sidebar-row__menu > button {
+.axelia-sidebar-row__menu-trigger {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  padding: 8px 12px;
+  margin: 4px 4px 4px 0;
   border: none;
+  border-radius: 999px;
   background: transparent;
-  color: #9aa0a6;
+  color: var(--axelia-muted);
   cursor: pointer;
-  padding: 4px;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
+}
+
+.axelia-sidebar-row__menu-trigger:focus-visible {
+  outline: 2px solid rgba(138, 180, 248, 0.55);
+  outline-offset: 1px;
+}
+
+.axelia-sidebar-row__menu-trigger:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8eaed;
+}
+
+.axelia-sidebar-row--active .axelia-sidebar-row__menu-trigger:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+/* ⋯ visible en permanence sur la conv active ; sinon survol/focus ligne (souris) ; tactile = visible */
+.axelia-sidebar-row__menu-trigger svg {
+  opacity: 1;
+  transition: opacity 0.15s ease;
+  display: block;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .axelia-sidebar-row__menu-trigger svg {
+    opacity: 0;
+  }
+
+  .axelia-sidebar-row:hover .axelia-sidebar-row__menu-trigger svg,
+  .axelia-sidebar-row:focus-within .axelia-sidebar-row__menu-trigger svg,
+  .axelia-sidebar-row--active .axelia-sidebar-row__menu-trigger svg {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axelia-sidebar-row__menu-trigger svg {
+    transition: none;
+  }
 }
 
 .axelia-sidebar-popup {
   position: absolute;
-  right: 4px;
-  top: 36px;
-  min-width: 160px;
+  min-width: 168px;
   background: #2a2a2a;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
   padding: 6px 0;
   z-index: 60;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.axelia-sidebar-row > .axelia-sidebar-popup {
+  top: 100%;
+  right: 14px;
+  margin-top: 4px;
+  left: auto;
+}
+
+/* Dernières lignes : menu vers le haut pour rester dans la zone visible */
+.axelia-sidebar-row.axelia-sidebar-row--popup-above > .axelia-sidebar-popup {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 4px;
 }
 
 .axelia-sidebar-popup button {
@@ -823,15 +1063,15 @@
 
 .axelia-model-text {
   flex: 1;
-  color: #e8eaed;
+  color: var(--axelia-text);
   font-size: 0.95rem;
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.axelia-model-text--muted {
-  color: #9aa0a6;
+.axelia-model-text.axelia-model-text--muted {
+  color: var(--axelia-muted);
 }
 
 .axelia-model-actions {
@@ -840,6 +1080,39 @@
   gap: 4px;
   margin-top: 8px;
   margin-left: 40px;
+}
+
+/* Bulle assistant pendant le streaming SSE : on garde le même rendu mais on ajoute
+   un caret clignotant en fin de texte pour matérialiser la frappe en cours. */
+.axelia-model-block--streaming {
+  /* Empêche le contenu (caret + dernier caractère) de provoquer un saut visuel
+     lorsque la dernière phrase est partiellement émise. */
+  contain: layout style;
+}
+
+.axelia-stream-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: -0.18em;
+  background: currentColor;
+  opacity: 0.7;
+  border-radius: 1.5px;
+  animation: axelia-stream-caret-blink 1.05s steps(1, end) infinite;
+}
+
+@keyframes axelia-stream-caret-blink {
+  0%, 49% {
+    opacity: 0.75;
+  }
+  50%, 100% {
+    opacity: 0;
+  }
+}
+
+.axelia-model-actions--streaming {
+  margin-top: 6px;
 }
 
 .axelia-model-actions button {
@@ -878,7 +1151,9 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
-  max-width: 100%;
+  /* Borne fixe (indépendante du contenu) pour éviter la dépendance circulaire avec la bulle.
+     720px reste sous la colonne max du fil (800px) et laisse de la marge en plus petit. */
+  max-width: min(720px, 100%);
   min-width: 0;
 }
 
@@ -975,4 +1250,152 @@
 
 .axelia-pending-tools__cancel:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.06);
+}
+
+/* Recherche dans la sidebar discussions */
+.axelia-sidebar__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.axelia-sidebar__search-icon {
+  position: absolute;
+  left: 12px;
+  color: var(--axelia-muted);
+  pointer-events: none;
+}
+
+.axelia-sidebar__search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px 8px 34px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--axelia-text);
+  font-size: 0.85rem;
+  outline: none;
+  font-family: inherit;
+}
+
+.axelia-sidebar__search-input:focus {
+  border-color: rgba(138, 180, 248, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.axelia-sidebar__search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+}
+
+/* Badge modèle utilisé sous chaque réponse assistant */
+.axelia-model-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(180, 195, 220, 0.78);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+
+/* Bouton Stop (pendant la génération) - variation visuelle du send-btn */
+.axelia-send-btn--stop {
+  background: rgba(244, 99, 99, 0.16);
+  color: #f5a3a3;
+}
+
+.axelia-send-btn--stop:not(:disabled):hover {
+  background: rgba(244, 99, 99, 0.28);
+  color: #ffd5d5;
+}
+
+.axelia-send-btn--stop:disabled {
+  opacity: 0.5;
+}
+
+/* Aperçu pièce jointe : version PDF (icône à la place de l'image) */
+.axelia-attach-preview__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(138, 180, 248, 0.16);
+  color: #a8c7fa;
+  flex-shrink: 0;
+}
+
+.axelia-attach-preview__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.axelia-bubble__pending-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.85rem;
+  color: rgba(232, 234, 237, 0.9);
+}
+
+/* Markdown léger dans les réponses */
+.axelia-md-list {
+  margin: 6px 0 6px;
+  padding-left: 22px;
+}
+
+.axelia-md-list li {
+  margin: 2px 0;
+}
+
+.axelia-md-list--ol {
+  padding-left: 26px;
+}
+
+.axelia-md-strong {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.axelia-md-em {
+  font-style: italic;
+}
+
+.axelia-md-code {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #e8eaed;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.axelia-md-link {
+  color: #8ab4f8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.axelia-md-link:hover {
+  color: #aac7fb;
+}
+
+/* La ligne de texte modèle ne casse pas brutalement les listes adjacentes */
+.axelia-md-line {
+  display: inline;
 }

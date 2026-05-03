@@ -1,4 +1,4 @@
--- Conversations Axelia (hub IA interne) — historique par utilisateur
+-- Conversations Axelia (hub IA interne) - historique par utilisateur
 -- hidden_at : la conv n’apparaît plus pour l’utilisateur (données conservées)
 
 CREATE TABLE IF NOT EXISTS axelia_conversations (

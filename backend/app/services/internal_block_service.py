@@ -1,8 +1,10 @@
-"""Blocage interne (app) par contact + compte WhatsApp — sans Meta block_users."""
+"""Blocage interne (app) par contact + compte WhatsApp - sans Meta block_users."""
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import List, Optional
+import uuid as uuid_module
+from typing import Dict, List, Optional, Sequence
 
 from app.core.db import supabase, supabase_execute
 from app.core.pg import get_pool
@@ -140,6 +142,53 @@ async def list_blocked_wa_ids_for_account(account_id: str) -> List[str]:
             if n:
                 out.append(n)
     return out
+
+
+async def list_blocked_wa_ids_by_accounts(account_ids: Sequence[str]) -> Dict[str, List[str]]:
+    """
+    Pour chaque compte (UUID texte, dédoublonnés), retourne les whatsapp_number normalisés.
+    Utilisé par POST /contacts/meta-blocked/batch (une requête SQL côté PG).
+    """
+    seen: List[str] = []
+    alloc: set[str] = set()
+    for aid in account_ids:
+        s = str(aid).strip()
+        if s and s not in alloc:
+            alloc.add(s)
+            seen.append(s)
+    if not seen:
+        return {}
+    out: Dict[str, List[str]] = {s: [] for s in seen}
+    if get_pool():
+        try:
+            uuid_args = [uuid_module.UUID(s) for s in seen]
+        except ValueError:
+            return out
+        rows = await _pg_fetch_rows_for_blocks(
+            """
+            SELECT b.account_id::text AS account_id, c.whatsapp_number
+            FROM internal_contact_blocks b
+            JOIN contacts c ON c.id = b.contact_id
+            WHERE b.account_id = ANY($1::uuid[])
+            """,
+            uuid_args,
+        )
+        for r in rows:
+            aid = r.get("account_id")
+            if aid not in out:
+                continue
+            raw = r.get("whatsapp_number")
+            n = normalize_whatsapp_user_id(str(raw or ""))
+            if n:
+                out[aid].append(n)
+        return out
+
+    async def _one(aid: str) -> tuple[str, List[str]]:
+        wa = await list_blocked_wa_ids_for_account(aid)
+        return aid, wa
+
+    pairs = await asyncio.gather(*(_one(aid) for aid in seen))
+    return dict(pairs)
 
 
 async def upsert_internal_block(contact_id: str, account_id: str) -> None:

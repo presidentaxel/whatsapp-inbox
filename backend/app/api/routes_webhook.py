@@ -4,12 +4,18 @@ Gère la vérification et la réception des événements WhatsApp
 """
 import json
 import logging
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
+from starlette.responses import Response
 
+from app.core.auth import get_current_user
 from app.core.config import settings
+from app.core.permissions import CurrentUser
+from app.core.rate_limit import limiter
+from app.core.webhook_security import verify_meta_signature
 from app.services.account_service import get_account_by_verify_token, get_all_accounts
 from app.services.message_service import handle_incoming_message
+from app.services.webhook_event_service import enqueue_webhook_event
 
 router = APIRouter(tags=["Webhooks"])
 logger = logging.getLogger(__name__)
@@ -63,7 +69,8 @@ async def verify_webhook(request: Request):
 
 
 @router.post("/whatsapp")
-async def whatsapp_webhook(request: Request):
+@limiter.limit(settings.RATE_LIMIT_WEBHOOK)
+async def whatsapp_webhook(request: Request, response: Response):
     """
     Endpoint de réception des événements WhatsApp
     
@@ -107,11 +114,20 @@ async def whatsapp_webhook(request: Request):
     import asyncio
     
     try:
-        # Log immédiat pour voir que la requête arrive
         client_ip = request.client.host if request.client else "unknown"
         logger.info(f"📥 POST /webhook/whatsapp received from {client_ip}")
-        
-        data = await request.json()
+
+        # 1) Vérification HMAC SHA-256 (X-Hub-Signature-256) avec META_APP_SECRET.
+        #    `verify_meta_signature` consomme et renvoie le raw body - on le
+        #    réutilise pour le JSON parsing (request.body() ne peut pas être
+        #    lu deux fois sur un stream).
+        raw_body = await verify_meta_signature(request)
+
+        try:
+            data = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError as exc:
+            logger.warning("Webhook payload non-JSON: %s", exc)
+            raise HTTPException(status_code=400, detail="invalid_json")
         
         # Log détaillé pour debug - inclure la structure complète si nécessaire
         entries = data.get("entry", [])
@@ -133,15 +149,30 @@ async def whatsapp_webhook(request: Request):
             logger.info(f"📨 Webhook contains {total_messages} message(s) and {total_statuses} status(es)")
         else:
             logger.warning("⚠️ Webhook received but no messages or statuses found")
-        
-        # OPTIMISATION: Traitement en arrière-plan pour répondre immédiatement à WhatsApp
-        # WhatsApp attend une réponse 200 OK rapide (< 20s), sinon il réessaie
+
+        # ── Persistance durable du webhook ───────────────────────────────────
+        # On INSERT le payload dans `webhook_events` puis on répond 200 OK
+        # immédiatement. Un worker périodique consomme la file (cf.
+        # `webhook_event_service.periodic_process_webhook_events`).
+        # Avantage : aucun évènement n'est perdu si le process redémarre
+        # entre la réponse à Meta et la fin du traitement métier.
+        event_id = await enqueue_webhook_event(data)
+
+        if event_id:
+            return {"status": "queued", "event_id": str(event_id)}
+
+        # Fallback : pas de pool PostgreSQL configuré (DATABASE_URL absent).
+        # On retombe sur l'ancien comportement asyncio.create_task pour ne
+        # pas casser les déploiements en mode "Supabase REST only".
+        logger.warning(
+            "webhook enqueue indisponible (pas de pool PG) - fallback in-memory async"
+        )
+
         async def process_webhook_background():
             try:
                 await handle_incoming_message(data)
             except Exception as bg_error:
                 logger.error(f"❌ Error processing webhook in background: {bg_error}", exc_info=True)
-                # Enregistrer l'erreur pour diagnostic
                 try:
                     from app.api.routes_diagnostics import log_error_to_memory
                     log_error_to_memory(
@@ -153,15 +184,16 @@ async def whatsapp_webhook(request: Request):
                         }
                     )
                 except:
-                    pass  # Ne pas faire échouer si le diagnostic échoue
-        
-        # Lancer le traitement en arrière-plan (ne pas attendre)
+                    pass
+
         asyncio.create_task(process_webhook_background())
-        
-        # WhatsApp attend une réponse 200 rapide (< 20s)
-        # On retourne immédiatement pour éviter les timeouts
         return {"status": "received"}
-    
+
+    except HTTPException:
+        # On laisse remonter les 401/400/403 (signature invalide, JSON malformé,
+        # etc.) pour que Meta voie le statut réel - sinon on masquerait une
+        # mauvaise configuration sous un faux 200.
+        raise
     except Exception as e:
         logger.error(f"❌ Error processing webhook: {e}", exc_info=True)
         # Enregistrer l'erreur pour diagnostic
@@ -182,14 +214,27 @@ async def whatsapp_webhook(request: Request):
 
 
 @router.post("/whatsapp/debug")
-async def whatsapp_webhook_debug(request: Request):
+async def whatsapp_webhook_debug(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     """
-    Endpoint de debug pour capturer et afficher les webhooks reçus
-    Utile pour voir exactement ce qui arrive de Meta
+    Endpoint de debug pour capturer et afficher les webhooks reçus.
+
+    Désactivé par défaut. Pour l'activer:
+      - WEBHOOK_DEBUG_ENABLED=true
+      - APP_ENV != production (refusé en prod par sécurité)
+      - Authentification Bearer requise (utilisateur de l'app)
     """
+    if not settings.WEBHOOK_DEBUG_ENABLED or settings.is_production:
+        raise HTTPException(status_code=404, detail="not_found")
+
     try:
         client_ip = request.client.host if request.client else "unknown"
-        logger.info(f"🔍 DEBUG: POST /webhook/whatsapp/debug received from {client_ip}")
+        logger.info(
+            f"🔍 DEBUG: POST /webhook/whatsapp/debug received from {client_ip} "
+            f"(user={current_user.email})"
+        )
         
         data = await request.json()
         

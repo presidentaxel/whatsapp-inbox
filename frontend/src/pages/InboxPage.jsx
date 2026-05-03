@@ -20,7 +20,7 @@ import {
   findOrCreateConversation,
 } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
-import { getContacts, getMetaBlockedWaIds, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
+import { getContacts, getMetaBlockedWaIdsBatch, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
 import ConversationList from "../components/conversations/ConversationList";
 import ChatWindow from "../components/chat/ChatWindow";
 import AccountSelector from "../components/accounts/AccountSelector";
@@ -46,9 +46,6 @@ import {
 
 /** Délai avant de rafraîchir la ligne de conversation dans la sidebar quand ce chat est ouvert (sync avec le fil realtime des messages). */
 const SIDEBAR_CHAT_SYNC_DEBOUNCE_MS = 220;
-
-/** Mettre à `true` pour réafficher l’entrée Axelia dans la barre latérale (et permettre `/axelia`). */
-const AXELIA_SIDEBAR_ENABLED = false;
 
 // Lazy-loaded heavy panels (code-split to reduce initial bundle)
 const ContactsPanel = lazy(() => import("../components/contacts/ContactsPanel"));
@@ -130,19 +127,21 @@ export default function InboxPage() {
       return;
     }
     const targets = accounts.filter((a) => hasPermission?.("messages.view", a.id));
+    if (!targets.length) {
+      setBlockedByAccount({});
+      return;
+    }
     try {
-      const results = await Promise.all(
-        targets.map(async (a) => {
-          try {
-            const res = await getMetaBlockedWaIds(a.id);
-            const ids = (res.data?.wa_ids ?? []).map((x) => normalizeWaDigits(x));
-            return [a.id, ids];
-          } catch {
-            return [a.id, []];
-          }
-        })
+      const res = await getMetaBlockedWaIdsBatch(targets.map((a) => a.id));
+      const byAccount = res.data?.by_account ?? {};
+      setBlockedByAccount(
+        Object.fromEntries(
+          targets.map((a) => [
+            a.id,
+            (byAccount[a.id] ?? []).map((x) => normalizeWaDigits(x)),
+          ])
+        )
       );
-      setBlockedByAccount(Object.fromEntries(results));
     } catch (error) {
       console.error("meta block list:", error);
       setBlockedByAccount({});
@@ -623,7 +622,7 @@ export default function InboxPage() {
     refreshConversations(activeAccount);
   }, [activeAccount, refreshConversations]);
 
-  // Liste des WA bloqués (app) : nécessaire pour le chat (bandeau, suppression realtime) — pas seulement sur l’onglet contacts.
+  // Liste des WA bloqués (app) : nécessaire pour le chat (bandeau, suppression realtime) - pas seulement sur l’onglet contacts.
   useEffect(() => {
     loadAllBlockedWaForContacts();
   }, [loadAllBlockedWaForContacts]);
@@ -844,27 +843,25 @@ export default function InboxPage() {
   // Pour l'onglet Permissions : Admin a permissions.manage, DEV a permissions.view
   const canViewPermissions = hasPermission?.("permissions.view"); // DEV peut voir les permissions
   const canManagePermissions = hasPermission?.("permissions.manage"); // Admin peut gérer les permissions
+  const canAccessAxelia = hasPermission?.("axelia.access");
+  const canAccessPlayground = hasPermission?.("playground.access");
   const canManageSettings = hasPermission?.("settings.manage");
-  // Pour l'onglet Gemini : Admin, DEV et Manager peuvent y accéder
-  // On vérifie si l'utilisateur a au moins un rôle parmi admin, dev, manager
-  const canAccessGemini = canViewPermissions || canManagePermissions || canViewAccounts; // DEV, Admin, ou Manager
-
 
   const allowedNavItems = useMemo(() => {
     const items = ["chat"];
     if (canViewContacts) {
       items.push("contacts");
     }
-    if (AXELIA_SIDEBAR_ENABLED) {
+    if (canAccessAxelia) {
       items.push("axelia");
     }
-    items.push("whatsapp"); // Nouveau: WhatsApp Business
-    if (canAccessGemini) {
+    if (canAccessPlayground) {
       items.push("assistant");
     }
+    items.push("whatsapp");
     items.push("settings");
     return items;
-  }, [canViewContacts, canAccessGemini]);
+  }, [canViewContacts, canAccessPlayground, canAccessAxelia]);
 
   useEffect(() => {
     const modeFromUrl = inboxPathToMode(location.pathname);
@@ -979,14 +976,21 @@ export default function InboxPage() {
             </div>
           )
         ) : navMode === "axelia" ? (
-          <div className="workspace-main settings-mode">
-            <AxeliaChat
-              accounts={accounts}
-              initialAccountId={activeAccount}
-              profile={profile}
-              hasPermission={hasPermission}
-            />
-          </div>
+          canAccessAxelia ? (
+            <div className="workspace-main settings-mode">
+              <AxeliaChat
+                accounts={accounts}
+                initialAccountId={activeAccount}
+                profile={profile}
+                hasPermission={hasPermission}
+              />
+            </div>
+          ) : (
+            <div className="workspace-main settings-mode">
+              <p className="panel-title">Axelia</p>
+              <p>Vous n&apos;avez pas accès à Axelia.</p>
+            </div>
+          )
         ) : navMode === "settings" ? (
           <div className="workspace-main settings-mode">
             <SettingsPanel

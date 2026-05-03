@@ -5,8 +5,8 @@ const NAV_ITEMS = [
   { id: "chat", icon: <FiMessageSquare /> },
   { id: "contacts", icon: <FiUsers /> },
   { id: "axelia", icon: <FiZap /> },
-  { id: "whatsapp", icon: <FaWhatsapp /> },
   { id: "assistant", icon: <FiCpu /> },
+  { id: "whatsapp", icon: <FaWhatsapp /> },
   { id: "settings", icon: <FiSettings /> },
 ];
 

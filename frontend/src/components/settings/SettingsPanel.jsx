@@ -12,6 +12,7 @@ import {
   FiSearch,
   FiUser,
   FiShield,
+  FiZap,
   FiCloud,
   FiFolder,
   FiUpload,
@@ -30,6 +31,7 @@ import {
 import { createAccount, deleteAccount, updateAccountGoogleDrive, initGoogleDriveAuth, disconnectGoogleDrive, listGoogleDriveFolders, backfillGoogleDrive } from "../../api/accountsApi";
 import NotificationSettings from "./NotificationSettings";
 import PermissionsTable from "./PermissionsTable";
+import AxeliaAccessTable from "./AxeliaAccessTable";
 import DiscussionSettings from "./DiscussionSettings";
 import GeneralSettings from "./GeneralSettings";
 import GoogleDriveFolderPicker from "./GoogleDriveFolderPicker";
@@ -365,13 +367,20 @@ export default function SettingsPanel({
         // Seuls Admin et DEV peuvent voir l'onglet Permissions (Manager ne voit rien)
         // canManagePermissions = Admin (permissions.manage) - peut modifier
         // canViewPermissions = DEV (permissions.view) - peut seulement voir
-        if (canManagePermissions || canViewPermissions)
+        if (canManagePermissions || canViewPermissions) {
           base.push({
             id: "permissions",
             label: "Permissions",
             icon: FiShield,
             description: "Gérer les accès par compte WhatsApp",
           });
+          base.push({
+            id: "axelia-access",
+            label: "Accès Axelia",
+            icon: FiZap,
+            description: "Qui peut voir et utiliser Axelia (/axelia)",
+          });
+        }
     return base;
   }, [canViewAccounts, canManageAccounts, canManageRoles, canManageUsers, canViewPermissions, canManagePermissions]);
 
@@ -752,6 +761,25 @@ export default function SettingsPanel({
               currentUserRole={
                 (currentUser?.roles && currentUser.roles.length > 0 
                   ? currentUser.roles[0]?.role_slug 
+                  : currentUser?.role_slug) || null
+              }
+              canManagePermissions={canManagePermissions}
+              currentUserId={currentUser?.id}
+              refreshProfile={refreshProfile}
+            />
+          </section>
+        </div>
+      )}
+
+      {activePanel === "axelia-access" && (canManagePermissions || canViewPermissions) && (
+        <div className="settings-content__panel">
+          <h1 className="settings-content__panel-title">Accès Axelia</h1>
+          <section className="settings-content__section">
+            <h2 className="settings-content__section-title">Assistant IA Axelia</h2>
+            <AxeliaAccessTable
+              currentUserRole={
+                (currentUser?.roles && currentUser.roles.length > 0
+                  ? currentUser.roles[0]?.role_slug
                   : currentUser?.role_slug) || null
               }
               canManagePermissions={canManagePermissions}

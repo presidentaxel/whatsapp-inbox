@@ -3,7 +3,7 @@ Service pour gérer le stockage d'images dans Supabase Storage
 """
 import asyncio
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 from starlette.concurrency import run_in_threadpool
@@ -20,6 +20,206 @@ PROFILE_PICTURES_BUCKET = "profile-pictures"
 MESSAGE_MEDIA_BUCKET = "message-media"
 # Nom du bucket pour les images de templates
 TEMPLATE_MEDIA_BUCKET = "template-media"
+
+
+# ---------------------------------------------------------------------------
+# Sniff MIME (méthode B) - déduit le type MIME depuis les *magic bytes* d'un
+# fichier téléchargé, quand l'API Meta ne renvoie pas de `mime_type` ou que la
+# CDN sert le média en `application/octet-stream`. Le bucket Supabase
+# `message-media` rejette les MIME non listés (cf. migration 027), donc un
+# octet-stream qui passe à travers fait échouer l'upload (HTTP 415).
+# Liste des types couverts alignée sur la liste autorisée du bucket.
+# Pas de dépendance externe (`python-magic`/`filetype`) : signatures inline.
+# ---------------------------------------------------------------------------
+
+# Signatures simples (préfixe exact dans les premiers octets)
+_MIME_PREFIX_SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+    (b"BM", "image/bmp"),
+    (b"%PDF-", "application/pdf"),
+    # MP3 : ID3 (ID3v2) ou frame sync 0xFFEx - couvre les 3 layers.
+    (b"ID3", "audio/mpeg"),
+    (b"\xff\xfb", "audio/mpeg"),
+    (b"\xff\xf3", "audio/mpeg"),
+    (b"\xff\xf2", "audio/mpeg"),
+    # WAV : RIFF .... WAVE (cas spécifique géré ci-dessous, mais le prefixe
+    # RIFF + 'WAVE' à l'offset 8 reste un fallback grossier - voir _sniff…).
+    # ZIP & dérivés DOCX/XLSX/PPTX (tous commencent par PK) - on identifie le
+    # zip pur ici, l'inspection plus fine demanderait de parser l'archive.
+    (b"PK\x03\x04", "application/zip"),
+    (b"PK\x05\x06", "application/zip"),
+    (b"Rar!\x1a\x07\x00", "application/vnd.rar"),
+    (b"Rar!\x1a\x07\x01\x00", "application/vnd.rar"),
+)
+
+# Familles de marques `ftyp` MP4 → MIME "stocké côté bucket".
+_MP4_BRANDS_VIDEO_MP4 = {
+    b"isom",
+    b"iso2",
+    b"iso4",
+    b"iso5",
+    b"avc1",
+    b"mp41",
+    b"mp42",
+    b"mp4 ",
+    b"M4V ",
+    b"M4VH",
+    b"M4VP",
+}
+_MP4_BRANDS_AUDIO_MP4 = {b"M4A ", b"M4B ", b"M4P "}
+_MP4_BRANDS_QT = {b"qt  "}
+
+# Liste des MIME effectivement autorisés côté Supabase (cf. migration 027).
+# Tout sniff hors-liste retombera comme `None` → on logue mais on n'altère pas
+# `content_type` (Supabase répondra 415 et l'erreur sera identifiable).
+_ALLOWED_BUCKET_MIME_TYPES = frozenset(
+    {
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "video/mp4",
+        "video/quicktime",
+        "video/x-msvideo",
+        "video/webm",
+        "audio/mpeg",
+        "audio/ogg",
+        "audio/wav",
+        "audio/aac",
+        "audio/mp4",
+        "audio/webm",
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "text/plain",
+        "text/csv",
+        "application/zip",
+        "application/x-zip-compressed",
+        "application/vnd.rar",
+        "application/x-tar",
+    }
+)
+
+
+def normalize_mime_type(mime: Optional[str]) -> Optional[str]:
+    """Strippe les paramètres (``; charset=…``) et lowercase. Vide / inconnu → ``None``."""
+    if not mime:
+        return None
+    base = mime.split(";", 1)[0].strip().lower()
+    if not base or base == "application/octet-stream":
+        return None
+    return base
+
+
+def sniff_mime_from_bytes(data: bytes) -> Optional[str]:
+    """Devine un type MIME à partir des *magic bytes* d'un fichier.
+
+    Couvre les formats principaux que WhatsApp/Meta servent (images, vidéos MP4 / WebM
+    / QuickTime, audio MP3 / OGG / WebM / WAV, PDF, ZIP, RAR, etc.). Retourne ``None``
+    si aucune signature n'est reconnue.
+
+    Pas de dépendance externe : c'est une heuristique légère, pas un détecteur exhaustif.
+    """
+    if not data or len(data) < 4:
+        return None
+    head = data[:32]
+
+    # 1) Préfixes exacts.
+    for sig, mime in _MIME_PREFIX_SIGNATURES:
+        if head.startswith(sig):
+            return mime
+
+    # 2) WebP : "RIFF" + 4 octets de taille + "WEBP"
+    if head.startswith(b"RIFF") and len(data) >= 12:
+        riff_kind = data[8:12]
+        if riff_kind == b"WEBP":
+            return "image/webp"
+        if riff_kind == b"WAVE":
+            return "audio/wav"
+        if riff_kind == b"AVI ":
+            return "video/x-msvideo"
+
+    # 3) MP4/QuickTime : "ftyp" à l'offset 4
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        brand = data[8:12]
+        if brand in _MP4_BRANDS_AUDIO_MP4:
+            return "audio/mp4"
+        if brand in _MP4_BRANDS_QT:
+            return "video/quicktime"
+        if brand in _MP4_BRANDS_VIDEO_MP4 or brand.startswith(b"mp4"):
+            return "video/mp4"
+        if brand.startswith(b"3gp") or brand.startswith(b"3g2"):
+            # Pas dans la liste autorisée par le bucket - on remonte quand même
+            # une valeur honnête, le caller traitera (mappage ou erreur lisible).
+            return "video/3gpp"
+        # ftyp inconnu : on tente video/mp4 (la majorité des écosystèmes).
+        return "video/mp4"
+
+    # 4) Matroska / WebM : EBML header
+    if head.startswith(b"\x1a\x45\xdf\xa3"):
+        # Discrimination fine mkv vs webm nécessite de parser EBML ; on retourne
+        # webm car c'est ce que WhatsApp produit en pratique pour les médias inline.
+        return "video/webm"
+
+    # 5) Ogg
+    if head.startswith(b"OggS"):
+        return "audio/ogg"
+
+    return None
+
+
+def resolve_upload_mime_type(
+    *,
+    declared: Optional[str],
+    media_data: bytes,
+    log_label: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Choisit le ``content-type`` à envoyer à Supabase.
+
+    Stratégie :
+    1. Si ``declared`` est exploitable (non vide, non ``octet-stream``) on le garde.
+    2. Sinon, on tente un sniff sur ``media_data`` ; si reconnu, on remplace.
+    3. Sinon, on retombe sur ``application/octet-stream`` (Supabase refusera, mais le
+       log permet de tracer le cas).
+
+    Retourne ``(mime, source)`` où ``source ∈ {"declared", "sniff", "fallback"}``.
+    """
+    normalized = normalize_mime_type(declared)
+    if normalized:
+        return normalized, "declared"
+    sniffed = sniff_mime_from_bytes(media_data or b"")
+    if sniffed:
+        if log_label:
+            logger.info(
+                "🔎 [MIME sniff] %s → %s remplace %r (%d octets)",
+                log_label,
+                sniffed,
+                declared or "(vide)",
+                len(media_data or b""),
+            )
+        if sniffed not in _ALLOWED_BUCKET_MIME_TYPES:
+            logger.warning(
+                "🔎 [MIME sniff] %s : type détecté %s hors liste bucket Supabase",
+                log_label or "?",
+                sniffed,
+            )
+        return sniffed, "sniff"
+    if log_label:
+        logger.warning(
+            "🔎 [MIME sniff] %s : signature inconnue, on conserve %r (Supabase refusera "
+            "probablement le 415).",
+            log_label,
+            declared or "(vide)",
+        )
+    return (declared or "application/octet-stream"), "fallback"
 
 
 async def _upload_profile_picture_task(
@@ -220,23 +420,43 @@ async def upload_message_media(
                 f"Skipping upload to avoid 413 error."
             )
             return None
-        
+
+        # Méthode B (filet de secours) : si on arrive ici sans MIME exploitable
+        # (octet-stream / vide), on sniff les magic bytes une dernière fois.
+        # Couvre les appelants qui contournent `download_and_store_message_media`
+        # (background retry, scripts, etc.).
+        content_type, _mime_source = resolve_upload_mime_type(
+            declared=content_type,
+            media_data=media_data,
+            log_label=f"upload message_id={message_id}",
+        )
+
         # Déterminer l'extension selon le content-type
         extension_map = {
             "image/jpeg": ".jpg",
             "image/png": ".png",
             "image/gif": ".gif",
             "image/webp": ".webp",
+            "image/bmp": ".bmp",
             "video/mp4": ".mp4",
             "video/quicktime": ".mov",
+            "video/webm": ".webm",
+            "video/x-msvideo": ".avi",
             "audio/mpeg": ".mp3",
             "audio/ogg": ".ogg",
             "audio/wav": ".wav",
+            "audio/aac": ".aac",
+            "audio/mp4": ".m4a",
+            "audio/webm": ".weba",
             "application/pdf": ".pdf",
             "application/msword": ".doc",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "application/zip": ".zip",
+            "application/x-zip-compressed": ".zip",
+            "application/vnd.rar": ".rar",
+            "application/x-tar": ".tar",
         }
-        
+
         extension = extension_map.get(content_type, "")
         if filename:
             # Extraire l'extension du nom de fichier si disponible
@@ -442,13 +662,26 @@ async def download_and_store_message_media(
         client = await get_http_client_for_media()
         response = await client.get(media_url, headers=headers)
         response.raise_for_status()
-        
+
         # Utiliser le content-type fourni ou celui de la réponse
-        detected_content_type = response.headers.get("content-type", content_type)
+        raw_content_type = response.headers.get("content-type", content_type)
         media_data = response.content
-        
+
+        # Méthode B : si Meta n'a pas fourni de mime_type ET la CDN nous renvoie
+        # `application/octet-stream` (ou rien d'exploitable), on sniffe les magic
+        # bytes pour déduire un MIME que Supabase Storage acceptera. Évite le 415
+        # `mime type application/octet-stream is not supported` constaté en prod.
+        detected_content_type, mime_source = resolve_upload_mime_type(
+            declared=raw_content_type,
+            media_data=media_data,
+            log_label=f"message_id={message_id}",
+        )
+
         size_mb = len(media_data) / (1024 * 1024)
-        logger.info(f"✅ Media downloaded: message_id={message_id}, size={size_mb:.2f}MB, content_type={detected_content_type}")
+        logger.info(
+            f"✅ Media downloaded: message_id={message_id}, size={size_mb:.2f}MB, "
+            f"content_type={detected_content_type} (source={mime_source})"
+        )
         
         # Lancer l'upload dans une tâche asynchrone séparée (non-bloquant)
         logger.info(f"🚀 [ASYNC UPLOAD] Creating async upload task: message_id={message_id}")

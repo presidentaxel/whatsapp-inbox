@@ -1,6 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 import logging
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ from app.api.routes_whatsapp_utils import router as whatsapp_utils_router
 from app.core.config import settings
 from app.core.http_client import close_http_client
 from app.core.pg import init_pool, close_pool
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
 from app.services.profile_picture_service import periodic_profile_picture_update
 from app.services.media_background_service import periodic_media_backfill
 from app.services.pinned_notification_service import periodic_pin_notification_check
@@ -45,6 +48,7 @@ from app.services.pending_template_service import resume_pending_templates_on_st
 from app.services.flow_runtime_service import periodic_playground_flow_delays
 from app.services.broadcast_service import periodic_scheduled_broadcasts
 from app.services.playground_flow_service import periodic_playground_scheduled_launches
+from app.services.webhook_event_service import periodic_process_webhook_events
 
 app = FastAPI(
     title="WhatsApp Inbox API",
@@ -52,12 +56,41 @@ app = FastAPI(
     version="2.0.0",
 )
 
-_cors_origins_env = settings.CORS_ORIGINS if hasattr(settings, "CORS_ORIGINS") and settings.CORS_ORIGINS else None
-# Strip whitespace so "a, b, c" matches browser Origin headers (exact match, no leading space).
-_cors_origins = (
-    [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
-    if _cors_origins_env
-    else ["*"]
+# ─── Rate limiting (SlowAPI) ──────────────────────────────────────────────────
+# Le limiter est exposé sur `app.state.limiter` pour permettre l'usage de
+# `@limiter.limit("…")` sur n'importe quelle route.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# ─── CORS ────────────────────────────────────────────────────────────────────
+# Liste calculée selon `APP_ENV` (cf. config.py → cors_origins).
+# - production : utilise CORS_ORIGINS_PROD (ou CORS_ORIGINS si override)
+# - sinon       : utilise CORS_ORIGINS_DEV
+_cors_origins = settings.cors_origins
+if not _cors_origins:
+    if settings.is_production:
+        # On refuse explicitement le wildcard en prod : c'est une erreur de config.
+        logger.error(
+            "CORS_ORIGINS_PROD (ou CORS_ORIGINS) est vide en production. "
+            "Aucune origine ne sera autorisée - configure ces variables."
+        )
+    else:
+        logger.warning(
+            "Aucune origine CORS configurée - fallback sur localhost dev. "
+            "Définis CORS_ORIGINS_DEV pour personnaliser."
+        )
+        _cors_origins = [
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+        ]
+
+logger.info(
+    "CORS configuré (APP_ENV=%s) : %d origine(s)",
+    settings.APP_ENV,
+    len(_cors_origins),
 )
 
 app.add_middleware(
@@ -114,6 +147,27 @@ if settings.PROMETHEUS_ENABLED:
         endpoint=settings.PROMETHEUS_METRICS_PATH,
     )
 
+    # Si METRICS_AUTH_TOKEN est défini, on protège /metrics par un middleware
+    # léger qui exige `Authorization: Bearer <token>`. Sans token, on suppose
+    # que la restriction se fait au niveau du reverse proxy (allowlist IP).
+    if settings.METRICS_AUTH_TOKEN:
+        _metrics_path = settings.PROMETHEUS_METRICS_PATH
+        _expected = f"Bearer {settings.METRICS_AUTH_TOKEN}"
+
+        @app.middleware("http")
+        async def _protect_metrics(request: Request, call_next):
+            if request.url.path == _metrics_path:
+                auth = request.headers.get("authorization") or ""
+                if auth != _expected:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"detail": "unauthorized"},
+                    )
+            return await call_next(request)
+
+        logger.info("Endpoint %s protégé par Bearer token", _metrics_path)
+
 
 # Références aux tâches périodiques pour pouvoir les annuler proprement
 _periodic_tasks = []
@@ -162,6 +216,10 @@ async def startup_event():
     task7 = asyncio.create_task(periodic_playground_scheduled_launches())
     _periodic_tasks.append(task7)
     logger.info("✅ Playground scheduled flow launches task started")
+
+    task8 = asyncio.create_task(periodic_process_webhook_events())
+    _periodic_tasks.append(task8)
+    logger.info("✅ Webhook events durable queue worker started")
 
 
 @app.on_event("shutdown")

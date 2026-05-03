@@ -208,7 +208,7 @@
         "useEmbeddingSimilarity": "boolean défaut false - si true et échec mot-clé, choix d'intention par similarité cosinus des embeddings (Gemini) entre le message et « keyword + label » de chaque intention",
         "embeddingSimilarityThreshold": "nombre 0,35-0,95 défaut 0,62 - seuil minimal de similarité cosinus pour valider l'intention par embeddings",
         "structuredMemory": "boolean défaut true - si true et intention reconnue, ajoute une ligne au journal session exposé en variable flow_structured_notes",
-        "variables_runtime": "flow_recent_user_text (derniers messages user), flow_structured_notes (journal intentions) — substitution {{…}} dans prompts et corps"
+        "variables_runtime": "flow_recent_user_text (derniers messages user), flow_structured_notes (journal intentions) - substitution {{…}} dans prompts et corps"
       },
       "handles": {
         "sans_intentions": { "source": [null] },

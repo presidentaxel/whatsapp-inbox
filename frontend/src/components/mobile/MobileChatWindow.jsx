@@ -735,7 +735,7 @@ export default function MobileChatWindow({
         {conversationInternallyBlocked ? (
           <div className="chat-internal-block-banner" role="status">
             <p>
-              Contact <strong>bloqué dans l’app</strong> sur cette ligne — envoi désactivé. Les nouveaux
+              Contact <strong>bloqué dans l’app</strong> sur cette ligne - envoi désactivé. Les nouveaux
               messages restent traités côté serveur sans mise à jour de cette vue.
             </p>
           </div>

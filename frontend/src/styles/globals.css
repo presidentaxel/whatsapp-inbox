@@ -967,6 +967,9 @@
   --radius-lg: 14px;
   --radius-md: 10px;
   --radius-sm: 6px;
+  /* Défaut visible (thème sombre) - évite texte illisible si data-theme n’est pas encore posé */
+  --bubble-them-bg: rgba(255, 255, 255, 0.2);
+  --bubble-them-color: #fff;
 }
 
 /* Thème clair */
@@ -2309,6 +2312,15 @@ body {
   background: #005c4b;
   color: #e9edef;
   align-self: flex-end;
+  /* Bulles sortantes plus larges (style WhatsApp) ; évite le shrink-to-fit trop étroit avec inline-flex */
+  max-width: min(92%, calc(100% - 24px));
+}
+
+/* Empêcher les coupures au milieu des mots courts ; shrink-to-fit des bulles inline-flex + word-break global sur .bubble__text → min-content quasi à une lettre */
+.messages .bubble .bubble__text,
+.mobile-chat__messages .bubble .bubble__text {
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 
 /* Couleur des bulles selon le thème */

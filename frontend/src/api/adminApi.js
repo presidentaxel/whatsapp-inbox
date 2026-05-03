@@ -22,3 +22,9 @@ export const getAllAccountsForPermissions = () => api.get("/admin/accounts/all")
 export const updateUserAccountAccess = (userId, accountId, accessLevel) =>
   api.put(`/admin/users/${userId}/accounts/${accountId}/access`, { access_level: accessLevel });
 
+export const updateUserAxeliaAccess = (userId, allowed) =>
+  api.put(`/admin/users/${userId}/axelia-access`, { allowed });
+
+export const updateUserPlaygroundAccess = (userId, allowed) =>
+  api.put(`/admin/users/${userId}/playground-access`, { allowed });
+

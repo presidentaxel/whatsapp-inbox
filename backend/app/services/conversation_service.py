@@ -22,7 +22,7 @@ def _format_last_message(last_message_type: Optional[str], last_content_text: Op
         return ""
     mt = (last_message_type or "").lower()
     ct = (last_content_text or "").strip()
-    # Accusés WhatsApp (webhook statut sans message réel encore en base) — ne pas afficher comme dernier message
+    # Accusés WhatsApp (webhook statut sans message réel encore en base) - ne pas afficher comme dernier message
     if mt == "status" or ct == "[status update]":
         return ""
     if last_message_type == "text":

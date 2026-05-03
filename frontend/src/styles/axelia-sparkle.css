@@ -10,30 +10,126 @@
 
 .axelia-sparkle-glyph__star {
   display: block;
+  transform-origin: 50% 50%;
 }
 
-.axelia-sparkle-glyph__orbit {
+.axelia-sparkle-glyph__rings {
   position: absolute;
-  inset: -8px;
-  width: calc(100% + 16px);
-  height: calc(100% + 16px);
-  animation: axelia-orbit-spin 1.05s linear infinite;
+  inset: -9px;
+  width: calc(100% + 18px);
+  height: calc(100% + 18px);
+  overflow: visible;
   pointer-events: none;
 }
 
-.axelia-sparkle-glyph--animate .axelia-sparkle-glyph__orbit {
-  opacity: 1;
+.axelia-sparkle-glyph__ring-spin {
+  /* fill-box + center : pivote autour du centre de la bbox locale du <g> (centre du cercle).
+     Sans cela, transform-box default = view-box → origine en (0,0) du viewBox = haut-gauche
+     du SVG, et la rotation appliquée à un <g> translaté par le parent ne « tourne » pas
+     visiblement autour de l’étoile. */
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
-.axelia-sparkle-glyph:not(.axelia-sparkle-glyph--animate) .axelia-sparkle-glyph__orbit {
-  display: none;
+/* Rotation sur sous-groupe <g> (les transform CSS sur <circle> sont souvent ignorées) */
+.axelia-sparkle-glyph__ring-spin--a {
+  animation: axelia-ring-spin-a 1.35s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
 }
 
-@keyframes axelia-orbit-spin {
+.axelia-sparkle-glyph__ring-spin--b {
+  animation: axelia-ring-spin-b 1.95s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+@keyframes axelia-ring-spin-a {
   from {
     transform: rotate(0deg);
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes axelia-ring-spin-b {
+  from {
+    transform: rotate(14deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+
+/* Décalage tiret (sur les cercles), synchronisé au spin */
+.axelia-sparkle-glyph__ring--a {
+  stroke-dasharray: 20 44;
+  animation: axelia-ring-dash-a 1.35s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  opacity: 0.92;
+}
+
+.axelia-sparkle-glyph__ring--b {
+  stroke-dasharray: 12 52;
+  animation: axelia-ring-dash-b 1.95s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  opacity: 0.55;
+}
+
+@keyframes axelia-ring-dash-a {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -32;
+  }
+}
+
+@keyframes axelia-ring-dash-b {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: 40;
+  }
+}
+
+.axelia-sparkle-glyph--animate .axelia-sparkle-glyph__star {
+  animation: axelia-star-breathe 1.5s ease-in-out infinite;
+  filter: drop-shadow(0 0 6px rgba(138, 180, 248, 0.55))
+    drop-shadow(0 0 14px rgba(66, 133, 244, 0.22));
+}
+
+@keyframes axelia-star-breathe {
+  0%,
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.085) rotate(4deg);
+    opacity: 0.88;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .axelia-sparkle-glyph__ring-spin--a,
+  .axelia-sparkle-glyph__ring-spin--b {
+    animation: none;
+  }
+
+  .axelia-sparkle-glyph__ring-spin--a {
+    transform: rotate(48deg);
+  }
+
+  .axelia-sparkle-glyph__ring-spin--b {
+    transform: rotate(-32deg);
+  }
+
+  .axelia-sparkle-glyph__ring--a,
+  .axelia-sparkle-glyph__ring--b {
+    animation: none;
+    stroke-dashoffset: 0;
+    opacity: 0.38;
+  }
+
+  .axelia-sparkle-glyph--animate .axelia-sparkle-glyph__star {
+    animation: none;
+    filter: drop-shadow(0 0 3px rgba(138, 180, 248, 0.35));
   }
 }

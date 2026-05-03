@@ -13,6 +13,7 @@ from app.services.profile_picture_service import update_all_contacts_profile_pic
 from app.services.internal_block_service import (
     InternalBlocksTableNotMigrated,
     list_blocked_wa_ids_for_account,
+    list_blocked_wa_ids_by_accounts,
     remove_internal_block,
     upsert_internal_block,
 )
@@ -30,6 +31,13 @@ class ContactCreate(BaseModel):
 class ContactUpdate(BaseModel):
     display_name: str | None = None
     whatsapp_number: str | None = None
+
+
+class MetaBlockedBatchBody(BaseModel):
+    account_ids: list[str]
+
+
+_META_BLOCKED_BATCH_MAX = 128
 
 
 @router.get("")
@@ -50,7 +58,7 @@ async def fetch_contacts(
 
 @router.get("/meta-blocked")
 async def get_meta_blocked_wa_ids(
-    account_id: str = Query(..., description="Compte WhatsApp — liste des contacts bloqués internes (app)"),
+    account_id: str = Query(..., description="Compte WhatsApp - liste des contacts bloqués internes (app)"),
     current_user: CurrentUser = Depends(get_current_user),
 ):
     """
@@ -67,6 +75,46 @@ async def get_meta_blocked_wa_ids(
 
     wa_ids = await list_blocked_wa_ids_for_account(account_id)
     return {"wa_ids": wa_ids}
+
+
+@router.post("/meta-blocked/batch")
+async def post_meta_blocked_wa_ids_batch(
+    body: MetaBlockedBatchBody,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """
+    Même donnée que GET /contacts/meta-blocked pour plusieurs comptes en un appel.
+    Seuls les comptes avec `messages.view` (et accès non « aucun ») sont renvoyés.
+    """
+    raw = body.account_ids or []
+    if len(raw) > _META_BLOCKED_BATCH_MAX:
+        raise HTTPException(
+            status_code=400,
+            detail=f"too_many_account_ids (max {_META_BLOCKED_BATCH_MAX})",
+        )
+    seen: list[str] = []
+    dup: set[str] = set()
+    for x in raw:
+        s = (x or "").strip()
+        if not s or s in dup:
+            continue
+        try:
+            uuid_module.UUID(s)
+        except ValueError:
+            continue
+        dup.add(s)
+        seen.append(s)
+    permitted: list[str] = []
+    for aid in seen:
+        if not current_user.permissions.has(PermissionCodes.MESSAGES_VIEW, aid):
+            continue
+        if current_user.permissions.account_access_levels.get(aid) == "aucun":
+            continue
+        permitted.append(aid)
+    if not permitted:
+        return {"by_account": {}}
+    by_account = await list_blocked_wa_ids_by_accounts(permitted)
+    return {"by_account": by_account}
 
 
 @router.post("/{contact_id}/meta-block")
@@ -104,7 +152,7 @@ async def meta_block_contact(
         raise HTTPException(
             status_code=503,
             detail=(
-                "internal_contact_blocks_table_missing — Exécute sur Postgres le fichier "
+                "internal_contact_blocks_table_missing - Exécute sur Postgres le fichier "
                 "supabase/migrations/050_internal_contact_blocks.sql (table internal_contact_blocks)."
             ),
         ) from None
@@ -147,7 +195,7 @@ async def meta_unblock_contact(
         raise HTTPException(
             status_code=503,
             detail=(
-                "internal_contact_blocks_table_missing — Exécute sur Postgres le fichier "
+                "internal_contact_blocks_table_missing - Exécute sur Postgres le fichier "
                 "supabase/migrations/050_internal_contact_blocks.sql (table internal_contact_blocks)."
             ),
         ) from None

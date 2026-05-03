@@ -75,14 +75,37 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// Évite les re-déclenchements en rafale quand plusieurs requêtes échouent en
+// 401 simultanément (ex: au reload). On notifie l'app via un évènement global
+// que `AuthContext` écoute pour forcer la déconnexion / redirect login.
+let _signalingUnauthorized = false;
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
-      // Token may have been revoked; clear cache so next request fetches fresh
+    const status = error.response?.status;
+
+    if (status === 401) {
       _cachedToken = null;
       _tokenExpiresAt = 0;
+
+      if (typeof window !== "undefined" && !_signalingUnauthorized) {
+        _signalingUnauthorized = true;
+        try {
+          window.dispatchEvent(
+            new CustomEvent("auth:unauthorized", {
+              detail: { url: error.config?.url },
+            })
+          );
+        } finally {
+          // Reset après un court délai pour autoriser une future notification
+          setTimeout(() => {
+            _signalingUnauthorized = false;
+          }, 1000);
+        }
+      }
     }
+
     return Promise.reject(error);
   }
 );

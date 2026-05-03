@@ -25,6 +25,10 @@ export const getContactWhatsAppInfo = (contactId, accountId) =>
 export const getMetaBlockedWaIds = (accountId) =>
   api.get("/contacts/meta-blocked", { params: { account_id: accountId } });
 
+/** Tous les comptes autorisés en un POST (remplace N× GET meta-blocked). */
+export const getMetaBlockedWaIdsBatch = (accountIds) =>
+  api.post("/contacts/meta-blocked/batch", { account_ids: accountIds });
+
 export const metaBlockContact = (contactId, accountId) =>
   api.post(`/contacts/${contactId}/meta-block`, {}, { params: { account_id: accountId } });
 

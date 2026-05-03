@@ -28,9 +28,12 @@ try:
     from googleapiclient.discovery import build
     from google.auth.transport.requests import Request as GoogleAuthRequest
     GOOGLE_OAUTH_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     GOOGLE_OAUTH_AVAILABLE = False
-    logger.warning("⚠️ Google OAuth libraries not installed")
+    logger.warning(
+        "⚠️ Google OAuth indisponible (import échoué - souvent cffi/cryptography sur Python récent): %s",
+        e,
+    )
 
 
 def _get_google_drive_service_from_account(account: dict):

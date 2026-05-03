@@ -1,4 +1,4 @@
--- Tag d’orientation (secteur / skills) sur les messages utilisateur Axelia — affichage UI uniquement
+-- Tag d’orientation (secteur / skills) sur les messages utilisateur Axelia - affichage UI uniquement
 
 ALTER TABLE axelia_messages ADD COLUMN IF NOT EXISTS focus_tag text;
 

@@ -87,7 +87,7 @@ class Settings:
         int(os.getenv("GEMINI_FLOW_RECENT_CONTEXT_CHARS", "32000") or "32000"),
     )
 
-    # Axelia (hub IA) — routage fast / pro (évaluation de difficulté avec le modèle rapide)
+    # Axelia (hub IA) - routage fast / pro (évaluation de difficulté avec le modèle rapide)
     AXELIA_FAST_MODEL: str = _normalize_gemini_model_id(
         (os.getenv("AXELIA_FAST_MODEL") or "").strip() or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     )
@@ -97,7 +97,7 @@ class Settings:
     AXELIA_DIFFICULTY_THRESHOLD: float = float(
         os.getenv("AXELIA_DIFFICULTY_THRESHOLD", "0.42") or "0.42"
     )
-    # Classification (un seul appel, sans retry HTTP) — latence Gemini variable
+    # Classification (un seul appel, sans retry HTTP) - latence Gemini variable
     AXELIA_CLASSIFY_READ_TIMEOUT: float = float(
         os.getenv("AXELIA_CLASSIFY_READ_TIMEOUT", "42") or "42"
     )
@@ -131,8 +131,90 @@ class Settings:
     # Peut être configurée via la variable d'environnement MAX_MEDIA_UPLOAD_SIZE
     MAX_MEDIA_UPLOAD_SIZE: int = int(os.getenv("MAX_MEDIA_UPLOAD_SIZE", "209715200"))  # 200MB par défaut
 
-    # CORS: comma-separated list of allowed origins. Defaults to "*" (all) if not set.
-    # Whitespace around commas is trimmed. Example: "https://a.com, http://localhost:3000"
+    # ─────────────────────────────────────────────────────────────────────────
+    # Environnement
+    # ─────────────────────────────────────────────────────────────────────────
+    # Sélecteur d'environnement utilisé pour piocher la bonne liste CORS et
+    # activer/désactiver certains endpoints (ex: /webhook/whatsapp/debug).
+    # Valeurs supportées: "development" | "production" | "test".
+    APP_ENV: str = (os.getenv("APP_ENV") or "development").strip().lower()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # CORS
+    # ─────────────────────────────────────────────────────────────────────────
+    # Deux listes distinctes pour ne pas mélanger les origines dev et prod.
+    # Format: liste séparée par virgules. Espaces tolérés.
+    # Exemples:
+    #   CORS_ORIGINS_DEV=http://localhost:5173,http://localhost:5174
+    #   CORS_ORIGINS_PROD=https://app.exemple.com,https://admin.exemple.com
+    # `CORS_ORIGINS` reste supporté en *override* universel (rétrocompatibilité)
+    # - s'il est défini, il prime sur les listes par environnement.
+    CORS_ORIGINS_DEV: str | None = os.getenv(
+        "CORS_ORIGINS_DEV",
+        "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174",
+    )
+    CORS_ORIGINS_PROD: str | None = os.getenv("CORS_ORIGINS_PROD")
     CORS_ORIGINS: str | None = os.getenv("CORS_ORIGINS")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Sécurité webhook Meta
+    # ─────────────────────────────────────────────────────────────────────────
+    # Si vrai, exige `META_APP_SECRET` configuré ET un `X-Hub-Signature-256`
+    # valide sur tout webhook entrant. Mettre à `false` UNIQUEMENT en dev local
+    # quand on simule des payloads sans signer.
+    WEBHOOK_SIGNATURE_REQUIRED: bool = (
+        os.getenv("WEBHOOK_SIGNATURE_REQUIRED", "true").strip().lower() == "true"
+    )
+    # Active le endpoint `POST /webhook/whatsapp/debug` (verbose, log payload entier).
+    # Désactivé par défaut. À n'activer qu'en investigation, derrière auth.
+    WEBHOOK_DEBUG_ENABLED: bool = (
+        os.getenv("WEBHOOK_DEBUG_ENABLED", "false").strip().lower() == "true"
+    )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Rate limiting (slowapi)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Format des limites: "<n>/<unit>" (ex: "60/minute", "1000/hour").
+    RATE_LIMIT_ENABLED: bool = (
+        os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() == "true"
+    )
+    # Limite par défaut appliquée à toutes les routes (sauf overrides explicites).
+    RATE_LIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "120/minute")
+    # Limite plus stricte sur les endpoints d'auth (anti brute-force).
+    RATE_LIMIT_AUTH: str = os.getenv("RATE_LIMIT_AUTH", "20/minute")
+    # Webhooks: Meta peut envoyer beaucoup de requêtes (statuses), garder large.
+    RATE_LIMIT_WEBHOOK: str = os.getenv("RATE_LIMIT_WEBHOOK", "600/minute")
+    # Endpoints coûteux côté IA (Axelia, Gemini...) - par utilisateur authentifié.
+    RATE_LIMIT_AI: str = os.getenv("RATE_LIMIT_AI", "30/minute")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Endpoints opérationnels
+    # ─────────────────────────────────────────────────────────────────────────
+    # Si défini, Prometheus `/metrics` n'est servi qu'avec
+    # `Authorization: Bearer <METRICS_AUTH_TOKEN>`. Vide = pas d'auth (à
+    # restreindre via reverse-proxy / IP allowlist).
+    METRICS_AUTH_TOKEN: str | None = os.getenv("METRICS_AUTH_TOKEN")
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV == "production"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """
+        Renvoie la liste effective d'origines CORS pour l'environnement courant.
+
+        Précédence:
+          1. `CORS_ORIGINS` (override universel) si défini
+          2. `CORS_ORIGINS_PROD` si APP_ENV=production
+          3. `CORS_ORIGINS_DEV` sinon
+        """
+        raw = self.CORS_ORIGINS
+        if not raw:
+            raw = self.CORS_ORIGINS_PROD if self.is_production else self.CORS_ORIGINS_DEV
+        if not raw:
+            return []
+        return [o.strip() for o in raw.split(",") if o.strip()]
+
 
 settings = Settings()

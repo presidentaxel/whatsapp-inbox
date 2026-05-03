@@ -1,4 +1,4 @@
--- Blocage interne (app uniquement) par contact × compte WhatsApp — n'appelle pas Meta.
+-- Blocage interne (app uniquement) par contact × compte WhatsApp - n'appelle pas Meta.
 CREATE TABLE IF NOT EXISTS internal_contact_blocks (
   contact_id uuid NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   account_id uuid NOT NULL REFERENCES whatsapp_accounts(id) ON DELETE CASCADE,

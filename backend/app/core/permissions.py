@@ -26,6 +26,8 @@ class PermissionCodes:
     SETTINGS_MANAGE = "settings.manage"
     PERMISSIONS_VIEW = "permissions.view"
     PERMISSIONS_MANAGE = "permissions.manage"
+    AXELIA_ACCESS = "axelia.access"
+    PLAYGROUND_ACCESS = "playground.access"
 
 
 ALL_PERMISSION_CODES = {
@@ -41,6 +43,8 @@ ALL_PERMISSION_CODES = {
     PermissionCodes.SETTINGS_MANAGE,
     PermissionCodes.PERMISSIONS_VIEW,
     PermissionCodes.PERMISSIONS_MANAGE,
+    PermissionCodes.AXELIA_ACCESS,
+    PermissionCodes.PLAYGROUND_ACCESS,
 }
 
 

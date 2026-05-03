@@ -821,7 +821,7 @@ export function GeminiSettingsForm({ id, data, patch }) {
         <p className="pg-modal__hint">
           Reliez chaque sortie au suivant. La poignée « inconnu » est utilisée après
           échec du routage (par défaut l’IA pose d’abord une question de précision si
-          activé ci‑dessous, puis cette branche — ex. handoff).
+          activé ci‑dessous, puis cette branche - ex. handoff).
         </p>
         <div className="pg-modal__btn-row">
           <button
@@ -858,7 +858,7 @@ export function GeminiSettingsForm({ id, data, patch }) {
             checked={data.useEmbeddingSimilarity === true}
             onChange={(e) => patch(id, { useEmbeddingSimilarity: e.target.checked })}
           />{" "}
-          Routage sémantique (embeddings) si le mot-clé échoue — coût API supplémentaire
+          Routage sémantique (embeddings) si le mot-clé échoue - coût API supplémentaire
         </label>
         <label className="pg-modal__label">
           Seuil de similarité (0,35–0,95)

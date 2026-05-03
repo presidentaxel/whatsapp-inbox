@@ -55,7 +55,7 @@ def http_status_and_detail_for_whatsapp_api_error(exc: WhatsAppAPIError) -> tupl
     if 133010 in codes or "133010" in msg_lower or "account not registered" in msg_lower:
         return (
             422,
-            "whatsapp_meta_account_not_registered — Cette ligne WhatsApp n’est pas enregistrée sur Meta "
+            "whatsapp_meta_account_not_registered - Cette ligne WhatsApp n’est pas enregistrée sur Meta "
             "(Cloud API), ou le phone_number_id / le token ne correspond plus à un actif valide. "
             "Vérifie la ligne dans Meta Business Suite et les identifiants du compte dans l’app.",
         )
@@ -1311,7 +1311,7 @@ def normalize_whatsapp_user_id(phone: str) -> str:
 
 
 # ============================================================================
-# Block users (WhatsApp Cloud API) — POST/DELETE/GET .../block_users
+# Block users (WhatsApp Cloud API) - POST/DELETE/GET .../block_users
 # ============================================================================
 
 

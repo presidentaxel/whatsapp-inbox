@@ -224,20 +224,7 @@ jobs:
             exit 1
           fi
 
-      - name: Validate GitHub workflow
-        run: |
-          if [ -f .github/workflows/deploy.yml ]; then
-            # Vérifier qu'il n'y a qu'un seul workflow de déploiement
-            WORKFLOW_COUNT=$(find .github/workflows -name "deploy*.yml" | wc -l)
-            if [ "$WORKFLOW_COUNT" -gt 1 ]; then
-              echo "⚠️  Plusieurs workflows de déploiement trouvés"
-              find .github/workflows -name "deploy*.yml"
-            else
-              echo "✅ Un seul workflow de déploiement"
-            fi
-          fi
-
-      - name: Check for duplicate workflows
+      - name: List GitHub workflows
         run: |
           WORKFLOWS=$(find .github/workflows -name "*.yml" -o -name "*.yaml" | wc -l)
           echo "📊 Nombre de workflows: $WORKFLOWS"
@@ -314,9 +301,9 @@ jobs:
              [ "${{ needs.test-frontend.result }}" != "success" ] || \
              [ "${{ needs.validate-config.result }}" != "success" ] || \
              [ "${{ needs.test-deployment.result }}" != "success" ]; then
-            echo "❌ Certains tests ont échoué - Le déploiement sera bloqué"
+            echo "❌ Certains tests ont échoué"
             exit 1
           else
-            echo "✅ Tous les tests sont passés - Le déploiement peut continuer"
+            echo "✅ Tous les tests sont passés"
           fi
 

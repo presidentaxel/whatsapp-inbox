@@ -1,9 +1,17 @@
+## Prérequis (Windows, machine neuve)
+```bash
+python --version
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
 ## Lancer l'app
 ```bash
-# backend
 cd backend
+#python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+
 # frontend
 cd frontend
 npm install

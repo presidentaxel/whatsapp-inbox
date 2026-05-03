@@ -1112,7 +1112,7 @@ def _extract_content_text(message: Dict[str, Any]) -> str:
         # Aucun média / texte exploitable : message lisible pour l'équipe et le fil de discussion.
         return _format_unsupported_inbound_text(message)
 
-    # fallback: éviter d'afficher du JSON brut dans l'UI — message générique
+    # fallback: éviter d'afficher du JSON brut dans l'UI - message générique
     logger.warning(
         "incoming message type without explicit extractor: type=%s wa_id=%s",
         msg_type,
@@ -1141,7 +1141,7 @@ def _format_unsupported_inbound_text(message: Dict[str, Any]) -> str:
 
     base = (
         "Le contact a envoyé un format que WhatsApp Business ne transmet pas à cette application "
-        "(message non pris en charge côté Meta). Le contenu n’est pas disponible ici — "
+        "(message non pris en charge côté Meta). Le contenu n’est pas disponible ici - "
         "demandez au contact d’utiliser un message texte, une image, une note vocale ou un document classique."
     )
     extras = []

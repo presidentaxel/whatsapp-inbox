@@ -31,6 +31,28 @@ export function AuthProvider({ children }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Centralisation : tout 401 axios déclenche `auth:unauthorized` (cf.
+  // `axiosClient.js`). On purge la session pour que `ProtectedRoute` redirige
+  // vers la page de login plutôt que de laisser l'UI dans un état partiel.
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const handleUnauthorized = async () => {
+      try {
+        await supabaseClient.auth.signOut();
+      } catch {
+        // ignore - on force quand même le reset local
+      }
+      setSession(null);
+      setProfile(null);
+    };
+
+    window.addEventListener("auth:unauthorized", handleUnauthorized);
+    return () => {
+      window.removeEventListener("auth:unauthorized", handleUnauthorized);
+    };
+  }, []);
+
   useEffect(() => {
     if (!session) {
       setProfile(null);

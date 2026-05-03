@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings, FiUserCheck } from "react-icons/fi";
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
-import { getContacts, getMetaBlockedWaIds, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
+import { getContacts, getMetaBlockedWaIdsBatch, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
 import { supabaseClient } from "../api/supabaseClient";
 import { clearAuthSession } from "../utils/secureStorage";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
@@ -67,19 +67,21 @@ export default function MobileInboxPage({ onLogout }) {
       return;
     }
     const targets = accounts.filter((a) => hasPermission?.("messages.view", a.id));
+    if (!targets.length) {
+      setBlockedByAccount({});
+      return;
+    }
     try {
-      const results = await Promise.all(
-        targets.map(async (a) => {
-          try {
-            const res = await getMetaBlockedWaIds(a.id);
-            const ids = (res.data?.wa_ids ?? []).map((x) => normalizeWaDigits(x));
-            return [a.id, ids];
-          } catch {
-            return [a.id, []];
-          }
-        })
+      const res = await getMetaBlockedWaIdsBatch(targets.map((a) => a.id));
+      const byAccount = res.data?.by_account ?? {};
+      setBlockedByAccount(
+        Object.fromEntries(
+          targets.map((a) => [
+            a.id,
+            (byAccount[a.id] ?? []).map((x) => normalizeWaDigits(x)),
+          ])
+        )
       );
-      setBlockedByAccount(Object.fromEntries(results));
     } catch (e) {
       console.error("meta block list:", e);
       setBlockedByAccount({});

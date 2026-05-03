@@ -1,11 +1,28 @@
 """Recherche et lecture de conversations inbox pour Axelia (périmètre compte WABA)."""
 from __future__ import annotations
 
+import asyncio
 import re
-from typing import Any, Dict, List, Optional
+from datetime import datetime, time, timezone
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from app.core.db import supabase, supabase_execute
 from app.core.pg import fetch_all, fetch_one, get_pool
+from app.core.permissions import PermissionCodes
+from app.services.account_service import get_all_accounts
+
+if TYPE_CHECKING:
+    from app.core.permissions import CurrentUser
+
+_AXELIA_MULTI_MAX_ACCOUNTS = 40
+_AXELIA_MULTI_SUMMARY_TIMEOUT_S = 25.0
+_AXELIA_MULTI_SEARCH_TIMEOUT_S = 20.0
+# Fallback Supabase (sans pool Postgres) : ne balayer que les N conversations les plus récentes
+_SUPABASE_FALLBACK_MAX_CONVERSATIONS = 500
+
+# Borne anti-élargissement : évite les requêtes sur 10 ans qui rapatrieraient toute la table
+# côté fallback Supabase. Au-delà, on garde la requête mais on log un warning.
+_DATE_RANGE_MAX_DAYS = 366
 
 
 def _sanitize_ilike_fragment(q: str) -> str:
@@ -15,16 +32,87 @@ def _sanitize_ilike_fragment(q: str) -> str:
     return re.sub(r"[%_]", " ", s)
 
 
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def parse_iso_datetime(
+    raw: Any,
+    *,
+    end_of_day: bool = False,
+) -> Optional[datetime]:
+    """Parse une date/heure ISO 8601 en `datetime` aware (UTC par défaut).
+
+    Accepte ``YYYY-MM-DD``, ``YYYY-MM-DDTHH:MM:SS`` (avec ou sans fuseau ``Z``/``±HH:MM``).
+    Si ``end_of_day=True`` et que la chaîne est une date pure, on positionne l'heure à
+    ``23:59:59.999999`` (utile pour ``until`` afin d'inclure toute la journée saisie).
+
+    Retourne ``None`` pour toute entrée invalide - l'appelant doit traiter ``None`` comme
+    « pas de borne ».
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+    s = str(raw).strip()
+    if not s:
+        return None
+    # Tolérance pratique : on accepte un suffixe `Z` (UTC) que `fromisoformat` < 3.11 rejette.
+    s_norm = s.replace("Z", "+00:00") if s.endswith("Z") else s
+    try:
+        dt = datetime.fromisoformat(s_norm)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if end_of_day and _DATE_ONLY_RE.match(s):
+        dt = datetime.combine(dt.date(), time(23, 59, 59, 999_999), tzinfo=dt.tzinfo)
+    return dt
+
+
+def _resolve_date_range(
+    since: Any, until: Any
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """Parse + normalise (since, until). Inverse l'ordre si l'utilisateur les a swappés."""
+    s = parse_iso_datetime(since)
+    u = parse_iso_datetime(until, end_of_day=True)
+    if s and u and s > u:
+        s, u = u, s
+    return s, u
+
+
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Convertit un datetime aware/naïf en datetime naïf exprimé en UTC.
+
+    asyncpg refuse de binder un ``datetime`` *aware* sur une colonne
+    ``timestamp without time zone`` (cas de ``messages.timestamp`` ici) - il faut
+    obligatoirement un naïf. Ce helper centralise la conversion pour ne pas
+    perdre l'instant représenté.
+    """
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 async def search_messages_text_for_account(
     account_id: str,
     query: str,
     *,
     limit: int = 25,
+    match_mode: str = "all",
+    since: Any = None,
+    until: Any = None,
 ) -> Dict[str, Any]:
     """
     Recherche textuelle dans les messages du compte (contenu utile pour retrouver une discussion).
-    Pas d’embeddings : découpage du besoin en mots-clés + ILIKE ; pour une vision « sémantique »,
-    combiner avec reformulations dans la requête utilisateur ou évolutions futures (vecteurs messages).
+    Pas d’embeddings : mots-clés + ILIKE.
+
+    match_mode:
+      - ``all`` : tous les tokens doivent apparaître (ET) - précision maximale.
+      - ``any`` : au moins un token suffit (OU) - plus de résultats, plus « large ».
+
+    since / until : bornes ISO 8601 (``YYYY-MM-DD`` ou ``YYYY-MM-DDTHH:MM:SS[Z|±HH:MM]``)
+    appliquées sur la colonne ``messages.timestamp``. ``until`` saisie en date pure inclut
+    la journée entière. Si l'ordre est inversé, on l'auto-corrige.
     """
     raw = _sanitize_ilike_fragment(query)
     if not raw:
@@ -33,6 +121,18 @@ async def search_messages_text_for_account(
     tokens = [t for t in re.split(r"\s+", raw) if len(t) >= 2][:8]
     if not tokens:
         return {"error": "aucun mot-clé exploitable.", "hits": []}
+
+    mode = (match_mode or "all").strip().lower()
+    if mode not in ("all", "any"):
+        mode = "all"
+
+    since_dt, until_dt = _resolve_date_range(since, until)
+
+    date_filter_meta: Dict[str, Any] = {}
+    if since_dt:
+        date_filter_meta["since"] = since_dt.isoformat()
+    if until_dt:
+        date_filter_meta["until"] = until_dt.isoformat()
 
     pool = get_pool()
     lim = max(1, min(limit, 40))
@@ -45,7 +145,21 @@ async def search_messages_text_for_account(
             cond_parts.append(f"m.content_text ILIKE ${i}")
             params.append(f"%{tok}%")
             i += 1
-        where_kw = " AND ".join(cond_parts) if cond_parts else "TRUE"
+        joiner = " OR " if mode == "any" else " AND "
+        where_kw = joiner.join(cond_parts) if cond_parts else "TRUE"
+        date_clauses: List[str] = []
+        if since_dt:
+            date_clauses.append(f"m.timestamp >= ${i}")
+            # `messages.timestamp` est `timestamp without time zone` côté schéma -
+            # asyncpg exige un datetime naïf pour ce type. On convertit en UTC
+            # puis on retire `tzinfo` pour ne pas perdre l'instant représenté.
+            params.append(_to_naive_utc(since_dt))
+            i += 1
+        if until_dt:
+            date_clauses.append(f"m.timestamp <= ${i}")
+            params.append(_to_naive_utc(until_dt))
+            i += 1
+        date_sql = (" AND " + " AND ".join(date_clauses)) if date_clauses else ""
         params.append(lim)
         sql = f"""
             SELECT m.id AS message_id,
@@ -62,7 +176,8 @@ async def search_messages_text_for_account(
             WHERE c.account_id = $1::uuid
               AND m.message_type = 'text'
               AND COALESCE(m.content_text, '') <> ''
-              AND {where_kw}
+              AND ({where_kw})
+              {date_sql}
             ORDER BY m.timestamp DESC
             LIMIT ${i}
         """
@@ -79,28 +194,77 @@ async def search_messages_text_for_account(
             }
             for r in rows
         ]
-        return {"query_tokens": tokens, "total": len(hits), "hits": hits}
+        out: Dict[str, Any] = {
+            "query_tokens": tokens,
+            "match_mode": mode,
+            "total": len(hits),
+            "hits": hits,
+        }
+        if date_filter_meta:
+            out["date_filter"] = date_filter_meta
+        return out
 
     conv_res = await supabase_execute(
-        supabase.table("conversations").select("id").eq("account_id", account_id)
+        supabase.table("conversations")
+        .select("id")
+        .eq("account_id", account_id)
+        .order("updated_at", desc=True)
+        .limit(_SUPABASE_FALLBACK_MAX_CONVERSATIONS)
     )
     conv_ids = [r["id"] for r in (conv_res.data or []) if r.get("id")]
     if not conv_ids:
-        return {"query_tokens": tokens, "total": 0, "hits": []}
+        out_empty: Dict[str, Any] = {
+            "query_tokens": tokens,
+            "match_mode": mode,
+            "total": 0,
+            "hits": [],
+        }
+        if date_filter_meta:
+            out_empty["date_filter"] = date_filter_meta
+        return out_empty
 
     hits: List[Dict[str, Any]] = []
     tl = [t.lower() for t in tokens]
     step = 40
+
+    def _text_matches_any_or_all(raw_text_low: str) -> bool:
+        if not raw_text_low:
+            return False
+        if mode == "any":
+            return any(t in raw_text_low for t in tl)
+        return all(t in raw_text_low for t in tl)
+
+    def _ts_in_range(ts_value: Any) -> bool:
+        if since_dt is None and until_dt is None:
+            return True
+        # Les timestamps Supabase arrivent généralement en ISO 8601 (string).
+        # On évite de planter sur un format inattendu : pas de borne → on garde le hit.
+        if isinstance(ts_value, datetime):
+            dt = ts_value if ts_value.tzinfo else ts_value.replace(tzinfo=timezone.utc)
+        else:
+            dt = parse_iso_datetime(ts_value)
+            if dt is None:
+                return True
+        if since_dt and dt < since_dt:
+            return False
+        if until_dt and dt > until_dt:
+            return False
+        return True
+
     for i in range(0, len(conv_ids), step):
         chunk = conv_ids[i : i + step]
-        res = await supabase_execute(
+        msg_q = (
             supabase.table("messages")
             .select("id, conversation_id, content_text, direction, timestamp")
             .in_("conversation_id", chunk)
             .eq("message_type", "text")
-            .order("timestamp", desc=True)
-            .limit(400)
         )
+        if since_dt:
+            msg_q = msg_q.gte("timestamp", since_dt.isoformat())
+        if until_dt:
+            msg_q = msg_q.lte("timestamp", until_dt.isoformat())
+        msg_q = msg_q.order("timestamp", desc=True).limit(400)
+        res = await supabase_execute(msg_q)
         chunk_msgs = res.data or []
         conv_need = list({str(m["conversation_id"]) for m in chunk_msgs if m.get("conversation_id")})
         conv_meta: Dict[str, Dict[str, Any]] = {}
@@ -119,7 +283,9 @@ async def search_messages_text_for_account(
                 }
         for m in chunk_msgs:
             raw_text = (m.get("content_text") or "").lower()
-            if not raw_text or not all(t in raw_text for t in tl):
+            if not _text_matches_any_or_all(raw_text):
+                continue
+            if not _ts_in_range(m.get("timestamp")):
                 continue
             cid = str(m.get("conversation_id") or "")
             cm = conv_meta.get(cid) or {}
@@ -140,7 +306,180 @@ async def search_messages_text_for_account(
             break
 
     hits.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
-    return {"query_tokens": tokens, "total": len(hits), "hits": hits[:lim]}
+    out: Dict[str, Any] = {
+        "query_tokens": tokens,
+        "match_mode": mode,
+        "total": len(hits),
+        "hits": hits[:lim],
+    }
+    if date_filter_meta:
+        out["date_filter"] = date_filter_meta
+    return out
+
+
+async def list_accessible_account_rows_for_inbox(user: "CurrentUser") -> List[Dict[str, Any]]:
+    """Comptes WABA où l’utilisateur peut voir les conversations (conversations.view)."""
+    ids = user.accounts_for(PermissionCodes.CONVERSATIONS_VIEW)
+    if ids is None:
+        rows = await get_all_accounts(None)
+    else:
+        rows = await get_all_accounts(list(ids))
+    return list(rows)
+
+
+async def search_messages_all_accessible_accounts(
+    user: "CurrentUser",
+    query: str,
+    *,
+    limit_per_account: int = 25,
+    max_accounts: Optional[int] = None,
+    per_account_timeout_s: float = _AXELIA_MULTI_SEARCH_TIMEOUT_S,
+    match_mode: str = "all",
+    since: Any = None,
+    until: Any = None,
+) -> Dict[str, Any]:
+    """
+    Recherche inbox sur chaque ligne accessible, avec les mêmes plafonds que le chemin une-ligne
+    (limit_per_account borné comme search_messages_text_for_account).
+
+    ``since`` / ``until`` (ISO 8601) sont relayés à chaque appel par compte ; voir
+    :func:`search_messages_text_for_account` pour le format accepté.
+    """
+    raw = _sanitize_ilike_fragment(query)
+    if not raw:
+        return {"error": "query vide ou trop court.", "account_scope": "all_accessible", "accounts": []}
+
+    cap_acc = max_accounts if max_accounts is not None else _AXELIA_MULTI_MAX_ACCOUNTS
+    lim_pa = max(1, min(int(limit_per_account), 40))
+
+    since_dt, until_dt = _resolve_date_range(since, until)
+    date_filter_meta: Dict[str, Any] = {}
+    if since_dt:
+        date_filter_meta["since"] = since_dt.isoformat()
+    if until_dt:
+        date_filter_meta["until"] = until_dt.isoformat()
+
+    rows = await list_accessible_account_rows_for_inbox(user)
+    selected = rows[:cap_acc]
+    out: List[Dict[str, Any]] = []
+    for row in selected:
+        aid = str(row.get("id") or "")
+        if not aid:
+            continue
+        if not user.permissions.has(PermissionCodes.CONVERSATIONS_VIEW, aid):
+            continue
+        try:
+            part = await asyncio.wait_for(
+                search_messages_text_for_account(
+                    aid,
+                    query,
+                    limit=lim_pa,
+                    match_mode=match_mode,
+                    since=since_dt,
+                    until=until_dt,
+                ),
+                timeout=per_account_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            part = {"error": f"délai dépassé ({per_account_timeout_s}s)", "hits": [], "total": 0}
+
+        err = part.get("error") if isinstance(part, dict) else None
+        hits = part.get("hits") if isinstance(part, dict) else []
+        out.append(
+            {
+                "account_id": aid,
+                "account_name": row.get("name") or "-",
+                "account_phone": row.get("phone_number") or "-",
+                "error": err,
+                "hits": hits if isinstance(hits, list) else [],
+                "total": part.get("total") if isinstance(part, dict) else 0,
+            }
+        )
+
+    payload: Dict[str, Any] = {
+        "account_scope": "all_accessible",
+        "query": query,
+        "limit_per_account": lim_pa,
+        "accounts": out,
+        "accounts_total_in_scope": len(rows),
+        "accounts_iterated": len(selected),
+        "accounts_capped": len(rows) > cap_acc,
+    }
+    if date_filter_meta:
+        payload["date_filter"] = date_filter_meta
+    return payload
+
+
+async def summarize_contact_inbox_all_accessible_accounts(
+    user: "CurrentUser",
+    contact_query: str,
+    *,
+    max_threads: int = 8,
+    max_messages_per_thread: int = 35,
+    max_accounts: Optional[int] = None,
+    per_account_timeout_s: float = _AXELIA_MULTI_SUMMARY_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """
+    Résume les fils d’un contact sur **toutes** les lignes WABA accessibles (conversations.view),
+    en réutilisant les plafonds du chemin mono-compte par ligne.
+    """
+    q = _sanitize_ilike_fragment(contact_query)
+    if len(q) < 2:
+        return {
+            "error": "Requête contact trop courte (2 caractères minimum).",
+            "account_scope": "all_accessible",
+            "accounts": [],
+        }
+
+    cap_threads = max(1, min(max_threads, 12))
+    cap_msgs = max(5, min(max_messages_per_thread, 60))
+    cap_acc = max_accounts if max_accounts is not None else _AXELIA_MULTI_MAX_ACCOUNTS
+
+    rows = await list_accessible_account_rows_for_inbox(user)
+    selected = rows[:cap_acc]
+    out: List[Dict[str, Any]] = []
+    for row in selected:
+        aid = str(row.get("id") or "")
+        if not aid:
+            continue
+        if not user.permissions.has(PermissionCodes.CONVERSATIONS_VIEW, aid):
+            continue
+        try:
+            part = await asyncio.wait_for(
+                summarize_contact_inbox_for_account(
+                    aid,
+                    contact_query,
+                    max_threads=cap_threads,
+                    max_messages_per_thread=cap_msgs,
+                ),
+                timeout=per_account_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            part = {
+                "error": f"délai dépassé ({per_account_timeout_s}s)",
+                "bundles": [],
+                "contact_query": contact_query,
+            }
+
+        out.append(
+            {
+                "account_id": aid,
+                "account_name": row.get("name") or "-",
+                "account_phone": row.get("phone_number") or "-",
+                "inbox_summary": part,
+            }
+        )
+
+    return {
+        "account_scope": "all_accessible",
+        "contact_query": contact_query,
+        "max_threads": cap_threads,
+        "max_messages_per_thread": cap_msgs,
+        "accounts": out,
+        "accounts_total_in_scope": len(rows),
+        "accounts_iterated": len(selected),
+        "accounts_capped": len(rows) > cap_acc,
+    }
 
 
 async def get_conversation_digest_for_account(
@@ -231,4 +570,113 @@ async def get_conversation_digest_for_account(
         "contact_hint": nested.get("display_name"),
         "message_count": len(lines),
         "transcript_recent": "\n".join(lines),
+    }
+
+
+async def summarize_contact_inbox_for_account(
+    account_id: str,
+    contact_query: str,
+    *,
+    max_threads: int = 8,
+    max_messages_per_thread: int = 35,
+) -> Dict[str, Any]:
+    """
+    Agrège les derniers messages de plusieurs conversations inbox correspondant à un contact
+    (nom affiché, numéro WhatsApp ou client_number).
+    """
+    q = _sanitize_ilike_fragment(contact_query)
+    if len(q) < 2:
+        return {"error": "Requête contact trop courte (2 caractères minimum).", "bundles": []}
+
+    cap_threads = max(1, min(max_threads, 12))
+    cap_msgs = max(5, min(max_messages_per_thread, 60))
+    pat = f"%{q}%"
+
+    pool = get_pool()
+    thread_rows: List[Dict[str, Any]] = []
+
+    if pool:
+        thread_rows = await fetch_all(
+            """
+            SELECT c.id AS conversation_id,
+                   co.id AS contact_id,
+                   COALESCE(NULLIF(TRIM(co.display_name), ''), c.client_number, '') AS contact_label,
+                   c.client_number,
+                   c.updated_at AS last_ts
+            FROM conversations c
+            LEFT JOIN contacts co ON co.id = c.contact_id
+            WHERE c.account_id = $1::uuid
+              AND (
+                co.display_name ILIKE $2
+                OR co.whatsapp_number ILIKE $2
+                OR c.client_number ILIKE $2
+              )
+            ORDER BY c.updated_at DESC NULLS LAST
+            LIMIT $3
+            """,
+            account_id,
+            pat,
+            cap_threads,
+        )
+    else:
+        res = await supabase_execute(
+            supabase.table("conversations")
+            .select(
+                "id, updated_at, client_number, contact_id, contacts(display_name, whatsapp_number)"
+            )
+            .eq("account_id", account_id)
+            .order("updated_at", desc=True)
+            .limit(500)
+        )
+        needle = q.lower()
+        for row in res.data or []:
+            nested = row.get("contacts") or {}
+            dn = str(nested.get("display_name") or "").lower()
+            wn = str(nested.get("whatsapp_number") or "").lower()
+            cn = str(row.get("client_number") or "").lower()
+            if needle in dn or needle in wn or needle in cn:
+                thread_rows.append(
+                    {
+                        "conversation_id": row.get("id"),
+                        "contact_id": row.get("contact_id"),
+                        "contact_label": nested.get("display_name") or row.get("client_number"),
+                        "client_number": row.get("client_number"),
+                        "last_ts": row.get("updated_at"),
+                    }
+                )
+            if len(thread_rows) >= cap_threads:
+                break
+
+    if not thread_rows:
+        return {
+            "contact_query": contact_query,
+            "note": "Aucune conversation trouvée pour ce libellé sur ce compte.",
+            "bundles": [],
+        }
+
+    bundles: List[Dict[str, Any]] = []
+    for tr in thread_rows:
+        cid_raw = tr.get("conversation_id")
+        if not cid_raw:
+            continue
+        cid = str(cid_raw)
+        digest = await get_conversation_digest_for_account(
+            account_id, cid, max_messages=cap_msgs
+        )
+        if digest.get("error"):
+            continue
+        bundles.append(
+            {
+                "conversation_id": cid,
+                "contact_label": tr.get("contact_label") or digest.get("contact_hint"),
+                "client_number": tr.get("client_number"),
+                "message_count": digest.get("message_count"),
+                "transcript_recent": digest.get("transcript_recent"),
+            }
+        )
+
+    return {
+        "contact_query": contact_query,
+        "threads_matched": len(thread_rows),
+        "bundles": bundles,
     }

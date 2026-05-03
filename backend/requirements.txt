@@ -5,11 +5,16 @@ httpx
 asyncpg
 python-dotenv
 prometheus-fastapi-instrumentator
+slowapi>=0.1.9
 tenacity>=8.0.0
 cachetools>=5.3.0
 python-multipart
-pydantic[email]
+pydantic[email]>=2.13.0
 google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
+cffi>=2.0.0
+cryptography>=43.0.0
 locust>=2.20.0
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

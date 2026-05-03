@@ -1,4 +1,4 @@
-# Mode Playground — Guide pour créatifs et équipe produit
+# Mode Playground - Guide pour créatifs et équipe produit
 
 Document de référence pour préparer une présentation, un storyboard ou une campagne de communication autour du **Playground** : éditeur de scénarios conversationnels WhatsApp intégré à l’application *WhatsApp Inbox*.
 
@@ -47,7 +47,7 @@ Il s’oppose au mode **Gemini** « conversation libre » (même onglet *Assista
 | **Passage à l’humain** | Bloc **Handoff** pour sortir du bot et prévenir l’équipe |
 | **IA ciblée** | Nœud **Gemini** pour comprendre une intention puis **router** vers la bonne branche |
 
-En résumé : c’est l’outil pour des **parcours maîtrisés**, traçables et répétables — proche d’un *builder* type automation, mais **connecté au canal WhatsApp Business** et à l’infra du produit.
+En résumé : c’est l’outil pour des **parcours maîtrisés**, traçables et répétables - proche d’un *builder* type automation, mais **connecté au canal WhatsApp Business** et à l’infra du produit.
 
 ---
 
@@ -55,8 +55,8 @@ En résumé : c’est l’outil pour des **parcours maîtrisés**, traçables et
 
 - Navigation principale : entrée **Assistant** (selon les droits du compte utilisateur).
 - Dans le hub Assistant, deux onglets :
-  - **Gemini** — configuration du bot « classique » (prompt, base de connaissances, etc.).
-  - **Playground** — l’éditeur de graphe et les outils de test.
+  - **Gemini** - configuration du bot « classique » (prompt, base de connaissances, etc.).
+  - **Playground** - l’éditeur de graphe et les outils de test.
 
 Si plusieurs comptes WhatsApp Business sont liés à l’utilisateur, un **sélecteur de compte** en haut du panneau permet de charger les scénarios du bon compte.
 
@@ -88,7 +88,7 @@ On peut avoir **plusieurs scénarios** nommés ; l’un peut être marqué comme
 1. Ouvrir **Assistant → Playground** et choisir le **compte** WABA.
 2. Sélectionner un **flux** dans la liste ou en créer un nouveau.
 3. **Composer** le parcours : ajouter des blocs, les relier, ouvrir les **paramètres** (icône engrenage sur chaque carte).
-4. Utiliser l’**assistant IA** (panneau dédié) pour décrire en langage naturel ce que le graphe doit faire — il peut proposer une structure (selon configuration produit).
+4. Utiliser l’**assistant IA** (panneau dédié) pour décrire en langage naturel ce que le graphe doit faire - il peut proposer une structure (selon configuration produit).
 5. Lancer le **mode test (bac à sable)** : simuler des messages « client » et voir les réponses **comme en production** (y compris appels d’envoi WhatsApp pour les comptes réels, selon les permissions).
 6. Itérer jusqu’à validation métier, puis s’appuyer sur le **flux par défaut** ou l’affectation par conversation pour la mise en ligne opérationnelle.
 
@@ -110,7 +110,7 @@ Le tableau ci-dessous résume l’intention **métier**. Le détail du comportem
 | **Délai** (`delayNode`) | **Pause réelle** (secondes à jours) avant la suite du scénario. |
 | **Date / attente** (`waitUntilNode`) | Peut **planifier une reprise** à une date/heure résolue ; sinon enchaînement ou passthrough selon cas (voir partie technique). |
 | **Fenêtre horaire** (`timeWindowNode`) | Branche **dans la plage** ou **hors plage** (jours + heures). |
-| **Logique** (`logicNode`) | Mode **si** : condition vraie / fausse (deux sorties). Les modes **et / ou** dans l’UI ne font pas de vrai routage multi-sortie côté moteur — voir [section 14](#14-limites-connues-et-écarts-ui--moteur). |
+| **Logique** (`logicNode`) | Mode **si** : condition vraie / fausse (deux sorties). Les modes **et / ou** dans l’UI ne font pas de vrai routage multi-sortie côté moteur - voir [section 14](#14-limites-connues-et-écarts-ui--moteur). |
 
 ### Repères UX dans l’interface
 
@@ -131,7 +131,7 @@ Le scénario peut démarrer quand un client envoie un message, avec un filtre :
 
 ### Priorité entre plusieurs déclencheurs
 
-Si plusieurs blocs **Déclencheur** matchent, un **nombre de priorité** (`entryPriority`) permet de trancher (plus grand = prioritaire). À priorité égale, le moteur favorise un déclencheur **message entrant** par rapport à une entrée **campagne** — pour éviter qu’une campagne « mange » toujours la place d’une entrée conversationnelle.
+Si plusieurs blocs **Déclencheur** matchent, un **nombre de priorité** (`entryPriority`) permet de trancher (plus grand = prioritaire). À priorité égale, le moteur favorise un déclencheur **message entrant** par rapport à une entrée **campagne** - pour éviter qu’une campagne « mange » toujours la place d’une entrée conversationnelle.
 
 ### Audience restreinte
 
@@ -178,7 +178,7 @@ Ces clés **écrasent** des variables utilisateur du même nom pour éviter les 
 
 ### Intérêt créatif
 
-C’est le levier pour des messages **personnalisés** (« Bonjour {{prenom_client}} ») sans coder — tant que la donnée est disponible côté contact.
+C’est le levier pour des messages **personnalisés** (« Bonjour {{prenom_client}} ») sans coder - tant que la donnée est disponible côté contact.
 
 ---
 
@@ -190,7 +190,7 @@ Ce n’est **pas** le même écran que l’onglet *Gemini* du hub : ici, Gemini 
 2. **Faire correspondre** cette intention à des **branches** sortantes définies dans le graphe.
 3. Optionnellement, utiliser des **embeddings** pour rapprocher sémantiquement le message des intentions si le mot-clé strict ne suffit pas.
 4. Envoyer de **courtes relances de clarification** si l’intention est floue, jusqu’à un plafond réglable, avant de basculer sur la branche « inconnu ».
-5. Tenir un **journal structuré** de session (`flow_structured_notes`) lorsque l’option est activée — utile pour contextualiser les prompts ou le suivi.
+5. Tenir un **journal structuré** de session (`flow_structured_notes`) lorsque l’option est activée - utile pour contextualiser les prompts ou le suivi.
 
 **Note scénaristique :** pour un simple « Bonjour » sans autre contenu, le moteur peut **basculer vers la première intention** définie (parcours principal), pour éviter de bloquer l’utilisateur sur la branche « inconnu ».
 
@@ -203,7 +203,7 @@ Ce n’est **pas** le même écran que l’onglet *Gemini* du hub : ici, Gemini 
 Le produit réserve un **numéro client fictif** pour une **conversation de test** par scénario. Cette conversation :
 
 - **N’apparaît pas** dans la liste principale de l’inbox (filtrée côté client).
-- Permet de **simuler** des messages entrants et de voir les réponses **réelles** du pipeline (y compris envoi WhatsApp quand le compte est configuré — selon droits).
+- Permet de **simuler** des messages entrants et de voir les réponses **réelles** du pipeline (y compris envoi WhatsApp quand le compte est configuré - selon droits).
 
 ### Actions typiques
 
@@ -214,7 +214,7 @@ Le produit réserve un **numéro client fictif** pour une **conversation de test
 
 ### Templates en sandbox
 
-Les envois template peuvent être **matérialisés** dans le fil de test avec un format dédié pour vérifier nom de template, langue et paramètres — sans ambiguïté pour le recetteur.
+Les envois template peuvent être **matérialisés** dans le fil de test avec un format dédié pour vérifier nom de template, langue et paramètres - sans ambiguïté pour le recetteur.
 
 ---
 
@@ -234,10 +234,10 @@ Le panneau **Assistant Playground** (chat) permet de :
 
 Alignées sur la documentation interne du produit :
 
-1. **Commencer simple** — peu de blocs, test sandbox, puis complexifier.
+1. **Commencer simple** - peu de blocs, test sandbox, puis complexifier.
 2. **Libellés courts** sur boutons et intentions (contraintes WhatsApp : longueurs max sur titres de boutons et lignes de liste).
 3. **Une intention = un chemin clair** sur le nœud Gemini ; éviter douze intentions quasi identiques.
-4. **Préférer les connexions explicites** sur les sorties nommées (poignées) plutôt que de s’appuyer sur l’ordre implicite des liens — surtout pour **fenêtre horaire** et **timeout** interactif.
+4. **Préférer les connexions explicites** sur les sorties nommées (poignées) plutôt que de s’appuyer sur l’ordre implicite des liens - surtout pour **fenêtre horaire** et **timeout** interactif.
 5. **Ne pas surcharger** les champs « avancés » (timeouts template, métadonnées) tant que le besoin n’est pas clair.
 6. Pour les campagnes et segments : **documenter** qui reçoit quoi (groupe vs liste de numéros) pour éviter les mauvaises surprises en prod.
 
@@ -288,7 +288,7 @@ Si l’identifiant de flux actif change, une partie de l’état est **réinitia
 
 ### 13.7 Signaux entrants WhatsApp
 
-Le moteur exploite notamment : **texte**, **id de bouton**, **id de ligne de liste** — pour réactiver les bons nœuds après un interactif ou un routeur.
+Le moteur exploite notamment : **texte**, **id de bouton**, **id de ligne de liste** - pour réactiver les bons nœuds après un interactif ou un routeur.
 
 ### 13.8 API utiles (aperçu)
 
@@ -303,7 +303,7 @@ Les endpoints sensibles (simulation, sandbox) exigent typiquement la permission 
 
 ### 13.9 Référence machine lisible
 
-Le dépôt contient une **référence JSON** alignée sur le moteur : `backend/docs/playground_flow_reference.json` — utile pour les développeurs et pour vérifier les écarts après une évolution.
+Le dépôt contient une **référence JSON** alignée sur le moteur : `backend/docs/playground_flow_reference.json` - utile pour les développeurs et pour vérifier les écarts après une évolution.
 
 ---
 
@@ -314,17 +314,17 @@ Le dépôt contient une **référence JSON** alignée sur le moteur : `backend/d
 La référence interne liste notamment :
 
 - **Pas de nœud HTTP / webhook** sortant pour enrichir depuis un CRM externe dans le graphe.
-- **Pas de nœud « set variable » arbitraire** — la persistance passe surtout par interactifs, saisies, Gemini, etc.
+- **Pas de nœud « set variable » arbitraire** - la persistance passe surtout par interactifs, saisies, Gemini, etc.
 - **Médias natifs** (image, PDF, audio) hors template : pas de blocs dédiés ; les médias passent par **templates** Meta si le modèle le prévoit.
-- **Tags** saisis sur le bloc Handoff dans l’UI : **non lus** par le moteur documenté — le handoff reste centré sur la désactivation du bot et la remontée humaine.
+- **Tags** saisis sur le bloc Handoff dans l’UI : **non lus** par le moteur documenté - le handoff reste centré sur la désactivation du bot et la remontée humaine.
 
 ### 14.2 Cas où le canevas peut « mentir » légèrement
 
-- **Logique ET / OU** : l’UI dessine des branchements multiples, mais le moteur fait essentiellement du **passthrough** simple — seul le mode **si** réalise un **vrai** routage conditionnel à deux sorties.
-- **Fenêtre horaire** : si des arêtes anciennes n’ont **pas** de poignée `inside` / `outside`, l’ordre des deux liens **sans poignée** compte (convention documentée : premier = hors plage, second = dans la plage — vérifier la référence à jour).
-- **Handoff** : champs visuels comme tags / assignation d’agent peuvent ne pas être tous **câblés** côté runtime — se référer au code ou à la référence JSON.
+- **Logique ET / OU** : l’UI dessine des branchements multiples, mais le moteur fait essentiellement du **passthrough** simple - seul le mode **si** réalise un **vrai** routage conditionnel à deux sorties.
+- **Fenêtre horaire** : si des arêtes anciennes n’ont **pas** de poignée `inside` / `outside`, l’ordre des deux liens **sans poignée** compte (convention documentée : premier = hors plage, second = dans la plage - vérifier la référence à jour).
+- **Handoff** : champs visuels comme tags / assignation d’agent peuvent ne pas être tous **câblés** côté runtime - se référer au code ou à la référence JSON.
 
-Ces points ne sont pas forcément des « bugs » : ce sont des **décalages** entre la promesse visuelle et le moteur actuel — à intégrer dans une communication honnête et dans les tests recette.
+Ces points ne sont pas forcément des « bugs » : ce sont des **décalages** entre la promesse visuelle et le moteur actuel - à intégrer dans une communication honnête et dans les tests recette.
 
 ---
 
@@ -358,7 +358,7 @@ Ces points ne sont pas forcément des « bugs » : ce sont des **décalages** en
 
 | Terme | Signification |
 |-------|----------------|
-| **WABA** | WhatsApp Business Account — compte business rattaché au produit. |
+| **WABA** | WhatsApp Business Account - compte business rattaché au produit. |
 | **Template / gabarit** | Message modèle **approuvé** par Meta ; requis pour certains envois hors session. |
 | **Interactif** | Message WhatsApp avec **boutons** ou **liste**. |
 | **Graphe** | Ensemble de nœuds et d’arêtes (le scénario). |
@@ -374,4 +374,4 @@ Ces points ne sont pas forcément des « bugs » : ce sont des **décalages** en
 - Pour les **réglages rapides par type de nœud** : `frontend/docs/playground-node-setup.md`
 - Pour le **contrat technique détaillé** (champs, limites, mismatches) : `backend/docs/playground_flow_reference.json`
 
-*Généré pour faciliter le travail des équipes créatives et la préparation de présentations — à actualiser si le produit évolue.*
+*Généré pour faciliter le travail des équipes créatives et la préparation de présentations - à actualiser si le produit évolue.*
