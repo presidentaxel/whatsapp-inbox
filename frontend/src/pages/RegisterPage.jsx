@@ -23,8 +23,9 @@ export default function RegisterPage() {
 
   useEffect(() => {
     // Vérifier si on a un token d'invitation dans l'URL
-    const token = searchParams.get('token');
-    const type = searchParams.get('type');
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token");
+    const type = params.get("type");
     
     if (!token || type !== 'invite') {
       setError('Lien d\'invitation invalide ou expiré');

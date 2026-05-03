@@ -1,11 +1,15 @@
 // ESLint v9 flat config (https://eslint.org/docs/latest/use/configure/configuration-files-new).
 //
+// Fichier .mjs : évite l'avertissement Node sur eslint.config.js sans "type":"module"
+// (le script scripts/update-version.js reste en CommonJS).
+//
 // Choix:
 //  - On reste *permissif* sur l'existant : la base de code est en JS et a déjà
 //    pas mal de patterns en place. L'objectif est d'attraper les vrais bugs
 //    (variables non utilisées, hooks mal appelés, exhaustive-deps, refresh
 //    component) sans noyer la console au premier `npm run lint`.
-//  - Les fichiers générés (`dist/`, builds) sont ignorés explicitement.
+//  - Les fichiers générés (`dist/`, builds) et les bundles copiés dans `public/`
+//    sont ignorés (ex. worker PDF minifié : pas du code à linter).
 //  - Les règles trop intrusives sont en `warn` plutôt que `error` pour qu'on
 //    puisse durcir progressivement.
 import js from "@eslint/js";
@@ -22,13 +26,18 @@ export default [
       "node_modules/**",
       "coverage/**",
       "scripts/update-version.js",
+      // Worker PDF minifié (vendor) : globals navigateur, pas du code projet
+      "public/pdf.worker*.mjs",
+      "public/**/*.min.mjs",
+      // Service worker : API `clients` / `self` hors scope ESLint navigateur classique
+      "public/sw.js",
     ],
   },
 
   js.configs.recommended,
 
   {
-    files: ["**/*.{js,jsx,ts,tsx}"],
+    files: ["**/*.{js,jsx}"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
@@ -80,7 +89,7 @@ export default [
 
   // Tests Vitest
   {
-    files: ["**/*.{test,spec}.{js,jsx,ts,tsx}", "**/__tests__/**"],
+    files: ["**/*.{test,spec}.{js,jsx}", "**/__tests__/**"],
     languageOptions: {
       globals: {
         ...globals.browser,

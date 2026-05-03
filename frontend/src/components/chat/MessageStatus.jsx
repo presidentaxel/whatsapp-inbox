@@ -48,7 +48,7 @@ export default function MessageStatus({ status, isOwnMessage, conversation, mess
         );
 
       case "failed":
-      case "error":
+      case "error": {
         const errorMessage = message?.error_message;
         return (
           <div 
@@ -84,6 +84,7 @@ export default function MessageStatus({ status, isOwnMessage, conversation, mess
             )}
           </div>
         );
+      }
 
       default:
         return (

@@ -39,6 +39,10 @@ jobs:
           find app -name "*.py" -exec python -m py_compile {} \;
           echo "✅ Syntaxe Python valide"
 
+      # Les deux commandes sont volontairement non bloquantes :
+      # - La 1re ne regarde que E9,F63,F7,F82 (syntaxe / noms non définis) ; le "0" en tête de log = aucun de ces codes.
+      # - La 2e utilise --exit-zero : flake8 affiche C901, E501, F541, etc. mais termine toujours avec code 0.
+      # - || true + continue-on-error: true : le job reste vert même si flake8 aurait échoué.
       - name: Lint with flake8
         run: |
           flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics || true
@@ -159,7 +163,7 @@ jobs:
       - name: Check syntax
         run: |
           npm run build --if-present || echo "⚠️ Build non configuré, vérification de syntaxe basique"
-          npx eslint . --ext .js,.jsx --max-warnings 0 || echo "⚠️ ESLint non configuré"
+          npm run lint --if-present || echo "⚠️ ESLint non configuré"
         continue-on-error: true
 
       - name: Validate package.json

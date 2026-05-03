@@ -54,31 +54,31 @@ function graphSummary(graph) {
     counts[t] = (counts[t] || 0) + 1;
   }
   const parts = Object.entries(counts).map(
-    ([t, c]) => `${c} ${labels[t] || t}`
+    ([t, c]) => `${c} ${labels[t] || t}`
   );
   const edgeCount = graph.edges?.length || 0;
-  return `${nodes.length} nœud${nodes.length > 1 ? "s" : ""} (${parts.join(", ")}) · ${edgeCount} lien${edgeCount !== 1 ? "s" : ""}`;
+  return `${nodes.length} nœud${nodes.length > 1 ? "s" : ""} (${parts.join(", ")}) · ${edgeCount} lien${edgeCount !== 1 ? "s" : ""}`;
 }
 
 /** Bulle d'attente : phrases plus longues, rotation lente, humour tech (pas de vraies étapes). */
 const ASSIST_WAIT_ROTATION_MS = 5800;
 
 const ASSIST_WAITING_THOUGHTS = [
-  "Je parcours ton graphe comme on relit un mail à 23 h avant de cliquer « Envoyer » - sauf que là, c'est un POST vers un modèle qui fait semblant d'avoir lu toute ta vie professionnelle.",
+  "Je parcours ton graphe comme on relit un mail à 23 h avant de cliquer « Envoyer » - sauf que là, c'est un POST vers un modèle qui fait semblant d'avoir lu toute ta vie professionnelle.",
   "Négociation en cours avec le tokenizer : il refuse catégoriquement d'ajouter un emoji licorne dans le JSON de réponse. On avance quand même, mais le débat est houleux.",
   "Si c'est lent, c'est peut‑être que le modèle débat intérieurement sur le sens existentiel du nœud handoff. Ou alors c'est juste du réseau. Les deux se valent sur le plan poétique.",
   "Étape actuelle : prétendre avec conviction que je maîtrise la différence entre un routerNode et un routeur Cisco. (Spoiler : l'un route des intentions, l'autre route des paquets - merci, j'ai révisé sur Wikipédia en 2009.)",
-  "Je vérifie que ton JSON n'a pas attrapé le variant « virgule fantôme » ou le classique guillemet mal échappé. C'est comme du lint, mais avec plus de drama et moins de café.",
-  "Cold start du cluster… ah non, pardon, c'est un simple appel HTTP. J'ai toujours rêvé de dire « cold start » devant quelqu'un qui paye l'infra.",
-  "Barre de progression imaginaire : ████████░░ 82 % - les 18 % restants, c'est la part « on sait pas trop mais ça rassure l'utilisateur ».",
-  "J'aligne les handles source/target dans ma tête pour ne pas confondre avec un bug produit. Parce que si je dis « c'est la faute du front », quelqu'un, quelque part, reçoit une notification Slack.",
+  "Je vérifie que ton JSON n'a pas attrapé le variant « virgule fantôme » ou le classique guillemet mal échappé. C'est comme du lint, mais avec plus de drama et moins de café.",
+  "Cold start du cluster… ah non, pardon, c'est un simple appel HTTP. J'ai toujours rêvé de dire « cold start » devant quelqu'un qui paye l'infra.",
+  "Barre de progression imaginaire : ████████░░ 82 % - les 18 % restants, c'est la part « on sait pas trop mais ça rassure l'utilisateur ».",
+  "J'aligne les handles source/target dans ma tête pour ne pas confondre avec un bug produit. Parce que si je dis « c'est la faute du front », quelqu'un, quelque part, reçoit une notification Slack.",
   "Patience : Gemini ingère un prompt qui fait probablement la taille d'une nouvelle de science‑fiction. La fin est meilleure que celle de Lost, promis (clause de non‑garantie légale).",
   "En attendant, je refactorise mentalement ton parcours en microservices. Non, je ne le ferai pas vraiment - c'est juste un coping mechanism hérité de 2017.",
-  "Si tu vois cette phrase trop longtemps, ce n'est pas un bug, c'est du « temps utilisateur perçu ». En vrai si ça dépasse deux éons, vérifie ta connexion ou sacrifie un câble Ethernet au dieu des timeouts.",
+  "Si tu vois cette phrase trop longtemps, ce n'est pas un bug, c'est du « temps utilisateur perçu ». En vrai si ça dépasse deux éons, vérifie ta connexion ou sacrifie un câble Ethernet au dieu des timeouts.",
   "Je compile le graphe… conceptuellement. Personne ne compile du JSON, arrêtez de me regarder comme ça, je suis déjà assez fragile.",
   "Synchronisation avec le nuage de pensée™ - marque déposée par le marketing. Techniquement c'est une file d'attente et des GPUs qui chauffent un datacenter quelque part en Europe.",
   "Stack overflow imminent… non, je rigole. Enfin, sauf si tu as vraiment mis 400 nœuds. Là je ne garantis ni le JSON ni mon état mental.",
-  "Je rédige une réponse qui a l'air intelligente tout en restant compatible avec la politique « pas de hallucination sur ton numéro de TVA ». C'est un équilibre, comme tenir un monoroue sur un câble RJ45.",
+  "Je rédige une réponse qui a l'air intelligente tout en restant compatible avec la politique « pas de hallucination sur ton numéro de TVA ». C'est un équilibre, comme tenir un monoroue sur un câble RJ45.",
 ];
 
 function makeAutoThreadTitle() {

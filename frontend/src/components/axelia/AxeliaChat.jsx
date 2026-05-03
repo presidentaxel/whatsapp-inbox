@@ -1778,7 +1778,7 @@ export default function AxeliaChat({
                     <span
                       className="axelia-context-select axelia-context-select--readonly"
                       title="Le compte est fixé pour cette discussion."
-                      aria-label={`Compte pour cette discussion : ${contextSelectLabel}`}
+                      aria-label={`Compte pour cette discussion : ${contextSelectLabel}`}
                       style={{
                         ...(contextSelectWidthPx != null && {
                           width: contextSelectWidthPx,

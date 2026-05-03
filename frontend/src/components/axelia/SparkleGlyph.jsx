@@ -44,7 +44,7 @@ export default function SparkleGlyph({ animate = false, className = "" }) {
               <stop offset="100%" stopColor="#b8c9ff" stopOpacity="0.35" />
             </linearGradient>
           </defs>
-          {/* Rotation sur groupe SVG : les keyframes transform sur cercle peuvent être ignorées */}
+          {/* Rotation sur groupe SVG : les keyframes transform sur cercle peuvent être ignorées */}
           <g transform="translate(12 12)">
             <g className="axelia-sparkle-glyph__ring-spin axelia-sparkle-glyph__ring-spin--a">
               <circle

@@ -791,7 +791,7 @@ export default function SettingsPanel({
       )}
 
       {/* Anciennes sections roles/users - conservées pour référence mais non affichées */}
-      {false && activePanel === "users" && canManageUsers && (
+      {activePanel === "__legacy_users_panel__" && canManageUsers && (
         <div className="settings-content__panel">
           <h1 className="settings-content__panel-title">Utilisateurs</h1>
           <section className="settings-content__section">
