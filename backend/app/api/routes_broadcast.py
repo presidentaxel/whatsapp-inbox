@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes

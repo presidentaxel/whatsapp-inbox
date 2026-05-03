@@ -83,7 +83,6 @@ async def queue_profile_picture_update(
     logger.info(f"📋 Queued profile picture update for {whatsapp_number} (queue size: {len(_profile_update_queue)})")
     
     # Démarrer le traitement si pas déjà en cours
-    global _processing_queue
     if not _processing_queue:
         logger.info("🚀 Starting profile picture update queue processor")
         asyncio.create_task(_process_profile_update_queue())
