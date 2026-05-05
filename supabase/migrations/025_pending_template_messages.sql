@@ -38,3 +38,9 @@ COMMENT ON COLUMN pending_template_messages.template_status IS 'Statut du templa
 COMMENT ON COLUMN pending_template_messages.meta_template_id IS 'ID du template retourné par l''API Meta';
 COMMENT ON COLUMN pending_template_messages.rejection_reason IS 'Raison du rejet si le template est rejeté par Meta';
 
+-- Anciennement migration 016_add_header_media_id.sql (ordre lexicographique incorrect avant 025)
+ALTER TABLE pending_template_messages
+ADD COLUMN IF NOT EXISTS header_media_id TEXT;
+
+COMMENT ON COLUMN pending_template_messages.header_media_id IS 'Media ID WhatsApp pour les templates avec HEADER IMAGE';
+

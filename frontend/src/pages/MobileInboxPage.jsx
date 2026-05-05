@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FiMessageSquare, FiUsers, FiTool, FiMessageCircle, FiSettings, FiUserCheck } from "react-icons/fi";
+import { FiMessageSquare, FiUsers, FiMessageCircle, FiUserCheck } from "react-icons/fi";
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
 import { getContacts, getMetaBlockedWaIdsBatch, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
@@ -15,7 +15,6 @@ import MobileChatWindow from "../components/mobile/MobileChatWindow";
 import MobileContactsPanel from "../components/mobile/MobileContactsPanel";
 import MobileWhatsAppPanel from "../components/mobile/MobileWhatsAppPanel";
 import MobileGeminiPanel from "../components/mobile/MobileGeminiPanel";
-import MobileNotificationSettings from "../components/mobile/MobileNotificationSettings";
 import MobileSettings from "../components/mobile/MobileSettings";
 import MobileConnectedDevices from "../components/mobile/MobileConnectedDevices";
 import MobileTeamPanel from "../components/mobile/MobileTeamPanel";
@@ -553,7 +552,7 @@ export default function MobileInboxPage({ onLogout }) {
       
       case "settings":
         return (
-          <MobileSettings onBack={() => setActiveTab("conversations")} />
+          <MobileSettings onBack={() => setActiveTab("conversations")} onLogout={handleLogout} />
         );
       
       case "connected-devices":

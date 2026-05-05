@@ -203,7 +203,7 @@ export async function showNotification(title, options = {}) {
       
       // Afficher la notification via le service worker (obligatoire sur macOS)
       await registration.showNotification(title, cleanOptions);
-    } catch (error) {
+    } catch {
       // Erreur silencieuse
     }
   } else {
@@ -212,11 +212,11 @@ export async function showNotification(title, options = {}) {
       try {
         const registration = await navigator.serviceWorker.ready;
         await registration.showNotification(title, cleanOptions);
-      } catch (error) {
+      } catch {
         // Fallback : notification simple sans service worker
         try {
           new Notification(title, cleanOptions);
-        } catch (fallbackError) {
+        } catch {
           // Erreur silencieuse
         }
       }
@@ -224,22 +224,11 @@ export async function showNotification(title, options = {}) {
       // Fallback : notification simple sans service worker
       try {
         new Notification(title, cleanOptions);
-      } catch (error) {
+      } catch {
         // Erreur silencieuse
       }
     }
   }
-}
-
-/**
- * Génère une URL d'avatar avec initiales (fallback si pas d'image)
- * @param {string} name - Nom du contact
- * @returns {string} URL de données pour l'avatar
- */
-function generateAvatarFallback(name) {
-  // Utiliser l'icône par défaut plutôt que de générer un avatar SVG
-  // L'icône sera toujours disponible même sans image de profil
-  return '/192x192.svg';
 }
 
 /**
@@ -252,7 +241,7 @@ function getStoredConversations() {
   try {
     const stored = localStorage.getItem(NOTIFICATION_STORAGE_KEY);
     return stored ? JSON.parse(stored) : {};
-  } catch (error) {
+  } catch {
     return {};
   }
 }
@@ -260,7 +249,7 @@ function getStoredConversations() {
 function storeConversations(conversations) {
   try {
     localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(conversations));
-  } catch (error) {
+  } catch {
     // Erreur silencieuse
   }
 }
@@ -356,7 +345,7 @@ export async function showMessageNotification(contactName, messagePreview, conve
       if (notifications.length > 0) {
         existingNotification = notifications[0];
       }
-    } catch (error) {
+    } catch {
       // Erreur silencieuse
     }
   }

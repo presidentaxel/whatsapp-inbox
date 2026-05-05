@@ -24,21 +24,23 @@ function MobileApp() {
   useEffect(() => {
     // Vérifier s'il y a une session sauvegardée
     const savedSession = getAuthSession();
-    
+
     if (savedSession) {
       // Vérifier avec Supabase si la session est toujours valide
-      supabaseClient.auth.setSession({
-        access_token: savedSession.access_token,
-        refresh_token: savedSession.refresh_token,
-      }).then(({ data, error }) => {
-        if (error || !data.session) {
-          clearAuthSession();
-          setSession(null);
-        } else {
-          setSession(data.session);
-        }
-        setLoading(false);
-      });
+      supabaseClient.auth
+        .setSession({
+          access_token: savedSession.access_token,
+          refresh_token: savedSession.refresh_token,
+        })
+        .then(({ data, error }) => {
+          if (error || !data.session) {
+            clearAuthSession();
+            setSession(null);
+          } else {
+            setSession(data.session);
+          }
+          setLoading(false);
+        });
     } else {
       // Vérifier la session Supabase actuelle
       supabaseClient.auth.getSession().then(({ data, error }) => {
@@ -56,18 +58,18 @@ function MobileApp() {
     // Écouter les changements de session
     const {
       data: { subscription },
-    } = supabaseClient.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        saveAuthSession(session, true);
+    } = supabaseClient.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      if (nextSession) {
+        saveAuthSession(nextSession, true);
       }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleLoginSuccess = (session) => {
-    setSession(session);
+  const handleLoginSuccess = (nextSession) => {
+    setSession(nextSession);
   };
 
   const handleLogout = async () => {
@@ -77,36 +79,55 @@ function MobileApp() {
   };
 
   // Vérifier si on est sur la page de register
-  const isRegisterPage = window.location.pathname === '/register' || 
-                         window.location.search.includes('type=invite');
+  const isRegisterPage =
+    window.location.pathname === "/register" || window.location.search.includes("type=invite");
 
   if (loading && !isRegisterPage) {
     return (
-      <div style={{
-        height: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: '#0b141a',
-        color: '#e9edef'
-      }}>
+      <div
+        style={{
+          height: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#0b141a",
+          color: "#e9edef",
+        }}
+      >
         <div>Chargement...</div>
       </div>
     );
   }
 
   const fallback = (
-    <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0b141a', color: '#e9edef' }}>
+    <div
+      style={{
+        height: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#0b141a",
+        color: "#e9edef",
+      }}
+    >
       <div>Chargement...</div>
     </div>
   );
 
   if (isRegisterPage) {
-    return <Suspense fallback={fallback}><RegisterPage /></Suspense>;
+    return (
+      <Suspense fallback={fallback}>
+        <RegisterPage />
+      </Suspense>
+    );
   }
 
   if (!session) {
-    return <Suspense fallback={fallback}><MobileLoginPage onLoginSuccess={handleLoginSuccess} /></Suspense>;
+    return (
+      <Suspense fallback={fallback}>
+        <MobileLoginPage onLoginSuccess={handleLoginSuccess} />
+      </Suspense>
+    );
   }
 
   return (
@@ -124,8 +145,8 @@ function DesktopApp() {
   useTheme(); // Initialiser le thème au chargement de l'application
 
   // Vérifier si on est sur la page de register
-  const isRegisterPage = window.location.pathname === '/register' || 
-                         window.location.search.includes('type=invite');
+  const isRegisterPage =
+    window.location.pathname === "/register" || window.location.search.includes("type=invite");
 
   if (loading && !isRegisterPage) {
     return <div className="loading-screen">Chargement...</div>;
@@ -134,11 +155,19 @@ function DesktopApp() {
   const fallback = <div className="loading-screen">Chargement...</div>;
 
   if (isRegisterPage) {
-    return <Suspense fallback={fallback}><RegisterPage /></Suspense>;
+    return (
+      <Suspense fallback={fallback}>
+        <RegisterPage />
+      </Suspense>
+    );
   }
 
   if (!session) {
-    return <Suspense fallback={fallback}><LoginPage /></Suspense>;
+    return (
+      <Suspense fallback={fallback}>
+        <LoginPage />
+      </Suspense>
+    );
   }
 
   return (

@@ -26,20 +26,22 @@ from app.services.audio_transcription_service import transcribe_inbound_audio_on
 from app.services.conversation_service import get_conversation_by_id
 from app.services.media_background_service import process_unsaved_media_for_conversation
 from app.services.message_service import (
-    add_reaction,
     fetch_message_media_content,
     get_message_by_id,
     get_messages,
     is_within_free_window,
     calculate_message_price,
-    remove_reaction,
     send_message,
     send_free_message,
     send_media_message_with_storage,
     send_interactive_message_with_storage,
-    send_reaction_to_whatsapp,
     update_message_content,
     delete_message_scope,
+)
+from app.services.reactions_service import (
+    add_reaction,
+    remove_reaction,
+    send_reaction_to_whatsapp,
 )
 from app.services.template_deduplication import find_or_create_template
 from app.services.whatsapp_api_service import check_phone_number_has_whatsapp

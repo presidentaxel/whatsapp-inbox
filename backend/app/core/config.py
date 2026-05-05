@@ -1,7 +1,20 @@
+"""
+Configuration centralisée de l'application.
+
+Utilise `pydantic-settings` :
+- typage strict (les conversions int/bool sont vérifiées au boot)
+- introspection facile pour les tests (`Settings(**overrides)`)
+- les `.env` sont toujours chargés en amont via `python-dotenv` pour préserver
+  la recherche multi-emplacements historique (repo root, backend/, backend/env/).
+"""
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_PATH = Path(__file__).resolve()
 dotenv_candidates = [
@@ -36,165 +49,127 @@ def _normalize_gemini_model_id(model: str) -> str:
     return legacy.get(m.lower(), m)
 
 
-class Settings:
-    # Supabase
-    SUPABASE_URL: str | None = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY: str | None = os.getenv("SUPABASE_KEY")
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        extra="ignore",
+    )
 
-    # PostgreSQL direct (optionnel). Si défini, le backend utilise asyncpg au lieu de l'API Supabase pour les requêtes DB.
-    # Format: postgresql://user:password@host:port/dbname (ex: Supabase Database → Connection string, mode Session ou Transaction)
-    DATABASE_URL: str | None = os.getenv("DATABASE_URL")
-    
-    # WhatsApp (configuration de base)
-    WHATSAPP_TOKEN: str | None = os.getenv("WHATSAPP_TOKEN")
-    WHATSAPP_PHONE_ID: str | None = os.getenv("WHATSAPP_PHONE_ID")
-    WHATSAPP_VERIFY_TOKEN: str | None = os.getenv("WHATSAPP_VERIFY_TOKEN")
-    WHATSAPP_PHONE_NUMBER: str | None = os.getenv("WHATSAPP_PHONE_NUMBER")
-    WHATSAPP_BUSINESS_ACCOUNT_ID: str | None = os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID")  # WABA ID
-    
-    # Meta App (pour les fonctionnalités avancées de l'API)
-    META_APP_ID: str | None = os.getenv("META_APP_ID")
-    META_APP_SECRET: str | None = os.getenv("META_APP_SECRET")
-    META_BUSINESS_ID: str | None = os.getenv("META_BUSINESS_ID")  # Business Manager ID
-    
-    # Gemini Bot
-    GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
-    GEMINI_MODEL: str = _normalize_gemini_model_id(os.getenv("GEMINI_MODEL", "gemini-1.5-flash"))
-    # Transcription audio : ex. gemini-2.5-flash ou gemini-2.5-flash-lite (gemini-2.0-flash est mappé automatiquement).
+    # ─── Supabase ──────────────────────────────────────────────────────────────
+    SUPABASE_URL: str | None = None
+    SUPABASE_KEY: str | None = None
+
+    # PostgreSQL direct (optionnel en dev, requis en prod - cf. main.py boot check).
+    # Format: postgresql://user:password@host:port/dbname
+    DATABASE_URL: str | None = None
+
+    # ─── WhatsApp ──────────────────────────────────────────────────────────────
+    WHATSAPP_TOKEN: str | None = None
+    WHATSAPP_PHONE_ID: str | None = None
+    WHATSAPP_VERIFY_TOKEN: str | None = None
+    WHATSAPP_PHONE_NUMBER: str | None = None
+    WHATSAPP_BUSINESS_ACCOUNT_ID: str | None = None  # WABA ID
+
+    # ─── Meta App ──────────────────────────────────────────────────────────────
+    META_APP_ID: str | None = None
+    META_APP_SECRET: str | None = None
+    META_BUSINESS_ID: str | None = None  # Business Manager ID
+
+    # ─── Gemini Bot ────────────────────────────────────────────────────────────
+    GEMINI_API_KEY: str | None = None
+    GEMINI_MODEL: str = "gemini-1.5-flash"
     # Vide = même modèle que GEMINI_MODEL.
-    GEMINI_TRANSCRIPTION_MODEL: str = _normalize_gemini_model_id(
-        (os.getenv("GEMINI_TRANSCRIPTION_MODEL") or "").strip()
-    )
-    GEMINI_AUDIO_TRANSCRIPTION_ENABLED: bool = (
-        os.getenv("GEMINI_AUDIO_TRANSCRIPTION_ENABLED", "true").lower() == "true"
-    )
-    GEMINI_AUDIO_TRANSCRIPTION_MAX_BYTES: int = int(
-        os.getenv("GEMINI_AUDIO_TRANSCRIPTION_MAX_BYTES", str(20 * 1024 * 1024)) or str(20 * 1024 * 1024)
-    )
-    HUMAN_BACKUP_NUMBER: str | None = os.getenv("HUMAN_BACKUP_NUMBER")
-    # Contexte conversation : messages chargés depuis la DB (bot + nœuds flow / {{flow_recent_user_text}})
-    GEMINI_CONVERSATION_HISTORY_LIMIT: int = max(
-        1,
-        int(os.getenv("GEMINI_CONVERSATION_HISTORY_LIMIT", "200") or "200"),
-    )
-    # 0 = pas de troncature après assemblage du transcript (sinon coupe le début, garde la fin)
-    GEMINI_CONVERSATION_HISTORY_MAX_CHARS: int = int(
-        os.getenv("GEMINI_CONVERSATION_HISTORY_MAX_CHARS", "0") or "0"
-    )
-    # Contexte « messages récents » injecté dans generate_flow_gemini_keyword (en plus du dernier message)
-    GEMINI_FLOW_RECENT_CONTEXT_CHARS: int = max(
-        1200,
-        int(os.getenv("GEMINI_FLOW_RECENT_CONTEXT_CHARS", "32000") or "32000"),
-    )
+    GEMINI_TRANSCRIPTION_MODEL: str = ""
+    GEMINI_AUDIO_TRANSCRIPTION_ENABLED: bool = True
+    GEMINI_AUDIO_TRANSCRIPTION_MAX_BYTES: int = 20 * 1024 * 1024
+    HUMAN_BACKUP_NUMBER: str | None = None
+    GEMINI_CONVERSATION_HISTORY_LIMIT: int = 200
+    GEMINI_CONVERSATION_HISTORY_MAX_CHARS: int = 0
+    GEMINI_FLOW_RECENT_CONTEXT_CHARS: int = 32000
 
-    # Axelia (hub IA) - routage fast / pro (évaluation de difficulté avec le modèle rapide)
-    AXELIA_FAST_MODEL: str = _normalize_gemini_model_id(
-        (os.getenv("AXELIA_FAST_MODEL") or "").strip() or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-    )
-    AXELIA_PRO_MODEL: str = _normalize_gemini_model_id(
-        (os.getenv("AXELIA_PRO_MODEL") or "").strip() or "gemini-2.5-pro"
-    )
-    AXELIA_DIFFICULTY_THRESHOLD: float = float(
-        os.getenv("AXELIA_DIFFICULTY_THRESHOLD", "0.42") or "0.42"
-    )
-    # Classification (un seul appel, sans retry HTTP) - latence Gemini variable
-    AXELIA_CLASSIFY_READ_TIMEOUT: float = float(
-        os.getenv("AXELIA_CLASSIFY_READ_TIMEOUT", "42") or "42"
-    )
-    # Si classify échoue (timeout, etc.) : score utilisé pour le routage (>= seuil → pro)
-    AXELIA_CLASSIFY_FALLBACK_DIFFICULTY: float = float(
-        os.getenv("AXELIA_CLASSIFY_FALLBACK_DIFFICULTY", "0.52") or "0.52"
-    )
+    # ─── Axelia (hub IA) ───────────────────────────────────────────────────────
+    AXELIA_FAST_MODEL: str = ""
+    AXELIA_PRO_MODEL: str = "gemini-2.5-pro"
+    AXELIA_DIFFICULTY_THRESHOLD: float = 0.42
+    AXELIA_CLASSIFY_READ_TIMEOUT: float = 42.0
+    AXELIA_CLASSIFY_FALLBACK_DIFFICULTY: float = 0.52
 
-    # Prometheus
-    PROMETHEUS_ENABLED: bool = os.getenv("PROMETHEUS_ENABLED", "true").lower() == "true"
-    PROMETHEUS_METRICS_PATH: str = os.getenv("PROMETHEUS_METRICS_PATH", "/metrics")
-    PROMETHEUS_APP_LABEL: str = os.getenv("PROMETHEUS_APP_LABEL", "whatsapp_inbox_api")
-    
-    # Template Header Strategy (pour les templates avec HEADER IMAGE)
-    # Valeurs possibles: "none", "empty_header", "omit_header"
-    # - "none": Envoyer components=None (ne fonctionne pas pour HEADER IMAGE avec exemple fixe)
-    # - "empty_header": Inclure un header avec l'URL de l'exemple fixe comme parameter (FONCTIONNE)
-    # - "omit_header": Omettre complètement le header (ne devrait pas fonctionner)
-    # NOTE: empty_header fonctionne mais les URLs WhatsApp peuvent expirer - pour une solution robuste,
-    # il faudrait uploader l'image via l'API et utiliser media_id
-    TEMPLATE_HEADER_STRATEGY: str = os.getenv("TEMPLATE_HEADER_STRATEGY", "empty_header")
-    
-    # Google Drive OAuth2 (optionnel)
-    GOOGLE_DRIVE_CLIENT_ID: str | None = os.getenv("GOOGLE_DRIVE_CLIENT_ID")
-    GOOGLE_DRIVE_CLIENT_SECRET: str | None = os.getenv("GOOGLE_DRIVE_CLIENT_SECRET")
-    GOOGLE_DRIVE_REDIRECT_URI: str = os.getenv("GOOGLE_DRIVE_REDIRECT_URI", "http://localhost:5174/api/auth/google-drive/callback")
-    BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
-    
-    # Media upload limits (en bytes)
-    # Limite Supabase Storage: 200MB par défaut (suffisant pour la plupart des vidéos WhatsApp)
-    # Peut être configurée via la variable d'environnement MAX_MEDIA_UPLOAD_SIZE
-    MAX_MEDIA_UPLOAD_SIZE: int = int(os.getenv("MAX_MEDIA_UPLOAD_SIZE", "209715200"))  # 200MB par défaut
+    # ─── Prometheus ────────────────────────────────────────────────────────────
+    PROMETHEUS_ENABLED: bool = True
+    PROMETHEUS_METRICS_PATH: str = "/metrics"
+    PROMETHEUS_APP_LABEL: str = "whatsapp_inbox_api"
+    METRICS_AUTH_TOKEN: str | None = None
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Environnement
-    # ─────────────────────────────────────────────────────────────────────────
-    # Sélecteur d'environnement utilisé pour piocher la bonne liste CORS et
-    # activer/désactiver certains endpoints (ex: /webhook/whatsapp/debug).
-    # Valeurs supportées: "development" | "production" | "test".
-    APP_ENV: str = (os.getenv("APP_ENV") or "development").strip().lower()
+    # ─── Templates ─────────────────────────────────────────────────────────────
+    # Valeurs possibles: "none" | "empty_header" | "omit_header"
+    TEMPLATE_HEADER_STRATEGY: str = "empty_header"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # CORS
-    # ─────────────────────────────────────────────────────────────────────────
-    # Deux listes distinctes pour ne pas mélanger les origines dev et prod.
-    # Format: liste séparée par virgules. Espaces tolérés.
-    # Exemples:
-    #   CORS_ORIGINS_DEV=http://localhost:5173,http://localhost:5174
-    #   CORS_ORIGINS_PROD=https://app.exemple.com,https://admin.exemple.com
-    # `CORS_ORIGINS` reste supporté en *override* universel (rétrocompatibilité)
-    # - s'il est défini, il prime sur les listes par environnement.
-    CORS_ORIGINS_DEV: str | None = os.getenv(
-        "CORS_ORIGINS_DEV",
-        "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174",
+    # ─── Google Drive OAuth2 ───────────────────────────────────────────────────
+    GOOGLE_DRIVE_CLIENT_ID: str | None = None
+    GOOGLE_DRIVE_CLIENT_SECRET: str | None = None
+    GOOGLE_DRIVE_REDIRECT_URI: str = "http://localhost:5174/api/auth/google-drive/callback"
+
+    # ─── URLs publiques ────────────────────────────────────────────────────────
+    BACKEND_URL: str = "http://localhost:8000"
+    FRONTEND_URL: str = "http://localhost:5173"
+
+    # ─── Médias ────────────────────────────────────────────────────────────────
+    # Limite Supabase Storage : 200 MB par défaut.
+    MAX_MEDIA_UPLOAD_SIZE: int = 209_715_200
+
+    # ─── Environnement ─────────────────────────────────────────────────────────
+    # "development" | "production" | "test"
+    APP_ENV: str = "development"
+
+    # ─── CORS ──────────────────────────────────────────────────────────────────
+    # Listes séparées par virgules. `CORS_ORIGINS` sert d'override universel.
+    CORS_ORIGINS_DEV: str | None = (
+        "http://localhost:5173,http://localhost:5174,"
+        "http://127.0.0.1:5173,http://127.0.0.1:5174"
     )
-    CORS_ORIGINS_PROD: str | None = os.getenv("CORS_ORIGINS_PROD")
-    CORS_ORIGINS: str | None = os.getenv("CORS_ORIGINS")
+    CORS_ORIGINS_PROD: str | None = None
+    CORS_ORIGINS: str | None = None
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Sécurité webhook Meta
-    # ─────────────────────────────────────────────────────────────────────────
-    # Si vrai, exige `META_APP_SECRET` configuré ET un `X-Hub-Signature-256`
-    # valide sur tout webhook entrant. Mettre à `false` UNIQUEMENT en dev local
-    # quand on simule des payloads sans signer.
-    WEBHOOK_SIGNATURE_REQUIRED: bool = (
-        os.getenv("WEBHOOK_SIGNATURE_REQUIRED", "true").strip().lower() == "true"
-    )
-    # Active le endpoint `POST /webhook/whatsapp/debug` (verbose, log payload entier).
-    # Désactivé par défaut. À n'activer qu'en investigation, derrière auth.
-    WEBHOOK_DEBUG_ENABLED: bool = (
-        os.getenv("WEBHOOK_DEBUG_ENABLED", "false").strip().lower() == "true"
-    )
+    # ─── Sécurité webhook Meta ─────────────────────────────────────────────────
+    WEBHOOK_SIGNATURE_REQUIRED: bool = True
+    WEBHOOK_DEBUG_ENABLED: bool = False
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Rate limiting (slowapi)
-    # ─────────────────────────────────────────────────────────────────────────
-    # Format des limites: "<n>/<unit>" (ex: "60/minute", "1000/hour").
-    RATE_LIMIT_ENABLED: bool = (
-        os.getenv("RATE_LIMIT_ENABLED", "true").strip().lower() == "true"
-    )
-    # Limite par défaut appliquée à toutes les routes (sauf overrides explicites).
-    RATE_LIMIT_DEFAULT: str = os.getenv("RATE_LIMIT_DEFAULT", "120/minute")
-    # Limite plus stricte sur les endpoints d'auth (anti brute-force).
-    RATE_LIMIT_AUTH: str = os.getenv("RATE_LIMIT_AUTH", "20/minute")
-    # Webhooks: Meta peut envoyer beaucoup de requêtes (statuses), garder large.
-    RATE_LIMIT_WEBHOOK: str = os.getenv("RATE_LIMIT_WEBHOOK", "600/minute")
-    # Endpoints coûteux côté IA (Axelia, Gemini...) - par utilisateur authentifié.
-    RATE_LIMIT_AI: str = os.getenv("RATE_LIMIT_AI", "30/minute")
+    # ─── Rate limiting (slowapi) ───────────────────────────────────────────────
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_DEFAULT: str = "120/minute"
+    RATE_LIMIT_AUTH: str = "20/minute"
+    RATE_LIMIT_WEBHOOK: str = "600/minute"
+    RATE_LIMIT_AI: str = "30/minute"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Endpoints opérationnels
-    # ─────────────────────────────────────────────────────────────────────────
-    # Si défini, Prometheus `/metrics` n'est servi qu'avec
-    # `Authorization: Bearer <METRICS_AUTH_TOKEN>`. Vide = pas d'auth (à
-    # restreindre via reverse-proxy / IP allowlist).
-    METRICS_AUTH_TOKEN: str | None = os.getenv("METRICS_AUTH_TOKEN")
+    # ─── Validators ────────────────────────────────────────────────────────────
+    @field_validator("APP_ENV", mode="before")
+    @classmethod
+    def _normalize_app_env(cls, v: str | None) -> str:
+        return (v or "development").strip().lower()
 
+    @field_validator("GEMINI_MODEL", "GEMINI_TRANSCRIPTION_MODEL", mode="after")
+    @classmethod
+    def _normalize_gemini(cls, v: str) -> str:
+        return _normalize_gemini_model_id(v)
+
+    @field_validator("AXELIA_FAST_MODEL", mode="after")
+    @classmethod
+    def _normalize_axelia_fast(cls, v: str) -> str:
+        # Si AXELIA_FAST_MODEL n'est pas explicitement défini, on retombe sur
+        # GEMINI_MODEL. Comme on est en "after", on n'a pas accès aux autres
+        # champs ; le fallback passe donc par `os.getenv` direct (parité avec
+        # l'ancien comportement).
+        if v:
+            return _normalize_gemini_model_id(v)
+        fallback = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+        return _normalize_gemini_model_id(fallback)
+
+    @field_validator("AXELIA_PRO_MODEL", mode="after")
+    @classmethod
+    def _normalize_axelia_pro(cls, v: str) -> str:
+        return _normalize_gemini_model_id(v) if v else "gemini-2.5-pro"
+
+    # ─── Properties dérivées ───────────────────────────────────────────────────
     @property
     def is_production(self) -> bool:
         return self.APP_ENV == "production"
@@ -202,7 +177,7 @@ class Settings:
     @property
     def cors_origins(self) -> list[str]:
         """
-        Renvoie la liste effective d'origines CORS pour l'environnement courant.
+        Liste effective d'origines CORS pour l'environnement courant.
 
         Précédence:
           1. `CORS_ORIGINS` (override universel) si défini

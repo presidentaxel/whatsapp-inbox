@@ -1,7 +1,5 @@
 import { useState, useEffect } from "react";
 import { FiArrowLeft, FiSmartphone, FiCheck } from "react-icons/fi";
-import { getAccounts } from "../../api/accountsApi";
-
 export default function MobileConnectedDevices({ accounts, activeAccount, onBack }) {
   const [devices, setDevices] = useState([]);
 

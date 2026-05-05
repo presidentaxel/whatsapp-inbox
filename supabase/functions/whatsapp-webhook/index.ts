@@ -107,7 +107,7 @@ async function verifyGetChallenge(req: Request): Promise<Response> {
   }
 
   const globalToken = Deno.env.get("WHATSAPP_VERIFY_TOKEN");
-  if (globalToken && token === globalToken) {
+  if (globalToken && timingSafeEqualStr(token, globalToken)) {
     return new Response(challenge, { status: 200, headers: { "Content-Type": "text/plain" } });
   }
 
@@ -218,16 +218,12 @@ Deno.serve(async (req) => {
   try {
     if (req.method === "GET") return await verifyGetChallenge(req);
     if (req.method === "POST") return await handlePost(req);
-    if (req.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        },
-      });
-    }
-    return new Response("method not allowed", { status: 405 });
+    // Pas de gestion CORS spécifique : Meta n'envoie pas de preflight et
+    // aucun navigateur n'est censé appeler cet endpoint. On répond sec.
+    return new Response("method not allowed", {
+      status: 405,
+      headers: { Allow: "GET, POST" },
+    });
   } catch (e) {
     console.error(e);
     return new Response(JSON.stringify({ detail: String(e) }), {

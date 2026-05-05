@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { FiImage, FiVideo, FiFileText, FiDownload, FiX } from "react-icons/fi";
 import { getConversationMediaGallery } from "../../api/messagesApi";
 import { supabaseClient } from "../../api/supabaseClient";
+import { devLog } from "../../utils/devLog";
 import "./MediaGallery.css";
 
 export default function MediaGallery({ conversationId, mediaType = "image" }) {
@@ -70,7 +71,7 @@ export default function MediaGallery({ conversationId, mediaType = "image" }) {
           const newMessage = payload.new;
           // Vérifier si c'est un média du type supporté
           if (supportedTypes.includes(newMessage.message_type?.toLowerCase())) {
-            console.log("🔄 [MEDIA GALLERY] New media message detected, refreshing gallery");
+            devLog("🔄 [MEDIA GALLERY] New media message detected, refreshing gallery");
             // Rafraîchir la galerie après un court délai pour laisser le temps au storage_url d'être mis à jour
             setTimeout(() => {
               loadGallery();
@@ -93,7 +94,7 @@ export default function MediaGallery({ conversationId, mediaType = "image" }) {
             supportedTypes.includes(updatedMessage.message_type?.toLowerCase()) &&
             updatedMessage.storage_url
           ) {
-            console.log("🔄 [MEDIA GALLERY] Media storage_url updated, refreshing gallery");
+            devLog("🔄 [MEDIA GALLERY] Media storage_url updated, refreshing gallery");
             loadGallery();
           }
         }

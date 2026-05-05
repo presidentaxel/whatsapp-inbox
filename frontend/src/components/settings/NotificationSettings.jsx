@@ -114,19 +114,6 @@ export default function NotificationSettings({ accounts = [] }) {
 
   const getPref = (accountId, field) => prefs[accountId]?.[field] ?? true;
 
-  const getStatusColor = (tone) => {
-    switch (tone) {
-      case 'success':
-        return '#25d366';
-      case 'danger':
-        return '#f44336';
-      case 'warning':
-        return '#ffa500';
-      default:
-        return '#8696a0';
-    }
-  };
-
   return (
     <div className="notif-settings-table">
       <div className="notif-settings-table__header">

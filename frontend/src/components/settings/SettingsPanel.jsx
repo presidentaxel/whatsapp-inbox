@@ -2,15 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   FiSettings,
   FiMonitor,
-  FiKey,
-  FiLock,
   FiMessageSquare,
-  FiVideo,
   FiBell,
-  FiType,
-  FiChevronDown,
   FiSearch,
-  FiUser,
   FiShield,
   FiZap,
   FiCloud,
@@ -19,8 +13,6 @@ import {
   FiLoader,
 } from "react-icons/fi";
 import {
-  createRole,
-  deleteRole,
   getAdminUsers,
   getPermissions,
   getRoles,
@@ -28,7 +20,14 @@ import {
   setUserRoles,
   updateUserStatus,
 } from "../../api/adminApi";
-import { createAccount, deleteAccount, updateAccountGoogleDrive, initGoogleDriveAuth, disconnectGoogleDrive, listGoogleDriveFolders, backfillGoogleDrive } from "../../api/accountsApi";
+import {
+  createAccount,
+  deleteAccount,
+  updateAccountGoogleDrive,
+  initGoogleDriveAuth,
+  disconnectGoogleDrive,
+  backfillGoogleDrive,
+} from "../../api/accountsApi";
 import NotificationSettings from "./NotificationSettings";
 import PermissionsTable from "./PermissionsTable";
 import AxeliaAccessTable from "./AxeliaAccessTable";
@@ -45,20 +44,13 @@ const INITIAL_ACCOUNT_FORM = {
   verify_token: "",
 };
 
-const INITIAL_ROLE_FORM = {
-  name: "",
-  slug: "",
-  description: "",
-  permissions: [],
-};
-
 export default function SettingsPanel({
   accounts = [],
   onSignOut,
   currentUser,
   canViewAccounts,
   canManageAccounts,
-  canManageRoles,
+  canManageRoles: _canManageRoles,
   canManageUsers,
   canViewPermissions,
   canManagePermissions,
@@ -66,11 +58,10 @@ export default function SettingsPanel({
   refreshProfile,
 }) {
   const [accountForm, setAccountForm] = useState(INITIAL_ACCOUNT_FORM);
-  const [roleForm, setRoleForm] = useState(INITIAL_ROLE_FORM);
   const [permissions, setPermissions] = useState([]);
   const [roles, setRoles] = useState([]);
   const [users, setUsers] = useState([]);
-  const [loadingAdmin, setLoadingAdmin] = useState(false);
+  const [, setLoadingAdmin] = useState(false);
   const [roleDrafts, setRoleDrafts] = useState({});
   const [overrideDrafts, setOverrideDrafts] = useState({});
   const [statusMessage, setStatusMessage] = useState("");
@@ -229,32 +220,6 @@ export default function SettingsPanel({
     }
   };
 
-  const toggleRolePermission = (code) => {
-    setRoleForm((prev) => {
-      const exists = prev.permissions.includes(code);
-      return {
-        ...prev,
-        permissions: exists
-          ? prev.permissions.filter((perm) => perm !== code)
-          : [...prev.permissions, code],
-      };
-    });
-  };
-
-  const handleCreateRole = async (e) => {
-    e.preventDefault();
-    await createRole(roleForm);
-    setRoleForm(INITIAL_ROLE_FORM);
-    loadAdminData();
-  };
-
-  const handleDeleteRole = async (roleId, slug) => {
-    if (slug === "admin") return;
-    if (!window.confirm("Supprimer ce rôle ?")) return;
-    await deleteRole(roleId);
-    loadAdminData();
-  };
-
   const updateRolesForUser = async (user, assignments) => {
     await setUserRoles(
       user.user_id,
@@ -382,7 +347,7 @@ export default function SettingsPanel({
           });
         }
     return base;
-  }, [canViewAccounts, canManageAccounts, canManageRoles, canManageUsers, canViewPermissions, canManagePermissions]);
+  }, [canViewAccounts, canManageAccounts, canViewPermissions, canManagePermissions]);
 
   const filteredNavItems = useMemo(() => {
     if (!searchQuery.trim()) return navItems;

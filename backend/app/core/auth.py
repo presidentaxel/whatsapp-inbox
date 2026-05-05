@@ -84,18 +84,19 @@ async def get_current_user(
 
     token = credentials.credentials
     
-    # Cache de l'utilisateur basé sur le hash du token (TTL: 2 minutes)
-    # Cela réduit drastiquement les appels à Supabase pour /auth/me
+    # Cache de l'utilisateur basé sur le hash du token (TTL: 5 minutes)
+    # Réduit drastiquement les appels à Supabase pour /auth/me. L'invalidation
+    # ciblée passe par la clé `auth_user:*` quand les permissions changent.
     token_hash = hashlib.sha256(token.encode()).hexdigest()[:16]
     cache_key = f"auth_user:{token_hash}"
-    
+
     async def fetch_and_load_user():
         supabase_user = await _fetch_supabase_user(token)
         return await load_current_user_async(supabase_user)
-    
+
     return await get_cached_or_fetch(
         key=cache_key,
         fetch_func=fetch_and_load_user,
-        ttl_seconds=300  # 5 minutes - permissions rarely change, invalidation exists via auth_user:*
+        ttl_seconds=300,
     )
 

@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { FiImage, FiVideo, FiFileText, FiDownload, FiX } from "react-icons/fi";
 import { getAccountMediaGallery } from "../../api/messagesApi";
-import { supabaseClient } from "../../api/supabaseClient";
 import PDFThumbnail from "./PDFThumbnail";
 import "./AccountMediaGallery.css";
 

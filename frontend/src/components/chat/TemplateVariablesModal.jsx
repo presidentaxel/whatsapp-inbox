@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { FiX, FiSend } from "react-icons/fi";
-import { extractVariablesFromComponents, buildTemplateComponents, extractTemplateVariables, extractTemplateVariablesWithMapping } from "../../utils/templateVariables";
+import { buildTemplateComponents, extractTemplateVariables, extractTemplateVariablesWithMapping } from "../../utils/templateVariables";
 
 export default function TemplateVariablesModal({ 
   template, 
@@ -177,7 +177,7 @@ export default function TemplateVariablesModal({
       const sortedMapping = [...variableMapping].sort((a, b) => b.position - a.position);
       
       // Remplacer dans l'ordre inverse pour préserver les positions
-      sortedMapping.forEach(({ num, name, pattern, position, isNumbered, isNamed }) => {
+      sortedMapping.forEach(({ num, name, pattern, position, isNumbered: _isNumbered, isNamed }) => {
         // Pour les variables nommées, chercher par num (car elles sont stockées par num dans variableValues)
         // Pour les variables numérotées ou vides, chercher aussi par num
         const value = variableValues[num] || variableValues[String(num)] || "";

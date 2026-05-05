@@ -849,17 +849,11 @@ async def check_template_status_async(message_id: str):
         f"🔄 [CHECK-ASYNC] Début pour le message {message_id} "
         f"(max {max_attempts} essais ≈ {TEMPLATE_ASYNC_MAX_POLL_DAYS} jours, toutes les {TEMPLATE_ASYNC_POLL_INTERVAL_SEC // 60} min)"
     )
-    print(
-        f"🔄 [CHECK-ASYNC] Début de la vérification périodique du statut du template pour le message {message_id}"
-    )
 
     attempt = 0
     while attempt < max_attempts:
         try:
             logger.info(
-                f"🔍 [CHECK-ASYNC] Vérification #{attempt + 1}/{max_attempts} pour le message {message_id}"
-            )
-            print(
                 f"🔍 [CHECK-ASYNC] Vérification #{attempt + 1}/{max_attempts} pour le message {message_id}"
             )
 
@@ -868,25 +862,15 @@ async def check_template_status_async(message_id: str):
             logger.info(
                 f"📊 [CHECK-ASYNC] Résultat pour message {message_id}: statut={result.get('status')}"
             )
-            print(
-                f"📊 [CHECK-ASYNC] Résultat pour message {message_id}: statut={result.get('status')}"
-            )
 
             if result["status"] in ["APPROVED", "REJECTED"]:
                 if result["status"] == "APPROVED":
                     logger.info(
                         f"✅ [CHECK-ASYNC] Template approuvé pour le message {message_id}, envoi en cours..."
                     )
-                    print(
-                        f"✅ [CHECK-ASYNC] Template approuvé pour le message {message_id}, envoi en cours..."
-                    )
                     await send_pending_template(message_id)
                 else:
                     logger.warning(
-                        f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: "
-                        f"{result.get('rejection_reason', 'Raison inconnue')}"
-                    )
-                    print(
                         f"❌ [CHECK-ASYNC] Template rejeté pour le message {message_id}: "
                         f"{result.get('rejection_reason', 'Raison inconnue')}"
                     )
@@ -923,9 +907,6 @@ async def check_template_status_async(message_id: str):
                 logger.warning(
                     f"⚠️ [CHECK-ASYNC] Template non trouvé pour le message {message_id} - abandon et nettoyage"
                 )
-                print(
-                    f"⚠️ [CHECK-ASYNC] Template non trouvé pour le message {message_id}, arrêt de la vérification"
-                )
                 await abandon_stale_pending_template(
                     message_id,
                     "Suivi template introuvable (entrée supprimée ou incohérente).",
@@ -935,27 +916,17 @@ async def check_template_status_async(message_id: str):
                 f"⏳ [CHECK-ASYNC] Template encore en attente pour le message {message_id} "
                 f"(statut: {result.get('status')})"
             )
-            print(
-                f"⏳ [CHECK-ASYNC] Template encore en attente pour le message {message_id} "
-                f"(statut: {result.get('status')})"
-            )
 
         except Exception as e:
             logger.error(
                 f"❌ [CHECK-ASYNC] Erreur lors de la vérification du statut du template pour {message_id}: {e}",
                 exc_info=True,
             )
-            print(
-                f"❌ [CHECK-ASYNC] Erreur lors de la vérification du statut du template pour {message_id}: {e}"
-            )
 
         if attempt < max_attempts - 1:
             logger.info(
                 f"⏰ [CHECK-ASYNC] Attente de {TEMPLATE_ASYNC_POLL_INTERVAL_SEC // 60} minutes "
                 f"avant la prochaine vérification pour le message {message_id}"
-            )
-            print(
-                f"⏰ [CHECK-ASYNC] Attente de 5 minutes avant la prochaine vérification pour le message {message_id}"
             )
             await asyncio.sleep(TEMPLATE_ASYNC_POLL_INTERVAL_SEC)
         attempt += 1
@@ -964,10 +935,6 @@ async def check_template_status_async(message_id: str):
         logger.warning(
             f"⏰ [CHECK-ASYNC] Limite d'essais atteinte ({max_attempts}) pour le message {message_id} "
             f"(≈ {TEMPLATE_ASYNC_MAX_POLL_DAYS} jours) - abandon"
-        )
-        print(
-            f"⏰ [CHECK-ASYNC] Timeout: Le template pour le message {message_id} n'a pas été approuvé après "
-            f"{TEMPLATE_ASYNC_MAX_POLL_DAYS} jours"
         )
         await abandon_stale_pending_template(
             message_id,

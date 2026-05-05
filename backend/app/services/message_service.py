@@ -12,7 +12,15 @@ from app.core.config import settings
 from app.core.db import supabase, supabase_execute, SUPABASE_IN_CLAUSE_CHUNK_SIZE
 from app.core.pg import fetch_all, fetch_one, execute, get_pool
 from app.core.http_client import get_http_client, get_http_client_for_media
-from app.core.retry import retry_on_network_error
+from app.services.whatsapp_send import send_with_retry as _send_to_whatsapp_with_retry
+# Réexportés depuis reactions_service (cf. guide §5.1 - split progressif).
+# Les imports historiques `from app.services.message_service import ...`
+# continuent de fonctionner.
+from app.services.reactions_service import (  # noqa: F401
+    add_reaction,
+    remove_reaction,
+    send_reaction_to_whatsapp,
+)
 from app.services import bot_service
 from app.services.account_service import (
     get_account_by_id,
@@ -2263,152 +2271,6 @@ async def delete_message_scope(
     return {"success": True, "message": refreshed.data[0]}
 
 
-async def add_reaction(message_id: str, emoji: str, from_number: str) -> Dict[str, Any]:
-    """Ajoute une réaction à un message."""
-    if get_pool():
-        msg = await fetch_one(
-            "SELECT id FROM messages WHERE id = $1::uuid LIMIT 1",
-            message_id,
-        )
-        if not msg:
-            return {"error": "message_not_found"}
-        row = await fetch_one(
-            """
-            INSERT INTO message_reactions (message_id, emoji, from_number)
-            VALUES ($1::uuid, $2, $3)
-            ON CONFLICT (message_id, from_number, emoji) DO UPDATE SET emoji = EXCLUDED.emoji
-            RETURNING *
-            """,
-            message_id,
-            emoji,
-            from_number,
-        )
-        return {"success": True, "reaction": dict(row) if row else None}
-    message = await supabase_execute(
-        supabase.table("messages")
-        .select("id, wa_message_id, conversation_id")
-        .eq("id", message_id)
-        .limit(1)
-    )
-    if not message.data:
-        return {"error": "message_not_found"}
-    reaction = await supabase_execute(
-        supabase.table("message_reactions").upsert(
-            {"message_id": message_id, "emoji": emoji, "from_number": from_number},
-            on_conflict="message_id,from_number,emoji",
-        )
-    )
-    return {"success": True, "reaction": reaction.data[0] if reaction.data else None}
-
-
-async def remove_reaction(message_id: str, emoji: str, from_number: str) -> Dict[str, Any]:
-    """Supprime une réaction d'un message."""
-    if get_pool():
-        msg = await fetch_one("SELECT id FROM messages WHERE id = $1::uuid LIMIT 1", message_id)
-        if not msg:
-            return {"error": "message_not_found"}
-        await execute(
-            "DELETE FROM message_reactions WHERE message_id = $1::uuid AND emoji = $2 AND from_number = $3",
-            message_id,
-            emoji,
-            from_number,
-        )
-        return {"success": True}
-    message = await supabase_execute(
-        supabase.table("messages").select("id").eq("id", message_id).limit(1)
-    )
-    if not message.data:
-        return {"error": "message_not_found"}
-    await supabase_execute(
-        supabase.table("message_reactions")
-        .delete()
-        .eq("message_id", message_id)
-        .eq("emoji", emoji)
-        .eq("from_number", from_number)
-    )
-    return {"success": True}
-
-
-async def send_reaction_to_whatsapp(
-    conversation_id: str,
-    target_wa_message_id: str,
-    emoji: str,
-) -> Dict[str, Any]:
-    """
-    Envoie une réaction via l'API WhatsApp.
-    
-    Args:
-        conversation_id: ID de la conversation
-        target_wa_message_id: ID WhatsApp du message cible
-        emoji: Emoji de la réaction (vide pour supprimer)
-    
-    Returns:
-        Dict avec le résultat de l'envoi
-    """
-    conversation = await get_conversation_by_id(conversation_id)
-    if not conversation:
-        return {"error": "conversation_not_found"}
-    
-    account = await get_account_by_id(conversation["account_id"])
-    if not account:
-        return {"error": "account_not_found"}
-    
-    phone_id = account.get("phone_number_id") or settings.WHATSAPP_PHONE_ID
-    token = account.get("access_token") or settings.WHATSAPP_TOKEN
-    
-    if not phone_id or not token:
-        return {"error": "whatsapp_not_configured"}
-    
-    to_number = conversation["client_number"]
-    
-    body = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "reaction",
-        "reaction": {
-            "message_id": target_wa_message_id,
-            "emoji": emoji,
-        },
-    }
-    
-    try:
-        response = await _send_to_whatsapp_with_retry(phone_id, token, body)
-    except httpx.HTTPError as exc:
-        logger.error("WhatsApp reaction API error: %s", exc)
-        return {
-            "error": "whatsapp_api_error",
-            "details": str(exc),
-        }
-    
-    if response.is_error:
-        logger.error("WhatsApp reaction error: %s %s", response.status_code, response.text)
-        return {
-            "error": "whatsapp_api_error",
-            "status_code": response.status_code,
-            "details": response.text,
-        }
-    
-    response_json = response.json()
-    wa_message_id = response_json.get("messages", [{}])[0].get("id")
-    
-    return {
-        "success": True,
-        "wa_message_id": wa_message_id,
-    }
-
-
-@retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)
-async def _send_to_whatsapp_with_retry(phone_id: str, token: str, body: dict) -> httpx.Response:
-    """Envoie un message WhatsApp avec retry automatique sur erreurs réseau."""
-    client = await get_http_client()
-    response = await client.post(
-        f"https://graph.facebook.com/v19.0/{phone_id}/messages",
-        headers={"Authorization": f"Bearer {token}"},
-        json=body,
-    )
-    return response
-
-
 async def send_message(payload: dict, skip_bot_trigger: bool = False, force_send: bool = False, is_system: bool = False):
     """
     Envoie un message WhatsApp.
@@ -3227,37 +3089,23 @@ async def send_interactive_message_with_storage(
     if not phone_id or not token:
         return {"error": "whatsapp_not_configured"}
 
-    logger.info("=" * 80)
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] ========== ENVOI MESSAGE INTERACTIF ==========")
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] conversation_id={conversation_id}")
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] interactive_type={interactive_type}")
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Paramètres reçus:")
-    logger.info(f"   - body_text: {repr(body_text)}")
-    logger.info(f"   - header_text: {repr(header_text)}")
-    logger.info(f"   - footer_text: {repr(footer_text)}")
-    logger.info(f"   - interactive_payload: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
-    
-    # Construire le payload pour WhatsApp
+    logger.info(
+        "[SEND-INTERACTIVE-STORAGE] envoi conversation_id=%s interactive_type=%s",
+        conversation_id,
+        interactive_type,
+    )
+
     interactive_obj = {
         "type": interactive_type,
         "body": {"text": body_text}
     }
-    
+
     if header_text:
         interactive_obj["header"] = {"type": "text", "text": header_text}
-        logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Header ajouté: {repr(header_text)}")
-    else:
-        logger.warning(f"⚠️ [SEND-INTERACTIVE-STORAGE] AUCUN HEADER (header_text={repr(header_text)})")
-    
     if footer_text:
         interactive_obj["footer"] = {"text": footer_text}
-        logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Footer ajouté: {repr(footer_text)}")
-    else:
-        logger.warning(f"⚠️ [SEND-INTERACTIVE-STORAGE] AUCUN FOOTER (footer_text={repr(footer_text)})")
-    
-    # Ajouter action (buttons ou sections)
+
     interactive_obj["action"] = interactive_payload
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Action ajoutée: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
 
     body = {
         "messaging_product": "whatsapp",
@@ -3265,10 +3113,11 @@ async def send_interactive_message_with_storage(
         "type": "interactive",
         "interactive": interactive_obj
     }
-    
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] Payload complet envoyé à WhatsApp:")
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] {json.dumps(body, indent=2, ensure_ascii=False)}")
-    logger.info(f"📤 [SEND-INTERACTIVE-STORAGE] ==============================================")
+
+    logger.debug(
+        "[SEND-INTERACTIVE-STORAGE] payload envoyé à WhatsApp: %s",
+        json.dumps(body, ensure_ascii=False),
+    )
 
     timestamp_iso = datetime.now(timezone.utc).isoformat()
     

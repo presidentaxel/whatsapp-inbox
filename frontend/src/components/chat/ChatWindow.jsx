@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiSearch, FiInfo, FiX } from "react-icons/fi";
 import { AiFillStar, AiOutlineStar } from "react-icons/ai";
 import { MdPushPin } from "react-icons/md";
-import { getMessages, sendMessage, editMessage, deleteMessageApi, permanentlyDeleteMessage, checkAndDownloadConversationMedia, pinMessage, unpinMessage, addReaction } from "../../api/messagesApi";
+import { getMessages, sendMessage, permanentlyDeleteMessage, checkAndDownloadConversationMedia, pinMessage, unpinMessage, addReaction } from "../../api/messagesApi";
 import { markConversationRead } from "../../api/conversationsApi";
 import { listPlaygroundFlows } from "../../api/playgroundFlowsApi";
 import MessageBubble from "./MessageBubble";
@@ -12,7 +12,6 @@ import MediaGallery from "./MediaGallery";
 import { supabaseClient } from "../../api/supabaseClient";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 import { formatRelativeDateTime } from "../../utils/date";
-import { notifyNewMessage, isNotificationEnabledForAccount } from "../../utils/notifications";
 import { useAuth } from "../../context/AuthContext";
 
 // Debounce check-media: 5 min par conversation (réduit appels inutiles ~75%)

@@ -257,10 +257,8 @@ async def send_template_message(
             logger.info(f"📤 [WHATSAPP API]     Component {idx + 1} complet: {json.dumps(comp, indent=2, ensure_ascii=False)}")
     else:
         logger.warning(f"⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
-    logger.info(f"📤 [WHATSAPP API] Payload complet envoyé à Meta:")
-    logger.info(f"📤 [WHATSAPP API] {json.dumps(payload, indent=2, ensure_ascii=False)}")
-    logger.info(f"📤 [WHATSAPP API] =============================================")
-    
+    logger.debug("[WHATSAPP API] Payload complet envoyé à Meta: %s", json.dumps(payload, ensure_ascii=False))
+
     response = await client.post(
         f"{GRAPH_API_BASE}/{phone_number_id}/messages",
         headers={"Authorization": f"Bearer {access_token}"},
@@ -1000,10 +998,8 @@ async def create_message_template(
             logger.info(f"📤 [WHATSAPP API]     Component {idx + 1} complet: {json.dumps(comp, indent=2, ensure_ascii=False)}")
     else:
         logger.warning(f"⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
-    logger.info(f"📤 [WHATSAPP API] Payload complet envoyé à Meta:")
-    logger.info(f"📤 [WHATSAPP API] {json.dumps(payload, indent=2, ensure_ascii=False)}")
-    logger.info(f"📤 [WHATSAPP API] =============================================")
-    
+    logger.debug("[WHATSAPP API] Payload complet envoyé à Meta: %s", json.dumps(payload, ensure_ascii=False))
+
     response = await client.post(
         f"{GRAPH_API_BASE}/{waba_id}/message_templates",
         headers={"Authorization": f"Bearer {access_token}"},

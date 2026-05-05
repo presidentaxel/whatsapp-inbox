@@ -3,7 +3,6 @@ from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime, timedelta
 import logging
-import os
 
 from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser
@@ -145,8 +144,7 @@ async def resend_invite(
             )
         
         # Construire l'URL de redirection
-        frontend_url = os.getenv("FRONTEND_URL") or "http://localhost:5173"
-        redirect_url = f"{frontend_url}/register"
+        redirect_url = f"{settings.FRONTEND_URL}/register"
         
         # Régénérer et renvoyer l'invitation
         def _resend_invite():

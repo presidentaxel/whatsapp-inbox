@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import EmojiPicker from "emoji-picker-react";
 import { addReaction, removeReaction } from "../../api/messagesApi";
 
-export default function MessageReactions({ message, conversation, onReactionChange, forceOpen = false }) {
+export default function MessageReactions({ message, conversation: _conversation, onReactionChange, forceOpen = false }) {
   const [showPicker, setShowPicker] = useState(false);
   const pickerRef = useRef(null);
   const reactions = message.reactions || [];

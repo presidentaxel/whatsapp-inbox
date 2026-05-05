@@ -1,0 +1,48 @@
+[project]
+name = "whatsapp-inbox-backend"
+version = "2.0.0"
+description = "API FastAPI WhatsApp Inbox"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    "scripts",
+]
+
+[tool.ruff.lint]
+# Esprit aligné sur le guide : on vise les *bugs réels*, pas la chasse aux
+# micro-styles. La sélection peut être élargie progressivement (I, SIM, UP…)
+# une fois le legacy nettoyé.
+select = [
+    "E9",   # syntax errors
+    "F",    # pyflakes (undefined names, unused imports, etc.)
+    "B",    # flake8-bugbear (real-bug patterns)
+]
+ignore = [
+    "B008",  # function call in default arg (FastAPI Depends pattern)
+    "B904",  # raise from - acceptable de ne pas propager l'origine
+    "F401",  # unused imports - tolérés tant que le code legacy n'est pas balayé
+    "F841",  # unused locals - idem
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "F401", "F811"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

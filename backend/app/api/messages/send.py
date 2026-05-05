@@ -81,9 +81,12 @@ async def send_with_auto_template(
     conversation_id = payload.get("conversation_id")
     content = payload.get("content", "").strip()
 
-    logger.info("=" * 80)
-    logger.info(f"🚀 [SEND-AUTO-TEMPLATE] Début - conversation_id={conversation_id}, content_length={len(content)}")
-    logger.info(f"🚀 [SEND-AUTO-TEMPLATE] Payload: {payload}")
+    logger.info(
+        "[SEND-AUTO-TEMPLATE] start conversation_id=%s content_length=%s",
+        conversation_id,
+        len(content),
+    )
+    logger.debug("[SEND-AUTO-TEMPLATE] Payload: %s", payload)
 
     if not conversation_id:
         logger.error("❌ [SEND-AUTO-TEMPLATE] conversation_id manquant")
@@ -309,18 +312,12 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         # Hors fenêtre : créer un template avec le texte. Les boutons sont
         # archivés dans interactive_data pour rendu UI mais pas envoyés via
         # template (Meta ne permet pas d'ajouter des boutons à la volée).
-        logger.info("=" * 80)
-        logger.info("⏳ [SEND-INTERACTIVE] ========== HORS FENÊTRE GRATUITE ==========")
-        logger.info(f"⏳ [SEND-INTERACTIVE] conversation_id={conversation_id}")
-        logger.info(f"⏳ [SEND-INTERACTIVE] interactive_type={interactive_type}")
-        logger.info(f"⏳ [SEND-INTERACTIVE] Payload reçu complet:")
-        logger.info(f"   {json.dumps(payload, indent=2, ensure_ascii=False)}")
-        logger.info(f"⏳ [SEND-INTERACTIVE] Paramètres extraits:")
-        logger.info(f"   - body_text: {repr(body_text)}")
-        logger.info(f"   - header_text (raw): {repr(header_text)}")
-        logger.info(f"   - footer_text (raw): {repr(footer_text)}")
-        logger.info(f"   - buttons (raw): {repr(payload.get('buttons'))}")
-        logger.info("⏳ [SEND-INTERACTIVE] Hors fenêtre gratuite - création d'un template automatique")
+        logger.info(
+            "[SEND-INTERACTIVE] hors fenetre gratuite conversation_id=%s interactive_type=%s",
+            conversation_id,
+            interactive_type,
+        )
+        logger.debug("[SEND-INTERACTIVE] payload reçu: %s", json.dumps(payload, ensure_ascii=False))
 
         full_text = ""
         if header_text:
@@ -437,32 +434,21 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
 
     # Fenêtre gratuite : envoi normal du message interactif
     logger.info("=" * 80)
-    logger.info("✅ [SEND-INTERACTIVE] ========== FENÊTRE GRATUITE ==========")
-    logger.info(f"✅ [SEND-INTERACTIVE] conversation_id={conversation_id}")
-    logger.info(f"✅ [SEND-INTERACTIVE] interactive_type={interactive_type}")
-    logger.info(f"✅ [SEND-INTERACTIVE] Paramètres extraits:")
-    logger.info(f"   - body_text: {repr(body_text)}")
-    logger.info(f"   - header_text: {repr(header_text)}")
-    logger.info(f"   - footer_text: {repr(footer_text)}")
-    logger.info(f"   - buttons (raw): {repr(payload.get('buttons'))}")
-    logger.info(f"   - sections (raw): {repr(payload.get('sections'))}")
-    logger.info(f"   - button_text (raw): {repr(payload.get('button_text'))}")
+    logger.info(
+        "[SEND-INTERACTIVE] fenetre gratuite conversation_id=%s interactive_type=%s",
+        conversation_id,
+        interactive_type,
+    )
 
     normalized_header_text = header_text.strip() if header_text and header_text.strip() else None
     normalized_footer_text = footer_text.strip() if footer_text and footer_text.strip() else None
 
-    logger.info(f"✅ [SEND-INTERACTIVE] Après normalisation:")
-    logger.info(f"   - normalized_header_text: {repr(normalized_header_text)}")
-    logger.info(f"   - normalized_footer_text: {repr(normalized_footer_text)}")
-
     if interactive_type == "button":
         buttons = payload.get("buttons", [])
-        logger.info(f"✅ [SEND-INTERACTIVE] Boutons extraits: {repr(buttons)}")
         if not buttons:
             raise HTTPException(status_code=400, detail="buttons are required for button type")
 
         valid_buttons = [btn for btn in buttons if btn.get("id") and btn.get("title")]
-        logger.info(f"✅ [SEND-INTERACTIVE] Boutons valides: {len(valid_buttons)}/{len(buttons)}")
         if not valid_buttons:
             raise HTTPException(status_code=400, detail="Aucun bouton valide (id et title requis)")
 
@@ -472,12 +458,9 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
                 for btn in valid_buttons
             ]
         }
-        logger.info(f"✅ [SEND-INTERACTIVE] interactive_payload construit: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
     elif interactive_type == "list":
         sections = payload.get("sections", [])
         button_text = payload.get("button_text", "Voir les options")
-        logger.info(f"✅ [SEND-INTERACTIVE] Sections extraites: {repr(sections)}")
-        logger.info(f"✅ [SEND-INTERACTIVE] button_text: {repr(button_text)}")
         if not sections:
             raise HTTPException(status_code=400, detail="sections are required for list type")
 
@@ -485,16 +468,13 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
             "button": button_text,
             "sections": sections,
         }
-        logger.info(f"✅ [SEND-INTERACTIVE] interactive_payload construit: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
     else:
         raise HTTPException(status_code=400, detail="invalid interactive_type")
 
-    logger.info(f"✅ [SEND-INTERACTIVE] Appel à send_interactive_message_with_storage avec:")
-    logger.info(f"   - header_text: {repr(normalized_header_text)}")
-    logger.info(f"   - body_text: {repr(body_text)}")
-    logger.info(f"   - footer_text: {repr(normalized_footer_text)}")
-    logger.info(f"   - interactive_payload: {json.dumps(interactive_payload, indent=2, ensure_ascii=False)}")
-    logger.info(f"✅ [SEND-INTERACTIVE] ======================================")
+    logger.debug(
+        "[SEND-INTERACTIVE] interactive_payload=%s",
+        json.dumps(interactive_payload, ensure_ascii=False),
+    )
 
     return await send_interactive_message_with_storage(
         conversation_id=conversation_id,

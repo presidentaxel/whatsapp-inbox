@@ -13,9 +13,9 @@ const ACCESS_LEVELS = [
   { value: "aucun", label: "Aucun", description: "Ne sait même pas que le compte existe" },
 ];
 
-export default function PermissionsTable({ 
-  accounts: propsAccounts, 
-  currentUserRole, 
+export default function PermissionsTable({
+  accounts: _propsAccounts,
+  currentUserRole,
   canManagePermissions,
   currentUserId,
   refreshProfile,
@@ -36,21 +36,10 @@ export default function PermissionsTable({
   // Admin et DEV peuvent voir, Manager ne peut rien voir
   const canView = normalizedRole === "admin" || normalizedRole === "dev";
 
-  // Debug log
-  useEffect(() => {
-    console.log("🔐 PermissionsTable Debug:", {
-      currentUserRole,
-      normalizedRole,
-      canManagePermissions,
-      canEdit,
-      canView,
-    });
-  }, [currentUserRole, normalizedRole, canManagePermissions, canEdit, canView]);
-
   useEffect(() => {
     if (!canView) return;
     loadAllData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [canView]); // Recharger quand la vue change
 
   const loadAllData = async () => {

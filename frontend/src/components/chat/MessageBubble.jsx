@@ -10,8 +10,6 @@ import {
   FiMessageSquare,
   FiPhone,
   FiList,
-  FiLink,
-  FiSend,
   FiArrowLeft,
   FiMoreVertical,
   FiCornerUpLeft,
@@ -563,7 +561,10 @@ function RichMediaBubble({ message, messageType, onAudioTranscript }) {
     buttons: buttons.length > 0 ? (
       <div className="bubble-media__buttons-container">
         {buttons.map((button, index) => (
-          <div key={index} className="bubble-media__button">
+          <div
+            key={`${message.id}-rich-btn-${button.reply?.id || button.url || button.phone_number || index}`}
+            className="bubble-media__button"
+          >
             <FiArrowLeft className="bubble-media__button-icon" />
             <span className="bubble-media__button-text">
               {button.text || button.title || button.reply?.title || button.url || button.phone_number || ''}
@@ -737,7 +738,10 @@ function renderBody(message, { onAudioTranscript } = {}) {
       buttons: buttons.length > 0 ? (
         <div className="bubble-media__buttons-container">
           {buttons.map((button, index) => (
-            <div key={index} className="bubble-media__button">
+            <div
+              key={`${message.id}-int-btn-${button.reply?.id || button.text || index}`}
+              className="bubble-media__button"
+            >
               <FiArrowLeft className="bubble-media__button-icon" />
               <span className="bubble-media__button-text">
                 {button.text || button.title || ''}
@@ -757,7 +761,7 @@ function renderBody(message, { onAudioTranscript } = {}) {
       content: (
         <span className="bubble__text">
           {lines.map((line, index) => (
-            <span key={index}>
+            <span key={`${message.id}-line-${index}`}>
               {line}
               {index < lines.length - 1 && <br />}
             </span>
@@ -914,7 +918,6 @@ function MessageBubbleInner({ message, conversation, onReactionChange, onContext
     if (onContextMenu) {
       e.preventDefault();
       // Calculer la position du menu basée sur la position du clic
-      const rect = e.currentTarget.getBoundingClientRect();
       const clickX = e.clientX;
       const clickY = e.clientY;
       

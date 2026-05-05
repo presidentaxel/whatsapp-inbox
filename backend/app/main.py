@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException, Request, status
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +53,74 @@ from app.services.broadcast_service import periodic_scheduled_broadcasts
 from app.services.playground_flow_service import periodic_playground_scheduled_launches
 from app.services.webhook_event_service import periodic_process_webhook_events
 
+# ─── Boot checks ──────────────────────────────────────────────────────────────
+# En production, certaines variables sont structurellement nécessaires (file
+# durable webhook events, fallback in-memory dégradé). On préfère un crash
+# explicite à un comportement silencieusement dégradé.
+if settings.is_production and not settings.DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL est requis en production : la file durable de webhooks "
+        "(`webhook_events`) en dépend. Configure DATABASE_URL avant de démarrer."
+    )
+
+
+# ─── Lifespan ────────────────────────────────────────────────────────────────
+# Remplace les anciens `@app.on_event("startup")` / `"shutdown"` (dépréciés
+# depuis FastAPI 0.93). Le `lifespan` est l'API officielle pour gérer le cycle
+# de vie : init du pool PG, lancement des tâches périodiques, puis cleanup.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    periodic_tasks: list[asyncio.Task] = []
+
+    await init_pool()
+
+    try:
+        await resume_pending_templates_on_startup()
+    except Exception as e:
+        logger.error("Erreur lors de la reprise des templates au démarrage: %s", e, exc_info=True)
+
+    background_jobs = (
+        ("profile picture update", periodic_profile_picture_update),
+        ("media background backfill", periodic_media_backfill),
+        ("pin notification check", periodic_pin_notification_check),
+        ("pending templates check", periodic_template_check),
+        ("playground flow delays", periodic_playground_flow_delays),
+        ("scheduled broadcasts", periodic_scheduled_broadcasts),
+        ("playground scheduled launches", periodic_playground_scheduled_launches),
+        ("webhook events queue worker", periodic_process_webhook_events),
+    )
+    for name, coro in background_jobs:
+        task = asyncio.create_task(coro(), name=name)
+        periodic_tasks.append(task)
+        logger.info("Tâche périodique démarrée: %s", name)
+
+    app.state.periodic_tasks = periodic_tasks
+
+    try:
+        yield
+    finally:
+        logger.info("Shutdown : annulation des tâches périodiques…")
+        for task in periodic_tasks:
+            if not task.done():
+                task.cancel()
+        for task in periodic_tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning("Erreur en fermant la tâche %s: %s", task.get_name(), e)
+
+        await close_http_client()
+        await close_pool()
+        logger.info("Shutdown complete")
+
+
 app = FastAPI(
     title="WhatsApp Inbox API",
     description="API complète pour gérer votre inbox WhatsApp Business avec toutes les fonctionnalités de l'API Cloud",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # ─── Rate limiting (SlowAPI) ──────────────────────────────────────────────────
@@ -70,22 +137,23 @@ app.add_middleware(SlowAPIMiddleware)
 _cors_origins = settings.cors_origins
 if not _cors_origins:
     if settings.is_production:
-        # On refuse explicitement le wildcard en prod : c'est une erreur de config.
-        logger.error(
-            "CORS_ORIGINS_PROD (ou CORS_ORIGINS) est vide en production. "
-            "Aucune origine ne sera autorisée - configure ces variables."
+        # En prod, une liste CORS vide rend l'API silencieusement injoignable
+        # (le navigateur bloque tout). On préfère un crash explicite au boot
+        # pour que l'erreur de config soit visible immédiatement.
+        raise RuntimeError(
+            "CORS_ORIGINS_PROD (ou CORS_ORIGINS) est vide alors que APP_ENV=production. "
+            "Configure au moins une origine autorisée avant de démarrer l'API."
         )
-    else:
-        logger.warning(
-            "Aucune origine CORS configurée - fallback sur localhost dev. "
-            "Définis CORS_ORIGINS_DEV pour personnaliser."
-        )
-        _cors_origins = [
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-        ]
+    logger.warning(
+        "Aucune origine CORS configurée - fallback sur localhost dev. "
+        "Définis CORS_ORIGINS_DEV pour personnaliser."
+    )
+    _cors_origins = [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ]
 
 logger.info(
     "CORS configuré (APP_ENV=%s) : %d origine(s)",
@@ -167,80 +235,6 @@ if settings.PROMETHEUS_ENABLED:
             return await call_next(request)
 
         logger.info("Endpoint %s protégé par Bearer token", _metrics_path)
-
-
-# Références aux tâches périodiques pour pouvoir les annuler proprement
-_periodic_tasks = []
-
-@app.on_event("startup")
-async def startup_event():
-    """Démarrage de l'application - lance les tâches périodiques."""
-    import asyncio
-    # Pool PostgreSQL direct (si DATABASE_URL est défini)
-    await init_pool()
-    
-    # Reprendre les templates en attente (APPROVED ou PENDING) au démarrage
-    try:
-        await resume_pending_templates_on_startup()
-    except Exception as e:
-        logger.error(f"❌ Erreur lors de la reprise des templates au démarrage: {e}", exc_info=True)
-    
-    # Démarrer la tâche périodique de mise à jour des images de profil
-    task1 = asyncio.create_task(periodic_profile_picture_update())
-    _periodic_tasks.append(task1)
-    logger.info("✅ Profile picture periodic update task started")
-    
-    # Démarrer la tâche périodique de téléchargement des médias manquants
-    task2 = asyncio.create_task(periodic_media_backfill())
-    _periodic_tasks.append(task2)
-    logger.info("✅ Media background backfill task started")
-    
-    # Démarrer la tâche périodique de vérification des notifications d'épinglage
-    task3 = asyncio.create_task(periodic_pin_notification_check())
-    _periodic_tasks.append(task3)
-    logger.info("✅ Pin notification periodic check task started")
-    
-    # Démarrer la tâche périodique de vérification des templates en attente
-    task4 = asyncio.create_task(periodic_template_check())
-    _periodic_tasks.append(task4)
-    logger.info("✅ Pending templates periodic check task started")
-
-    task5 = asyncio.create_task(periodic_playground_flow_delays())
-    _periodic_tasks.append(task5)
-    logger.info("✅ Playground flow delay wake task started")
-
-    task6 = asyncio.create_task(periodic_scheduled_broadcasts())
-    _periodic_tasks.append(task6)
-    logger.info("✅ Scheduled broadcast campaigns task started")
-
-    task7 = asyncio.create_task(periodic_playground_scheduled_launches())
-    _periodic_tasks.append(task7)
-    logger.info("✅ Playground scheduled flow launches task started")
-
-    task8 = asyncio.create_task(periodic_process_webhook_events())
-    _periodic_tasks.append(task8)
-    logger.info("✅ Webhook events durable queue worker started")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Nettoyage propre lors de l'arrêt de l'application."""
-    import asyncio
-    logger.info("🛑 Shutting down application, cancelling periodic tasks...")
-    
-    # Annuler toutes les tâches périodiques proprement
-    for task in _periodic_tasks:
-        if not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass  # C'est normal lors du shutdown
-    
-    # Fermer le client HTTP et le pool PostgreSQL
-    await close_http_client()
-    await close_pool()
-    logger.info("✅ Shutdown complete")
 
 
 @app.get("/")

@@ -1,6 +1,7 @@
 /**
  * Utilitaires pour gérer les variables dans les templates WhatsApp
  */
+import { devLog } from "./devLog";
 
 /**
  * Extrait toutes les variables d'un template ({{1}}, {{2}}, etc.)
@@ -125,11 +126,11 @@ export function extractVariablesFromComponents(components) {
  */
 export function hasTemplateVariables(template) {
   if (!template) {
-    console.log("🔍 hasTemplateVariables: template est null/undefined");
+    devLog("🔍 hasTemplateVariables: template est null/undefined");
     return false;
   }
   
-  console.log("🔍 hasTemplateVariables: vérification du template", {
+  devLog("🔍 hasTemplateVariables: vérification du template", {
     name: template.name,
     hasComponents: !!template.components,
     componentsCount: template.components?.length || 0
@@ -137,15 +138,15 @@ export function hasTemplateVariables(template) {
   
   // Vérifier d'abord dans les components
   if (template.components && Array.isArray(template.components)) {
-    console.log("🔍 hasTemplateVariables: vérification des components", template.components);
+    devLog("🔍 hasTemplateVariables: vérification des components", template.components);
     const variables = extractVariablesFromComponents(template.components);
-    console.log("🔍 hasTemplateVariables: variables trouvées dans components", variables);
+    devLog("🔍 hasTemplateVariables: variables trouvées dans components", variables);
     
     if (variables.header.length > 0 || 
         variables.body.length > 0 || 
         variables.footer.length > 0 || 
         variables.buttons.length > 0) {
-      console.log("✅ hasTemplateVariables: Variables détectées dans les components");
+      devLog("✅ hasTemplateVariables: Variables détectées dans les components");
       return true;
     }
   }
@@ -153,11 +154,11 @@ export function hasTemplateVariables(template) {
   // Vérifier aussi dans le texte brut du template si disponible
   if (template.text || template.body) {
     const text = template.text || template.body;
-    console.log("🔍 hasTemplateVariables: vérification du texte brut", text);
+    devLog("🔍 hasTemplateVariables: vérification du texte brut", text);
     const textVariables = extractTemplateVariables(text);
-    console.log("🔍 hasTemplateVariables: variables trouvées dans le texte", textVariables);
+    devLog("🔍 hasTemplateVariables: variables trouvées dans le texte", textVariables);
     if (textVariables.length > 0) {
-      console.log("✅ hasTemplateVariables: Variables détectées dans le texte brut");
+      devLog("✅ hasTemplateVariables: Variables détectées dans le texte brut");
       return true;
     }
   }
@@ -166,7 +167,7 @@ export function hasTemplateVariables(template) {
   if (template.name) {
     const nameVariables = extractTemplateVariables(template.name);
     if (nameVariables.length > 0) {
-      console.log("✅ hasTemplateVariables: Variables détectées dans le nom");
+      devLog("✅ hasTemplateVariables: Variables détectées dans le nom");
       return true;
     }
   }
@@ -184,7 +185,7 @@ export function hasTemplateVariables(template) {
     // extractTemplateVariables devrait maintenant détecter les {{}} vides automatiquement
     const vars = extractTemplateVariables(text);
     if (vars.length > 0) {
-      console.log("✅ hasTemplateVariables: Variables détectées dans le texte (incluant {{}} vides):", vars);
+      devLog("✅ hasTemplateVariables: Variables détectées dans le texte (incluant {{}} vides):", vars);
       return true;
     }
     
@@ -195,12 +196,12 @@ export function hasTemplateVariables(template) {
     }
     // Vérifier aussi les variables nommées ({{sender_name}}, etc.)
     if (/\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}/.test(text)) {
-      console.log("✅ hasTemplateVariables: Variables nommées détectées (vérification de secours)");
+      devLog("✅ hasTemplateVariables: Variables nommées détectées (vérification de secours)");
       return true;
     }
   }
   
-  console.log("❌ hasTemplateVariables: Aucune variable détectée");
+  devLog("❌ hasTemplateVariables: Aucune variable détectée");
   return false;
 }
 
@@ -236,7 +237,7 @@ export function extractTemplateVariablesWithMapping(text) {
       if (varNumber >= autoVarNumber) {
         autoVarNumber = varNumber + 1;
       }
-      console.log(`✅ extractTemplateVariablesWithMapping: Variable {{${varNumber}}} trouvée à la position ${match.index}`);
+      devLog(`✅ extractTemplateVariablesWithMapping: Variable {{${varNumber}}} trouvée à la position ${match.index}`);
     }
   }
   
@@ -258,7 +259,7 @@ export function extractTemplateVariablesWithMapping(text) {
         isNumbered: false,
         isNamed: true
       });
-      console.log(`✅ extractTemplateVariablesWithMapping: Variable nommée {{${varName}}} trouvée à la position ${match.index}, assignée au numéro ${assignedNum} pour l'ordre`);
+      devLog(`✅ extractTemplateVariablesWithMapping: Variable nommée {{${varName}}} trouvée à la position ${match.index}, assignée au numéro ${assignedNum} pour l'ordre`);
     }
   }
   
@@ -279,7 +280,7 @@ export function extractTemplateVariablesWithMapping(text) {
         isNumbered: false,
         isNamed: false
       });
-      console.log(`✅ extractTemplateVariablesWithMapping: Variable vide {{}} assignée au numéro ${assignedNum} à la position ${emptyMatch.index}`);
+      devLog(`✅ extractTemplateVariablesWithMapping: Variable vide {{}} assignée au numéro ${assignedNum} à la position ${emptyMatch.index}`);
     }
   }
   
@@ -302,7 +303,7 @@ export function extractTemplateVariablesWithMapping(text) {
 export function buildTemplateComponents(template, variableValues) {
   if (!template || !template.components) return [];
   
-  console.log("🔧 buildTemplateComponents: Construction des components", {
+  devLog("🔧 buildTemplateComponents: Construction des components", {
     templateName: template.name,
     variableValues
   });
@@ -316,14 +317,14 @@ export function buildTemplateComponents(template, variableValues) {
     // Ignorer les HEADER avec format IMAGE/VIDEO/DOCUMENT (géré par le backend)
     if (type === "HEADER" && component.format && 
         ["IMAGE", "VIDEO", "DOCUMENT"].includes(component.format)) {
-      console.log(`⏭️ buildTemplateComponents: Component ${index} (${type}) ignoré (média)`);
+      devLog(`⏭️ buildTemplateComponents: Component ${index} (${type}) ignoré (média)`);
       return; // Ne pas ajouter de composant pour les headers média
     }
     
     // Extraire les variables avec leur mapping (incluant les {{}} vides)
     const variableMapping = extractTemplateVariablesWithMapping(text);
     
-    console.log(`🔍 buildTemplateComponents: Component ${index} (${type})`, {
+    devLog(`🔍 buildTemplateComponents: Component ${index} (${type})`, {
       text: text.substring(0, 200),
       variableMapping,
       hasVariables: variableMapping.length > 0
@@ -343,14 +344,14 @@ export function buildTemplateComponents(template, variableValues) {
       // C'est l'ordre dans lequel Meta attend les paramètres
       const sortedByPosition = [...variableMapping].sort((a, b) => a.position - b.position);
       
-      console.log(`🔍 buildTemplateComponents: Variables triées par position pour ${type}:`, sortedByPosition.map(v => ({
+      devLog(`🔍 buildTemplateComponents: Variables triées par position pour ${type}:`, sortedByPosition.map(v => ({
         num: v.num,
         name: v.name,
         position: v.position,
         pattern: v.pattern
       })));
       
-      sortedByPosition.forEach(({ num, name, pattern, position, isNumbered, isNamed }) => {
+      sortedByPosition.forEach(({ num, name, pattern, position, isNumbered: _isNumbered, isNamed }) => {
         // Éviter les doublons si une variable apparaît plusieurs fois
         // Meta attend un seul paramètre par variable unique, même si elle apparaît plusieurs fois
         if (!seenNums.has(num)) {
@@ -367,7 +368,7 @@ export function buildTemplateComponents(template, variableValues) {
                 type: "text",
                 text: value.trim()
               });
-              console.log(`📝 buildTemplateComponents: Paramètre ajouté pour variable ${varDisplay} (pattern: "${pattern}", position: ${position}, isNamed: ${isNamed}): "${value.trim()}"`);
+              devLog(`📝 buildTemplateComponents: Paramètre ajouté pour variable ${varDisplay} (pattern: "${pattern}", position: ${position}, isNamed: ${isNamed}): "${value.trim()}"`);
             } else {
               console.warn(`⚠️ buildTemplateComponents: Variable ${varDisplay} a une valeur vide, paramètre non ajouté`);
             }
@@ -393,8 +394,8 @@ export function buildTemplateComponents(template, variableValues) {
           type: type,
           parameters: parameters
         });
-        console.log(`✅ buildTemplateComponents: Component ${type} ajouté avec ${parameters.length} paramètres`);
-        console.log(`📋 buildTemplateComponents: Paramètres dans l'ordre (séquentiel 1, 2, 3...):`, parameters.map((p, idx) => ({
+        devLog(`✅ buildTemplateComponents: Component ${type} ajouté avec ${parameters.length} paramètres`);
+        devLog(`📋 buildTemplateComponents: Paramètres dans l'ordre (séquentiel 1, 2, 3...):`, parameters.map((p, idx) => ({
           index: idx + 1,
           type: p.type,
           text: p.text?.substring(0, 50) + (p.text?.length > 50 ? '...' : ''),
@@ -414,7 +415,7 @@ export function buildTemplateComponents(template, variableValues) {
     }
   });
   
-  console.log("🔧 buildTemplateComponents: Résultat final", {
+  devLog("🔧 buildTemplateComponents: Résultat final", {
     componentsCount: components.length,
     components: components
   });

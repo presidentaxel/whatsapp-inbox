@@ -42,7 +42,7 @@ export default function BroadcastCampaignStats({ campaignId }) {
     return <div className="campaign-stats error">Erreur lors du chargement</div>;
   }
 
-  const { campaign, overview, recipients } = stats;
+  const { overview, recipients } = stats;
 
   const filteredRecipients = recipients.filter((r) => {
     if (filter === "read") return r.read_at;

@@ -1,13 +1,12 @@
 import { useState, useEffect } from "react";
 import { FiSend, FiUsers, FiBarChart2 } from "react-icons/fi";
 import { sendBroadcastCampaign, getBroadcastCampaigns } from "../../api/broadcastApi";
-import { formatPhoneNumber } from "../../utils/formatPhone";
 import { formatRelativeDateTime } from "../../utils/date";
 import BroadcastCampaignStats from "./BroadcastCampaignStats";
 
 export default function BroadcastGroupChat({
   group,
-  accountId,
+  accountId: _accountId,
   onClose,
 }) {
   const [message, setMessage] = useState("");

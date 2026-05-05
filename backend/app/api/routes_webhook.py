@@ -2,6 +2,7 @@
 Routes de webhooks WhatsApp
 Gère la vérification et la réception des événements WhatsApp
 """
+import hmac
 import json
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,6 +11,7 @@ from starlette.responses import Response
 
 from app.core.auth import get_current_user
 from app.core.config import settings
+from app.core.metrics import webhook_fallback_inmemory_total
 from app.core.permissions import CurrentUser
 from app.core.rate_limit import limiter
 from app.core.webhook_security import verify_meta_signature
@@ -53,8 +55,13 @@ async def verify_webhook(request: Request):
     )
 
     if mode == "subscribe":
-        # Vérifier le token global
-        if settings.WHATSAPP_VERIFY_TOKEN and token == settings.WHATSAPP_VERIFY_TOKEN:
+        # Vérifier le token global - comparaison timing-safe pour éviter
+        # toute fuite par mesure de temps sur la longueur ou le contenu.
+        if (
+            settings.WHATSAPP_VERIFY_TOKEN
+            and token
+            and hmac.compare_digest(token, settings.WHATSAPP_VERIFY_TOKEN)
+        ):
             logger.info("Webhook verified with global token")
             return PlainTextResponse(challenge, media_type="text/plain")
 
@@ -164,6 +171,9 @@ async def whatsapp_webhook(request: Request, response: Response):
         # Fallback : pas de pool PostgreSQL configuré (DATABASE_URL absent).
         # On retombe sur l'ancien comportement asyncio.create_task pour ne
         # pas casser les déploiements en mode "Supabase REST only".
+        # Compteur Prometheus pour qu'on voie si on dérive vers ce mode dégradé
+        # en prod (où DATABASE_URL est désormais requis - cf. main.py boot check).
+        webhook_fallback_inmemory_total.labels(source="whatsapp").inc()
         logger.warning(
             "webhook enqueue indisponible (pas de pool PG) - fallback in-memory async"
         )
@@ -237,53 +247,53 @@ async def whatsapp_webhook_debug(
         )
         
         data = await request.json()
-        
-        # Afficher la structure complète
-        logger.info("=" * 80)
-        logger.info("🔍 WEBHOOK DEBUG - STRUCTURE COMPLÈTE")
-        logger.info("=" * 80)
-        logger.info(json.dumps(data, indent=2))
-        logger.info("=" * 80)
-        
-        # Analyser la structure
+
+        # Payload complet en DEBUG uniquement (peut contenir des données
+        # personnelles : numéros de téléphone, contenu de messages).
+        logger.debug("[WEBHOOK DEBUG] payload complet: %s", json.dumps(data, ensure_ascii=False))
+
         entries = data.get("entry", [])
-        logger.info(f"📊 Analyse: {len(entries)} entry/entries")
-        
+        logger.info("[WEBHOOK DEBUG] %d entry/entries", len(entries))
+
         all_accounts = await get_all_accounts()
-        logger.info(f"📋 Comptes disponibles en base: {len(all_accounts)}")
-        for acc in all_accounts:
-            logger.info(f"   - {acc.get('name')}: phone_number_id={acc.get('phone_number_id')}")
-        
+        logger.info("[WEBHOOK DEBUG] %d compte(s) en base", len(all_accounts))
+
         for entry_idx, entry in enumerate(entries):
-            entry_id = entry.get("id")
-            logger.info(f"\n📦 Entry {entry_idx + 1}: id={entry_id}")
-            
             changes = entry.get("changes", [])
             for change_idx, change in enumerate(changes):
                 field = change.get("field")
                 value = change.get("value", {})
                 metadata = value.get("metadata", {})
                 phone_number_id = metadata.get("phone_number_id")
-                
-                logger.info(f"   🔄 Change {change_idx + 1}: field={field}")
-                logger.info(f"      phone_number_id dans metadata: {phone_number_id}")
-                logger.info(f"      metadata complet: {json.dumps(metadata, indent=6)}")
-                
-                # Chercher le compte
+                messages = value.get("messages", [])
+                statuses = value.get("statuses", [])
+
+                logger.info(
+                    "[WEBHOOK DEBUG] entry=%d change=%d field=%s phone_number_id=%s messages=%d statuses=%d",
+                    entry_idx + 1,
+                    change_idx + 1,
+                    field,
+                    phone_number_id,
+                    len(messages),
+                    len(statuses),
+                )
+
                 if phone_number_id:
                     from app.services.account_service import get_account_by_phone_number_id
                     account = await get_account_by_phone_number_id(phone_number_id)
                     if account:
-                        logger.info(f"      ✅ Compte trouvé: {account.get('name')} (id: {account.get('id')})")
+                        logger.info(
+                            "[WEBHOOK DEBUG] compte trouvé id=%s name=%s",
+                            account.get("id"),
+                            account.get("name"),
+                        )
                     else:
-                        logger.error(f"      ❌ AUCUN COMPTE TROUVÉ pour phone_number_id={phone_number_id}")
+                        logger.error(
+                            "[WEBHOOK DEBUG] AUCUN COMPTE pour phone_number_id=%s",
+                            phone_number_id,
+                        )
                 else:
-                    logger.warning(f"      ⚠️ Pas de phone_number_id dans metadata!")
-                
-                # Vérifier les messages
-                messages = value.get("messages", [])
-                statuses = value.get("statuses", [])
-                logger.info(f"      Messages: {len(messages)}, Statuses: {len(statuses)}")
+                    logger.warning("[WEBHOOK DEBUG] phone_number_id manquant dans metadata")
         
         return {
             "status": "debug_received",

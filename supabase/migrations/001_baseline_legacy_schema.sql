@@ -1,4 +1,5 @@
 -- Baseline: schéma historique auparavant dans supabase/schema/ uniquement.
+-- Les copies des anciens scripts schema/*.sql sont archivées sous supabase/archive/legacy-schema-sql/.
 -- Sans ce fichier, supabase db reset n’applique que supabase/migrations/ et
 -- la première migration (010_…) suppose que conversations, messages, etc. existent.
 --

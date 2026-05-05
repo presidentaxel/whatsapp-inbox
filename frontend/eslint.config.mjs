@@ -17,6 +17,7 @@ import globals from "globals";
 import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
+import tseslint from "typescript-eslint";
 
 export default [
   {
@@ -35,6 +36,10 @@ export default [
   },
 
   js.configs.recommended,
+  ...tseslint.configs.recommended.map((config) => ({
+    ...config,
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+  })),
 
   {
     files: ["**/*.{js,jsx}"],
@@ -70,6 +75,8 @@ export default [
 
       // React (mode 17+: pas besoin d'importer React partout)
       "react/jsx-uses-react": "off",
+      // Indispensable avec `no-unused-vars` : les composants utilisés uniquement en JSX comptent comme « utilisés »
+      "react/jsx-uses-vars": "warn",
       "react/react-in-jsx-scope": "off",
       "react/prop-types": "off",
       "react/jsx-key": "warn",

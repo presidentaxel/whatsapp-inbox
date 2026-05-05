@@ -8,7 +8,14 @@ import { FiRefreshCw, FiInfo } from "react-icons/fi";
  * Pour les messages SORTANTS (qu'on envoie) : sent, delivered, read (masqué)
  * Pour les messages ENTRANTS (qu'on reçoit) : reçu, lu (si conversation marquée comme lue)
  */
-export default function MessageStatus({ status, isOwnMessage, conversation, messageTimestamp, message, onResend }) {
+export default function MessageStatus({
+  status,
+  isOwnMessage,
+  conversation: _conversation,
+  messageTimestamp: _messageTimestamp,
+  message,
+  onResend,
+}) {
   const [showErrorTooltip, setShowErrorTooltip] = useState(false);
   // Pour les messages sortants (qu'on envoie) : afficher les statuts WhatsApp
   if (isOwnMessage) {

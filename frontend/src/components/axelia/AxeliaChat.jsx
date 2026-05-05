@@ -30,12 +30,10 @@ import { renderMarkdown } from "./renderMarkdown";
 import "../../styles/axelia.css";
 import {
   createAxeliaConversation,
-  getAxeliaChatProgress,
   getAxeliaConversations,
   getAxeliaMessages,
   patchAxeliaConversation,
   patchAxeliaMessageRating,
-  postAxeliaChat,
   postAxeliaRegenerate,
   streamAxeliaChat,
 } from "../../api/axeliaApi";
@@ -99,7 +97,6 @@ const AXELIA_CONV_PAGE = 10;
 /** Hauteur approximative du menu ⋯ (épingler / renommer / supprimer), pour le flip vertical. */
 const AXELIA_SIDEBAR_MENU_EST_HEIGHT_PX = 136;
 
-const PROGRESS_POLL_MS = 700;
 const REGEN_COOLDOWN_MS = 1500;
 const PENDING_TOOLS_TTL_MS = 30 * 60_000;
 /** Limite côté UI : 16 Mo bruts (le backend accepte ~13 Mo en base64). */
@@ -724,36 +721,6 @@ export default function AxeliaChat({
     if (!canUseSend || loading) return;
     setToolsOpen((open) => !open);
   }, [canUseSend, loading]);
-
-  /** Lance le polling périodique du registre de progression côté serveur. */
-  const startProgressPolling = useCallback((progressKey) => {
-    if (!progressKey) return;
-    if (progressTimerRef.current) {
-      window.clearInterval(progressTimerRef.current);
-    }
-    let cancelled = false;
-    const tick = async () => {
-      if (cancelled || progressKeyRef.current !== progressKey) return;
-      try {
-        const res = await getAxeliaChatProgress(progressKey);
-        if (cancelled || progressKeyRef.current !== progressKey) return;
-        const data = res?.data || {};
-        if (Object.keys(data).length === 0) {
-          // Le registre n'a pas encore été initialisé côté serveur ou est expiré.
-          return;
-        }
-        setProgressInfo(data);
-      } catch {
-        /* on ignore : le polling est best-effort */
-      }
-    };
-    // tick immédiat puis intervalle
-    tick();
-    progressTimerRef.current = window.setInterval(tick, PROGRESS_POLL_MS);
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const sendMessage = async () => {
     const text = input.trim();

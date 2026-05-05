@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { FiInfo, FiMessageSquare, FiFileText, FiImage, FiUser, FiExternalLink, FiPhone, FiCornerDownLeft } from "react-icons/fi";
+import { FiInfo, FiMessageSquare, FiImage, FiUser, FiExternalLink, FiPhone, FiCornerDownLeft } from "react-icons/fi";
 import {
   getPhoneDetails,
   getBusinessProfile,

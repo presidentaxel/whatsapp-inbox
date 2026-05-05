@@ -21,29 +21,6 @@ const WALLPAPER_COLORS = [
   { id: 'dark-teal', label: 'Teal foncé', color: '#0a3d2a' },
 ];
 
-function loadPrefs() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {
-      theme: 'system',
-      wallpaper: 'default',
-      wallpaperDoodles: true,
-      spellCheck: true,
-      emojiReplace: true,
-      enterToSend: true,
-    };
-  } catch {
-    return {
-      theme: 'system',
-      wallpaper: 'default',
-      wallpaperDoodles: true,
-      spellCheck: true,
-      emojiReplace: true,
-      enterToSend: true,
-    };
-  }
-}
-
 function savePrefs(prefs) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
@@ -121,8 +98,9 @@ export default function DiscussionSettings() {
     updatePref('wallpaper', wallpaperId);
   };
 
-  const currentThemeLabel = THEMES.find(t => t.value === prefs.theme)?.label || 'Thème par défaut du système';
-  const currentThemeIcon = THEMES.find(t => t.value === prefs.theme)?.icon || FiMonitor;
+  const activeThemeEntry = THEMES.find((t) => t.value === prefs.theme);
+  const currentThemeLabel = activeThemeEntry?.label || "Thème par défaut du système";
+  const ThemeIcon = activeThemeEntry?.icon || FiMonitor;
 
   return (
     <div className="discussion-settings">
@@ -137,7 +115,7 @@ export default function DiscussionSettings() {
             <strong>Thème</strong>
             <small>{currentThemeLabel}</small>
           </div>
-          <FiMonitor className="discussion-settings__option-arrow" />
+          <ThemeIcon className="discussion-settings__option-arrow" />
         </button>
 
         <button

@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
-import { FiCheck, FiX, FiAlertTriangle, FiPause, FiBell, FiAlertCircle } from 'react-icons/fi';
+import { FiCheck, FiX, FiAlertTriangle, FiPause, FiAlertCircle } from "react-icons/fi";
 import { 
   askForNotificationPermission, 
   areNotificationsEnabled, 
   showTestNotification 
-} from '../../utils/notifications';
+} from "../../utils/notifications";
 import '../../styles/mobile-notification-settings.css';
 
 /**

@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { FiSend, FiPaperclip, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiVideo, FiFileText, FiMic, FiClock, FiLink, FiPhone, FiEdit, FiDollarSign, FiFile } from "react-icons/fi";
+import { FiSend, FiGrid, FiList, FiX, FiHelpCircle, FiSmile, FiImage, FiFileText, FiClock, FiLink, FiPhone, FiEdit, FiDollarSign, FiFile } from "react-icons/fi";
 import { uploadMedia } from "../../api/whatsappApi";
 import { sendMediaMessage, sendInteractiveMessage, getMessagePrice, getAvailableTemplates, sendTemplateMessage, sendMessageWithAutoTemplate, sendMessage } from "../../api/messagesApi";
 import EmojiPicker from "emoji-picker-react";
 import { useTheme } from "../../hooks/useTheme";
 import TemplateVariablesModal from "./TemplateVariablesModal";
 import { hasTemplateVariables } from "../../utils/templateVariables";
+import { devLog } from "../../utils/devLog";
 
 export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null, messages = [], replyingToMessage = null, onCancelReply = null }) {
   const [text, setText] = useState("");
@@ -148,25 +149,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     }
     
     const lastTemplateTime = getMessageTimestamp(lastTemplateMessage);
-    
-    // Vérifier si le template a des boutons interactifs (QUICK_REPLY, URL, PHONE_NUMBER)
-    let hasInteractiveButtons = false;
-    if (lastTemplateMessage.interactive_data) {
-      try {
-        const interactiveData = typeof lastTemplateMessage.interactive_data === 'string' 
-          ? JSON.parse(lastTemplateMessage.interactive_data) 
-          : lastTemplateMessage.interactive_data;
-        
-        if (interactiveData && interactiveData.buttons && Array.isArray(interactiveData.buttons)) {
-          hasInteractiveButtons = interactiveData.buttons.some(btn => 
-            btn.type === 'QUICK_REPLY' || btn.type === 'URL' || btn.type === 'PHONE_NUMBER'
-          );
-        }
-      } catch (e) {
-        console.warn("⚠️ [TEMPLATE] Erreur lors du parsing de interactive_data:", e);
-      }
-    }
-    
+
     // Si il n'y a pas de message client, considérer le template comme récent
     // (on attend toujours une réponse si aucun message client n'est arrivé)
     if (!lastInboundMessage) {
@@ -207,7 +190,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       // Si c'est un nouveau message client (différent du précédent), réinitialiser templateSent
       // Car un nouveau message client signifie qu'on peut repasser en mode normal
       if (lastInboundMessageId !== null && currentLastId !== lastInboundMessageId) {
-        console.log("✅ Nouveau message client détecté, réinitialisation de templateSent et vérification immédiate de la fenêtre gratuite");
+        devLog("✅ Nouveau message client détecté, réinitialisation de templateSent et vérification immédiate de la fenêtre gratuite");
         setTemplateSent(false);
         setForceTemplateMode(false); // Réinitialiser aussi forceTemplateMode
         
@@ -313,7 +296,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           // Si on passe de "hors fenêtre" à "dans la fenêtre", c'est qu'un nouveau message client est arrivé
           // Dans ce cas, on peut réinitialiser templateSent
           if (wasOutsideFreeWindow && templateSent) {
-            console.log("✅ Passage de 'hors fenêtre' à 'dans la fenêtre' (nouveau message client), réinitialisation de templateSent");
+            devLog("✅ Passage de 'hors fenêtre' à 'dans la fenêtre' (nouveau message client), réinitialisation de templateSent");
             setTemplateSent(false);
           }
         }
@@ -424,11 +407,11 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       // Si hors fenêtre : utiliser sendMessageWithAutoTemplate (gère les templates automatiquement)
       if (!isOutsideFreeWindow) {
         // Dans la fenêtre gratuite : envoi normal gratuit
-        console.log("✅ [DESKTOP] Envoi dans la fenêtre gratuite - message gratuit");
+        devLog("✅ [DESKTOP] Envoi dans la fenêtre gratuite - message gratuit");
         await sendMessage(payload);
       } else {
         // Hors fenêtre gratuite : utiliser auto-template
-        console.log("💰 [DESKTOP] Envoi hors fenêtre gratuite - utilisation auto-template");
+        devLog("💰 [DESKTOP] Envoi hors fenêtre gratuite - utilisation auto-template");
         await sendMessageWithAutoTemplate(payload);
       }
       
@@ -470,7 +453,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const handleSendTemplate = async (template, components = null) => {
-    console.log("🎯 [FRONTEND] handleSendTemplate appelé", { 
+    devLog("🎯 [FRONTEND] handleSendTemplate appelé", { 
       disabled, 
       conversationId: conversation?.id, 
       template: template.name,
@@ -479,13 +462,13 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     });
     
     if (disabled || !conversation?.id) {
-      console.log("❌ [FRONTEND] handleSendTemplate annulé - disabled:", disabled, "conversationId:", conversation?.id);
+      devLog("❌ [FRONTEND] handleSendTemplate annulé - disabled:", disabled, "conversationId:", conversation?.id);
       return;
     }
     
     // Vérifier si le template a des variables
     const hasVariables = hasTemplateVariables(template);
-    console.log("🔍 [FRONTEND] Vérification variables:", { 
+    devLog("🔍 [FRONTEND] Vérification variables:", { 
       templateName: template.name, 
       hasVariables, 
       components: template.components,
@@ -494,7 +477,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     
     // Si le template a des variables et qu'on n'a pas encore de components, ouvrir la modale
     if (hasVariables && !components) {
-      console.log("📝 [FRONTEND] Template avec variables détecté, ouverture de la modale");
+      devLog("📝 [FRONTEND] Template avec variables détecté, ouverture de la modale");
       setSelectedTemplate(template);
       setShowTemplateModal(true);
       return;
@@ -619,8 +602,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         payload.components = components;
       }
       
-      console.log("📤 [FRONTEND] ========== ENVOI TEMPLATE ==========");
-      console.log("📤 [FRONTEND] Template info:", {
+      devLog("📤 [FRONTEND] ========== ENVOI TEMPLATE ==========");
+      devLog("📤 [FRONTEND] Template info:", {
         conversationId: conversation.id,
         templateName: template.name,
         languageCode: template.language || "fr",
@@ -629,8 +612,8 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         headerMediaType: template.header_media_type || null,
         headerMediaUrl: template.header_media_url || null
       });
-      console.log("📤 [FRONTEND] Payload complet:", JSON.stringify(payload, null, 2));
-      console.log("📤 [FRONTEND] Components détaillés:", components?.map((c, idx) => ({
+      devLog("📤 [FRONTEND] Payload complet:", JSON.stringify(payload, null, 2));
+      devLog("📤 [FRONTEND] Components détaillés:", components?.map((c, idx) => ({
         index: idx,
         type: c.type,
         format: c.format || null,
@@ -645,10 +628,10 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           document: p.document || null
         }))
       })));
-      console.log("📤 [FRONTEND] ====================================");
+      devLog("📤 [FRONTEND] ====================================");
       
       const response = await sendTemplateMessage(conversation.id, payload);
-      console.log("✅ [FRONTEND] Template envoyé avec succès:", response);
+      devLog("✅ [FRONTEND] Template envoyé avec succès:", response);
       
       // Réinitialiser forceTemplateMode et previewTemplate car un nouveau template a été envoyé
       setForceTemplateMode(false);
@@ -717,7 +700,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   }, [text]);
 
   const handleMediaSend = async (file) => {
-    console.log("handleMediaSend called with file:", file?.name, file?.type);
+    devLog("handleMediaSend called with file:", file?.name, file?.type);
     
     if (!conversation?.id) {
       console.error("No conversation ID");
@@ -727,7 +710,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     
     // Récupérer l'account_id depuis la prop ou depuis la conversation
     const accountIdToUse = accountId || conversation?.account_id;
-    console.log("Account ID to use:", accountIdToUse, "from prop:", accountId, "from conversation:", conversation?.account_id);
+    devLog("Account ID to use:", accountIdToUse, "from prop:", accountId, "from conversation:", conversation?.account_id);
     
     if (!accountIdToUse) {
       console.error("Conversation object:", conversation);
@@ -739,10 +722,10 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     setUploading(true);
     setShowMenu(false);
     try {
-      console.log("Uploading media to account:", accountIdToUse);
+      devLog("Uploading media to account:", accountIdToUse);
       // Upload le fichier
       const uploadResult = await uploadMedia(accountIdToUse, file);
-      console.log("Upload result:", uploadResult);
+      devLog("Upload result:", uploadResult);
       const mediaId = uploadResult.data?.id;
       
       if (!mediaId) {
@@ -751,7 +734,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         return;
       }
 
-      console.log("Media uploaded successfully, media ID:", mediaId);
+      devLog("Media uploaded successfully, media ID:", mediaId);
 
       // Détermine le type de média
       let mediaType = "document";
@@ -759,7 +742,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       else if (file.type.startsWith("audio/")) mediaType = "audio";
       else if (file.type.startsWith("video/")) mediaType = "video";
 
-      console.log("Sending media message, type:", mediaType, "conversation:", conversation.id);
+      devLog("Sending media message, type:", mediaType, "conversation:", conversation.id);
 
       // Envoie le message via notre API backend qui gère le stockage
       await sendMediaMessage({
@@ -769,7 +752,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         caption: text || undefined
       });
 
-      console.log("Media message sent successfully");
+      devLog("Media message sent successfully");
       setText("");
       setShowAdvanced(false);
       setMode("text");
@@ -789,10 +772,10 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const openMediaPicker = () => {
-    console.log("openMediaPicker called for photos/videos");
+    devLog("openMediaPicker called for photos/videos");
     setShowMenu(false);
     if (mediaInputRef.current) {
-      console.log("Clicking media input");
+      devLog("Clicking media input");
       mediaInputRef.current.click();
     } else {
       console.error("mediaInputRef.current is null");
@@ -800,10 +783,10 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const openDocumentPicker = () => {
-    console.log("openDocumentPicker called");
+    devLog("openDocumentPicker called");
     setShowMenu(false);
     if (documentInputRef.current) {
-      console.log("Clicking document input");
+      devLog("Clicking document input");
       documentInputRef.current.click();
     } else {
       console.error("documentInputRef.current is null");
@@ -841,14 +824,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const handleButtonsSend = async () => {
-    console.log("🔘 [FRONTEND] handleButtonsSend appelé", { mode, text, buttons, headerText, footerText });
+    devLog("🔘 [FRONTEND] handleButtonsSend appelé", { mode, text, buttons, headerText, footerText });
     if (!conversation?.id || !text.trim()) {
       console.warn("🔘 [FRONTEND] handleButtonsSend annulé: conversation ou text manquant");
       return;
     }
     
     const validButtons = buttons.filter(b => b.id && b.title).slice(0, 3);
-    console.log("🔘 [FRONTEND] Boutons valides:", validButtons);
+    devLog("🔘 [FRONTEND] Boutons valides:", validButtons);
     if (validButtons.length === 0) {
       alert("Ajoutez au moins un bouton");
       return;
@@ -908,9 +891,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         header_text: headerText || undefined,
         footer_text: footerText || undefined
       };
-      console.log("🔘 [FRONTEND] Envoi sendInteractiveMessage avec payload:", payload);
+      devLog("🔘 [FRONTEND] Envoi sendInteractiveMessage avec payload:", payload);
       const response = await sendInteractiveMessage(payload);
-      console.log("🔘 [FRONTEND] Réponse reçue:", response);
+      devLog("🔘 [FRONTEND] Réponse reçue:", response);
 
       // Le message optimiste sera remplacé automatiquement par le message réel
       // via le webhook Supabase ou le refreshMessages
@@ -944,7 +927,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
   };
 
   const handleListSend = async () => {
-    console.log("📋 [FRONTEND] handleListSend appelé", { mode, text, listSections, headerText, footerText, buttonText });
+    devLog("📋 [FRONTEND] handleListSend appelé", { mode, text, listSections, headerText, footerText, buttonText });
     if (!conversation?.id || !text.trim()) {
       console.warn("📋 [FRONTEND] handleListSend annulé: conversation ou text manquant");
       return;
@@ -957,7 +940,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       }))
       .filter(s => s.rows.length > 0);
     
-    console.log("📋 [FRONTEND] Sections valides:", validSections);
+    devLog("📋 [FRONTEND] Sections valides:", validSections);
     if (validSections.length === 0) {
       alert("Ajoutez au moins une section avec des lignes");
       return;
@@ -1017,9 +1000,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         header_text: headerText || undefined,
         footer_text: footerText || undefined
       };
-      console.log("📋 [FRONTEND] Envoi sendInteractiveMessage avec payload:", payload);
+      devLog("📋 [FRONTEND] Envoi sendInteractiveMessage avec payload:", payload);
       const response = await sendInteractiveMessage(payload);
-      console.log("📋 [FRONTEND] Réponse reçue:", response);
+      devLog("📋 [FRONTEND] Réponse reçue:", response);
 
       // Le message optimiste sera remplacé automatiquement par le message réel
       // via le webhook Supabase ou le refreshMessages
@@ -1350,7 +1333,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                     {/* Liste des templates */}
                     <div className="template-selector-menu__sidebar">
                       <div className="template-selector-menu__sidebar-list">
-                        {menuTemplates.map((template, index) => {
+                        {menuTemplates.map((template) => {
                           const bodyComponent = template.components?.find(c => c.type === "BODY");
                           const templateText = bodyComponent?.text || template.name;
                           const hasVariables = hasTemplateVariables(template);
@@ -1358,7 +1341,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                           
                           return (
                             <div
-                              key={index}
+                              key={`${template.name}-${template.language || "default"}`}
                               className={`template-selector-menu__sidebar-item ${isSelected ? 'template-selector-menu__sidebar-item--selected' : ''}`}
                               onClick={() => !disabled && !uploading && setMenuPreviewTemplate(template)}
                             >
@@ -1558,14 +1541,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           type="file"
           style={{ display: "none" }}
           onChange={(e) => {
-            console.log("Media input changed", e.target.files);
+            devLog("Media input changed", e.target.files);
             if (e.target.files && e.target.files[0]) {
-              console.log("File selected:", e.target.files[0].name, e.target.files[0].type);
+              devLog("File selected:", e.target.files[0].name, e.target.files[0].type);
               handleMediaSend(e.target.files[0]);
               // Réinitialiser l'input pour permettre de sélectionner le même fichier à nouveau
               e.target.value = '';
             } else {
-              console.log("No file selected");
+              devLog("No file selected");
             }
           }}
           accept="image/*,video/*"
@@ -1577,14 +1560,14 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
           type="file"
           style={{ display: "none" }}
           onChange={(e) => {
-            console.log("Document input changed", e.target.files);
+            devLog("Document input changed", e.target.files);
             if (e.target.files && e.target.files[0]) {
-              console.log("File selected:", e.target.files[0].name, e.target.files[0].type);
+              devLog("File selected:", e.target.files[0].name, e.target.files[0].type);
               handleMediaSend(e.target.files[0]);
               // Réinitialiser l'input pour permettre de sélectionner le même fichier à nouveau
               e.target.value = '';
             } else {
-              console.log("No file selected");
+              devLog("No file selected");
             }
           }}
           accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/plain,text/csv"
@@ -1622,7 +1605,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
             <div className="menu-container" ref={menuRef}>
               <button
                 onClick={() => {
-                  console.log("Menu button clicked, current showMenu:", showMenu);
+                  devLog("Menu button clicked, current showMenu:", showMenu);
                   setShowMenu(!showMenu);
                   setShowEmojiPicker(false);
                 }}
@@ -1735,7 +1718,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                       {/* Menu latéral avec la liste des templates */}
                       <div className="templates-selector__sidebar">
                       <div className="templates-selector__sidebar-list">
-                        {templates.map((template, index) => {
+                        {templates.map((template) => {
                           const bodyComponent = template.components?.find(c => c.type === "BODY");
                           const templateText = bodyComponent?.text || template.name;
                           const hasVariables = hasTemplateVariables(template);
@@ -1743,7 +1726,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                           
                           return (
                             <div
-                              key={index}
+                              key={`${template.name}-${template.language || "default"}`}
                               className={`templates-selector__sidebar-item ${isSelected ? 'templates-selector__sidebar-item--selected' : ''}`}
                               onClick={() => !disabled && !uploading && setPreviewTemplate(template)}
                             >
@@ -1799,7 +1782,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                                           const bodyComponent = previewTemplate.components?.find(c => c.type === "BODY");
                                           const templateText = bodyComponent?.text || previewTemplate.name;
                                           // Log pour debug
-                                          console.log("🔍 Preview template text:", {
+                                          devLog("🔍 Preview template text:", {
                                             templateName: previewTemplate.name,
                                             bodyText: bodyComponent?.text,
                                             templateText,

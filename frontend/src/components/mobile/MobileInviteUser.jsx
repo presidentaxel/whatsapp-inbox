@@ -10,7 +10,7 @@ export default function MobileInviteUser({ onBack }) {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
   const [pendingInvites, setPendingInvites] = useState([]);
-  const [loadingInvites, setLoadingInvites] = useState(false);
+  const [, setLoadingInvites] = useState(false);
 
   const handleInvite = async (e) => {
     e.preventDefault();

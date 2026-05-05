@@ -154,7 +154,6 @@ export default function ChatAudioPlayer({ src, mimeType }) {
         ref={audioRef}
         src={src || undefined}
         preload="auto"
-        playsInline
         className="chat-audio-player__native"
       />
       <button

@@ -294,51 +294,38 @@ async def send_template_message_api(
       - les variables nommées (`parameter_name`) et numériques (`{{1}}`, ...),
       - la sauvegarde optimiste du message en DB avec boutons et image.
     """
-    import sys
-    print("=" * 80, file=sys.stderr)
-    print(f"🚀🚀🚀 [TEMPLATE SEND] FONCTION APPELÉE - conversation_id={conversation_id}", file=sys.stderr)
-    print(f"🚀🚀🚀 [TEMPLATE SEND] payload={payload}", file=sys.stderr)
-    print("=" * 80, file=sys.stderr)
-    sys.stderr.flush()
-
-    print(f"🚀 [TEMPLATE SEND] Début - conversation_id={conversation_id}, payload={payload}")
-    logger.info(f"🚀 [TEMPLATE SEND] Début - conversation_id={conversation_id}, payload={payload}")
+    logger.info(
+        "[TEMPLATE SEND] Début conversation_id=%s template_keys=%s",
+        conversation_id,
+        list(payload.keys()) if isinstance(payload, dict) else "n/a",
+    )
+    logger.debug("[TEMPLATE SEND] payload=%s", payload)
 
     conversation = await get_conversation_by_id(conversation_id)
     if not conversation:
-        print(f"❌ [TEMPLATE SEND] Conversation non trouvée: {conversation_id}")
         raise HTTPException(status_code=404, detail="conversation_not_found")
 
-    print(f"✅ [TEMPLATE SEND] Conversation trouvée: {conversation.get('id')}")
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
 
     template_name = payload.get("template_name")
     components = payload.get("components")
     language_code = payload.get("language_code", "fr")
 
-    print(f"📋 [TEMPLATE SEND] Template name: {template_name}, language: {language_code}")
-
     if not template_name:
-        print(f"❌ [TEMPLATE SEND] template_name manquant")
         raise HTTPException(status_code=400, detail="template_name_required")
 
     account = await get_account_by_id(conversation["account_id"])
     if not account:
-        print(f"❌ [TEMPLATE SEND] Account non trouvé: {conversation['account_id']}")
         raise HTTPException(status_code=404, detail="account_not_found")
 
     phone_id = account.get("phone_number_id")
     token = account.get("access_token")
     to_number = conversation["client_number"]
 
-    print(f"📱 [TEMPLATE SEND] Account: {account.get('name')}, phone_id: {phone_id}, to: {to_number}")
-
     if not phone_id or not token:
-        print(f"❌ [TEMPLATE SEND] WhatsApp non configuré - phone_id: {phone_id}, token: {'présent' if token else 'absent'}")
         raise HTTPException(status_code=400, detail="whatsapp_not_configured")
 
     try:
-        print(f"🔍 [TEMPLATE SEND] Début de la récupération des détails du template...")
         waba_id = account.get("waba_id")
         template_details = None
         if waba_id:
@@ -637,9 +624,6 @@ async def send_template_message_api(
         logger.info(f"  Final template text to save (with variables replaced): {template_text}")
         logger.info(f"  Template variables (numeric): {template_variables_dict}")
         logger.info(f"  Template variables (named): {template_named_variables_dict}")
-        print(f"💾 [TEMPLATE SEND] Texte final à sauvegarder: {template_text}")
-        print(f"💾 [TEMPLATE SEND] Variables (numeric): {template_variables_dict}")
-        print(f"💾 [TEMPLATE SEND] Variables (named): {template_named_variables_dict}")
 
         from app.services.message_service import _update_conversation_timestamp
 
@@ -709,18 +693,15 @@ async def send_template_message_api(
                 logger.warning(f"  ⚠️ Erreur lors du stockage de l'image du template: {storage_error}")
                 message_payload["storage_url"] = template_header_image_url
 
-        print(f"💾 [TEMPLATE SEND] Message payload: {message_payload}")
+        logger.debug("[TEMPLATE SEND] message_payload keys=%s", list(message_payload.keys()))
 
         try:
-            print(f"🔍 [TEMPLATE SEND] Vérification si le message existe déjà avec wa_message_id: {message_id}")
             existing = await supabase_execute(
                 supabase.table("messages")
                 .select("id, content_text")
                 .eq("wa_message_id", message_id)
                 .limit(1)
             )
-
-            print(f"🔍 [TEMPLATE SEND] Résultat de la vérification: {existing.data}")
 
             if existing.data:
                 # Le webhook peut nous avoir précédés : on ne ré-écrit pas le
@@ -736,30 +717,21 @@ async def send_template_message_api(
                     logger.info(f"  📝 Mise à jour du content_text vide avec: {template_text[:50]}...")
                 else:
                     logger.info(f"  ℹ️  Le message a déjà un content_text, on ne l'écrase pas")
-                    print(f"ℹ️  [TEMPLATE SEND] Le message a déjà un content_text: '{existing_record.get('content_text')}', on ne l'écrase pas")
 
-                print(f"💾 [TEMPLATE SEND] Données de mise à jour: {update_data}")
                 await supabase_execute(
                     supabase.table("messages")
                     .update(update_data)
                     .eq("id", existing_record["id"])
                 )
-                print(f"✅ [TEMPLATE SEND] Message mis à jour avec succès")
             else:
-                print(f"🆕 [TEMPLATE SEND] Création d'un nouveau message avec tous les champs")
                 result = await supabase_execute(
                     supabase.table("messages").insert(message_payload)
                 )
-                print(f"✅ [TEMPLATE SEND] Nouveau message créé: {result.data if result.data else 'pas de données retournées'}")
                 logger.info(f"  ✅ Nouveau message template créé avec texte: {template_text[:50]}...")
 
             await _update_conversation_timestamp(conversation_id, timestamp_iso)
-            print(f"✅ [TEMPLATE SEND] Timestamp de conversation mis à jour")
         except Exception as e:
             logger.error("Error saving template message to database: %s", e, exc_info=True)
-            print(f"❌ [TEMPLATE SEND] Erreur lors de la sauvegarde: {e}")
-            import traceback
-            print(f"❌ [TEMPLATE SEND] Traceback: {traceback.format_exc()}")
 
         price_info = await calculate_message_price(conversation_id, use_template=True)
 

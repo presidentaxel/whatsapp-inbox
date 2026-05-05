@@ -80,30 +80,46 @@ api.interceptors.request.use(
 // que `AuthContext` écoute pour forcer la déconnexion / redirect login.
 let _signalingUnauthorized = false;
 
+/** Invalide le cache JWT utilisé par l'intercepteur Axios (ex. après 401). */
+export function clearCachedAuthToken() {
+  _cachedToken = null;
+  _tokenExpiresAt = 0;
+}
+
+/**
+ * Même signal que l'intercepteur Axios sur 401 (fetch/SSE, etc.).
+ * @param {string} [url] URL ou chemin pour le détail de l'évènement
+ */
+export function notifyAuthUnauthorized(url) {
+  if (typeof window === "undefined" || _signalingUnauthorized) {
+    return;
+  }
+  _signalingUnauthorized = true;
+  try {
+    window.dispatchEvent(
+      new CustomEvent("auth:unauthorized", {
+        detail: { url },
+      })
+    );
+  } finally {
+    setTimeout(() => {
+      _signalingUnauthorized = false;
+    }, 1000);
+  }
+}
+
+export function handleSessionUnauthorized(url) {
+  clearCachedAuthToken();
+  notifyAuthUnauthorized(url);
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const status = error.response?.status;
 
     if (status === 401) {
-      _cachedToken = null;
-      _tokenExpiresAt = 0;
-
-      if (typeof window !== "undefined" && !_signalingUnauthorized) {
-        _signalingUnauthorized = true;
-        try {
-          window.dispatchEvent(
-            new CustomEvent("auth:unauthorized", {
-              detail: { url: error.config?.url },
-            })
-          );
-        } finally {
-          // Reset après un court délai pour autoriser une future notification
-          setTimeout(() => {
-            _signalingUnauthorized = false;
-          }, 1000);
-        }
-      }
+      handleSessionUnauthorized(error.config?.url);
     }
 
     return Promise.reject(error);

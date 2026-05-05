@@ -1,4 +1,4 @@
-import { api } from "./axiosClient";
+import { api, handleSessionUnauthorized } from "./axiosClient";
 import { supabaseClient } from "./supabaseClient";
 
 /**
@@ -97,6 +97,9 @@ export const streamAxeliaChat = async (payload, { signal, onEvent, onError } = {
     } catch {
       /* ignore */
     }
+    if (resp.status === 401) {
+      handleSessionUnauthorized(url);
+    }
     const err = new Error(`HTTP ${resp.status}: ${detail || "stream_failed"}`);
     err.status = resp.status;
     err.detail = detail;
@@ -141,7 +144,6 @@ export const streamAxeliaChat = async (payload, { signal, onEvent, onError } = {
       } catch (err) {
         // Ne casse pas la boucle si le handler client jette
         // - l'utilisateur garde la main pour signaler l'incident.
-        // eslint-disable-next-line no-console
         console.error("axelia stream onEvent threw:", err);
       }
     }

@@ -36,12 +36,11 @@ import {
   excludePlaygroundSandboxConversations,
   isPlaygroundSandboxConversation,
 } from "../utils/playgroundSandbox";
-import { 
-  getBroadcastGroups, 
-  createBroadcastGroup, 
-  updateBroadcastGroup, 
+import {
+  getBroadcastGroups,
+  createBroadcastGroup,
   deleteBroadcastGroup,
-  addRecipientToGroup
+  addRecipientToGroup,
 } from "../api/broadcastApi";
 
 /** Délai avant de rafraîchir la ligne de conversation dans la sidebar quand ce chat est ouvert (sync avec le fil realtime des messages). */
@@ -845,7 +844,6 @@ export default function InboxPage() {
   const canManagePermissions = hasPermission?.("permissions.manage"); // Admin peut gérer les permissions
   const canAccessAxelia = hasPermission?.("axelia.access");
   const canAccessPlayground = hasPermission?.("playground.access");
-  const canManageSettings = hasPermission?.("settings.manage");
 
   const allowedNavItems = useMemo(() => {
     const items = ["chat"];

@@ -31,7 +31,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install flake8 black mypy pylint
+          pip install ruff
 
       - name: Check Python syntax
         run: |
@@ -39,15 +39,15 @@ jobs:
           find app -name "*.py" -exec python -m py_compile {} \;
           echo "✅ Syntaxe Python valide"
 
-      # Les deux commandes sont volontairement non bloquantes :
-      # - La 1re ne regarde que E9,F63,F7,F82 (syntaxe / noms non définis) ; le "0" en tête de log = aucun de ces codes.
-      # - La 2e utilise --exit-zero : flake8 affiche C901, E501, F541, etc. mais termine toujours avec code 0.
-      # - || true + continue-on-error: true : le job reste vert même si flake8 aurait échoué.
-      - name: Lint with flake8
-        run: |
-          flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics || true
-          flake8 app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics || true
-        continue-on-error: true
+      # Lint avec ruff (configuration : backend/pyproject.toml).
+      # Bloquant sur les bugs réels (pyflakes, undefined names, bugbear).
+      - name: Lint with ruff
+        run: ruff check app
+
+      # Vérification de format non bloquante tant que le legacy n'est pas
+      # passé sous `ruff format`. À durcir une fois le repo nettoyé.
+      - name: Format check (non blocking)
+        run: ruff format --check app || true
 
       - name: Check imports (with mock env)
         env:
@@ -160,11 +160,23 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check syntax
-        run: |
-          npm run build --if-present || echo "⚠️ Build non configuré, vérification de syntaxe basique"
-          npm run lint --if-present || echo "⚠️ ESLint non configuré"
-        continue-on-error: true
+      - name: Lint
+        env:
+          VITE_SUPABASE_URL: https://mock.supabase.co
+          VITE_SUPABASE_ANON_KEY: mock_anon_key_for_ci
+        run: npm run lint
+
+      - name: Build
+        env:
+          VITE_SUPABASE_URL: https://mock.supabase.co
+          VITE_SUPABASE_ANON_KEY: mock_anon_key_for_ci
+        run: npm run build
+
+      - name: Unit tests (Vitest)
+        env:
+          VITE_SUPABASE_URL: https://mock.supabase.co
+          VITE_SUPABASE_ANON_KEY: mock_anon_key_for_ci
+        run: npm run test
 
       - name: Validate package.json
         run: |

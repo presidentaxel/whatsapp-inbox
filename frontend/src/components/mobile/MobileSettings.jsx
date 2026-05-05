@@ -1,5 +1,16 @@
 import { useState } from 'react';
-import { FiArrowLeft, FiSearch, FiUser, FiMessageSquare, FiBell, FiGlobe, FiHelpCircle, FiUsers, FiSettings } from 'react-icons/fi';
+import {
+  FiArrowLeft,
+  FiSearch,
+  FiUser,
+  FiMessageSquare,
+  FiBell,
+  FiGlobe,
+  FiHelpCircle,
+  FiUsers,
+  FiSettings,
+  FiLogOut,
+} from "react-icons/fi";
 import MobileAccountSettings from './MobileAccountSettings';
 import MobileChatSettings from './MobileChatSettings';
 import MobileNotificationSettings from './MobileNotificationSettings';
@@ -7,16 +18,16 @@ import MobileAppUpdates from './MobileAppUpdates';
 import MobileInviteUser from './MobileInviteUser';
 import '../../styles/mobile-settings.css';
 
-export default function MobileSettings({ onBack }) {
+export default function MobileSettings({ onBack, onLogout }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeView, setActiveView] = useState('list');
 
   const settingsCategories = [
     {
       icon: <FiUser />,
-      title: 'Compte',
-      subtitle: 'Notifications de sécurité, changer de numéro',
-      onClick: () => setActiveView('account')
+      title: "Compte",
+      subtitle: "Notifications de sécurité, changer de numéro",
+      onClick: () => setActiveView("account"),
     },
     {
       icon: <FiMessageSquare />,
@@ -55,7 +66,17 @@ export default function MobileSettings({ onBack }) {
       icon: <FiSettings />,
       title: 'Mises à jour de l\'application',
       onClick: () => setActiveView('updates')
-    }
+    },
+    ...(typeof onLogout === "function"
+      ? [
+          {
+            icon: <FiLogOut />,
+            title: "Se déconnecter",
+            subtitle: "Quitter la session sur cet appareil",
+            onClick: onLogout,
+          },
+        ]
+      : []),
   ];
 
   const filteredCategories = settingsCategories.filter(category => {

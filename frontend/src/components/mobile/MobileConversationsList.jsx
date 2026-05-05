@@ -83,8 +83,6 @@ export default function MobileConversationsList({
   // Mise à jour toutes les minutes pour les heures, et toutes les heures pour les dates
   const currentTime = useCurrentTime(60000); // 1 minute
 
-  const currentAccount = accounts.find(a => a.id === activeAccount);
-
   // Filtrer par type de conversation
   const filteredByType = useMemo(() => {
     switch (filter) {
@@ -115,9 +113,6 @@ export default function MobileConversationsList({
       : timestamp;
     const date = new Date(dateStr);
     const now = currentTime; // Utiliser l'heure actuelle du hook
-    
-    // Calculer la différence en millisecondes
-    const diff = now.getTime() - date.getTime();
     
     // Normaliser les dates pour comparer les jours (sans heures)
     const today = new Date(now);

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FiArrowLeft, FiUser, FiShield, FiCheck, FiX, FiEdit2, FiTrash2, FiSearch } from 'react-icons/fi';
+import { FiArrowLeft, FiShield, FiCheck, FiTrash2, FiSearch } from "react-icons/fi";
 import { api } from '../../api/axiosClient';
 import '../../styles/mobile-team-panel.css';
 
@@ -9,7 +9,6 @@ export default function MobileTeamPanel({ onBack }) {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState(null);
-  const [editingUser, setEditingUser] = useState(null);
   const [currentUserProfile, setCurrentUserProfile] = useState(null);
 
   useEffect(() => {
@@ -71,7 +70,6 @@ export default function MobileTeamPanel({ onBack }) {
         assignments: roleAssignments
       });
       await loadData();
-      setEditingUser(null);
     } catch (error) {
       console.error('Error updating user roles:', error);
       alert('Erreur lors de la mise à jour des rôles');
