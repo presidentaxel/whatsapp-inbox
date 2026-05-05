@@ -625,23 +625,57 @@ async def _skill_list_templates(
     args: Dict[str, Any],
     account: Dict[str, Any],
 ) -> Dict[str, Any]:
-    from app.services.whatsapp_api_service import list_message_templates
+    from app.services.whatsapp_api_service import (
+        WhatsAppAPIError,
+        list_message_templates,
+    )
 
     waba_id, token = _resolve_waba_credentials(account)
     if not waba_id or not token:
-        return {"error": "Compte sans waba_id ou access_token configuré."}
+        account_id = str(account.get("id") or "")
+        has_waba = bool(account.get("waba_id"))
+        has_token = bool(account.get("access_token"))
+        logger.warning(
+            "skill list_templates missing credentials: account_id=%s has_waba_id=%s has_access_token=%s",
+            account_id,
+            has_waba,
+            has_token,
+        )
+        return {
+            "error": "Compte sans waba_id ou access_token configuré.",
+            "diagnostic": {
+                "account_id": account_id or None,
+                "has_waba_id": has_waba,
+                "has_access_token": has_token,
+            },
+        }
 
     all_tpls: List[Dict[str, Any]] = []
     cursor_after: Optional[str] = None
-    for _ in range(10):
-        batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
-        chunk = batch.get("data") or []
-        if not chunk:
-            break
-        all_tpls.extend(chunk)
-        cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
-        if not cursor_after:
-            break
+    try:
+        for _ in range(10):
+            batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
+            chunk = batch.get("data") or []
+            if not chunk:
+                break
+            all_tpls.extend(chunk)
+            cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
+            if not cursor_after:
+                break
+    except WhatsAppAPIError as exc:
+        logger.warning(
+            "skill list_templates Meta error: account_id=%s waba_id=%s error=%s",
+            str(account.get("id") or ""),
+            str(waba_id),
+            str(exc),
+        )
+        return {
+            "error": f"Erreur Meta lors du listing templates: {str(exc)[:220]}",
+            "diagnostic": {
+                "account_id": str(account.get("id") or "") or None,
+                "waba_id": str(waba_id),
+            },
+        }
 
     summaries = [_summarize_template(t) for t in all_tpls]
     return {
@@ -654,7 +688,10 @@ async def _skill_get_template_status(
     args: Dict[str, Any],
     account: Dict[str, Any],
 ) -> Dict[str, Any]:
-    from app.services.whatsapp_api_service import list_message_templates
+    from app.services.whatsapp_api_service import (
+        WhatsAppAPIError,
+        list_message_templates,
+    )
 
     template_name = (args.get("template_name") or "").strip()
     if not template_name:
@@ -662,19 +699,43 @@ async def _skill_get_template_status(
 
     waba_id, token = _resolve_waba_credentials(account)
     if not waba_id or not token:
-        return {"error": "Compte sans waba_id ou access_token configuré."}
+        return {
+            "error": "Compte sans waba_id ou access_token configuré.",
+            "diagnostic": {
+                "account_id": str(account.get("id") or "") or None,
+                "has_waba_id": bool(account.get("waba_id")),
+                "has_access_token": bool(account.get("access_token")),
+            },
+        }
 
     all_tpls: List[Dict[str, Any]] = []
     cursor_after: Optional[str] = None
-    for _ in range(10):
-        batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
-        chunk = batch.get("data") or []
-        if not chunk:
-            break
-        all_tpls.extend(chunk)
-        cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
-        if not cursor_after:
-            break
+    try:
+        for _ in range(10):
+            batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
+            chunk = batch.get("data") or []
+            if not chunk:
+                break
+            all_tpls.extend(chunk)
+            cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
+            if not cursor_after:
+                break
+    except WhatsAppAPIError as exc:
+        logger.warning(
+            "skill get_template_status Meta error: account_id=%s template=%s waba_id=%s error=%s",
+            str(account.get("id") or ""),
+            template_name,
+            str(waba_id),
+            str(exc),
+        )
+        return {
+            "error": f"Erreur Meta lors de la lecture du template: {str(exc)[:220]}",
+            "diagnostic": {
+                "account_id": str(account.get("id") or "") or None,
+                "waba_id": str(waba_id),
+                "template_name": template_name,
+            },
+        }
 
     matches = [t for t in all_tpls if t.get("name") == template_name]
     if not matches:
@@ -1171,6 +1232,12 @@ async def execute_skill(
         return {"error": f"Skill inconnue: {skill_name}"}
     try:
         result = await handler(args or {}, account)
+        if isinstance(result, dict) and result.get("error"):
+            logger.warning(
+                "playground skill %s returned error: %s",
+                skill_name,
+                str(result.get("error"))[:240],
+            )
         logger.info(
             "playground skill %s executed (keys=%s)",
             skill_name,
