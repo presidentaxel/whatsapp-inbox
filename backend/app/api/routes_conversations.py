@@ -201,5 +201,5 @@ async def find_or_create(
         logger.error(f"Unexpected error in find_or_create: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"An unexpected error occurred while creating the conversation. Please try again or contact support if the issue persists."
+            detail="An unexpected error occurred while creating the conversation. Please try again or contact support if the issue persists."
         )

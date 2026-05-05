@@ -185,7 +185,7 @@ async def _update_single_profile_picture(task: dict):
             else:
                 # Si l'upload échoue, utiliser l'URL WhatsApp directement (moins idéal)
                 final_url = profile_picture_url
-                logger.warning(f"⚠️ Failed to store in Supabase Storage, using WhatsApp URL directly")
+                logger.warning("⚠️ Failed to store in Supabase Storage, using WhatsApp URL directly")
             
             # Mettre à jour le contact
             try:
@@ -204,7 +204,7 @@ async def _update_single_profile_picture(task: dict):
                 logger.error(f"Failed to update profile picture in database for {whatsapp_number}: {db_error}")
                 # Peut-être que la colonne n'existe pas encore (migration non exécutée)
                 if "profile_picture_url" in str(db_error).lower() or "column" in str(db_error).lower():
-                    logger.warning(f"⚠️ Profile picture column may not exist. Please run migration 010_contacts_profile_picture.sql")
+                    logger.warning("⚠️ Profile picture column may not exist. Please run migration 010_contacts_profile_picture.sql")
         else:
             logger.debug(f"No profile picture available for {whatsapp_number} via WhatsApp API")
             # Mettre quand même à jour le cache pour éviter de réessayer trop souvent

@@ -421,7 +421,7 @@ async def send_template_message_api(
                             extension = extension_map.get(content_type, ".jpg")
                             filename = f"template_{template_name}_{header_format.lower()}{extension}"
 
-                            logger.info(f"  📤 Upload du média vers WhatsApp...")
+                            logger.info("  📤 Upload du média vers WhatsApp...")
                             upload_result = await upload_media_from_bytes(
                                 phone_number_id=phone_id,
                                 access_token=token,
@@ -688,7 +688,7 @@ async def send_template_message_api(
                     logger.info(f"  ✅ Image du template stockée: {storage_url}")
                 else:
                     message_payload["storage_url"] = template_header_image_url
-                    logger.info(f"  ⚠️ Stockage échoué, utilisation de l'URL WhatsApp directement")
+                    logger.info("  ⚠️ Stockage échoué, utilisation de l'URL WhatsApp directement")
             except Exception as storage_error:
                 logger.warning(f"  ⚠️ Erreur lors du stockage de l'image du template: {storage_error}")
                 message_payload["storage_url"] = template_header_image_url
@@ -716,7 +716,7 @@ async def send_template_message_api(
                     update_data["content_text"] = template_text
                     logger.info(f"  📝 Mise à jour du content_text vide avec: {template_text[:50]}...")
                 else:
-                    logger.info(f"  ℹ️  Le message a déjà un content_text, on ne l'écrase pas")
+                    logger.info("  ℹ️  Le message a déjà un content_text, on ne l'écrase pas")
 
                 await supabase_execute(
                     supabase.table("messages")

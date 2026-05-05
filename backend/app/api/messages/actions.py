@@ -326,7 +326,7 @@ async def pin_message(
                 if send_result.get("error"):
                     logger.error(f"❌ [PIN] Erreur lors de l'envoi de la notification: {send_result.get('error')}")
                 else:
-                    logger.info(f"✅ [PIN] Notification d'épinglage envoyée immédiatement")
+                    logger.info("✅ [PIN] Notification d'épinglage envoyée immédiatement")
             else:
                 logger.warning(f"⚠️ [PIN] Compte non trouvé pour account_id={conversation['account_id']}")
         else:
@@ -338,7 +338,7 @@ async def pin_message(
             )
 
             if queue_result.get("status") == "queued":
-                logger.info(f"📌 [PIN] Notification mise en file d'attente (hors fenêtre gratuite)")
+                logger.info("📌 [PIN] Notification mise en file d'attente (hors fenêtre gratuite)")
             else:
                 logger.warning(f"⚠️ [PIN] Échec de la mise en file d'attente: {queue_result.get('error')}")
 
@@ -403,7 +403,7 @@ async def unpin_message(
             if send_result.get("error"):
                 logger.error(f"❌ [UNPIN] Erreur lors de l'envoi de la notification: {send_result.get('error')} - {send_result.get('details', '')}")
             else:
-                logger.info(f"✅ [UNPIN] Notification de désépinglage envoyée avec succès")
+                logger.info("✅ [UNPIN] Notification de désépinglage envoyée avec succès")
         else:
             logger.warning(f"⚠️ [UNPIN] Compte non trouvé pour account_id={conversation['account_id']}")
     except Exception as e:

@@ -105,15 +105,15 @@ async def send_with_auto_template(
 
     access_level = current_user.permissions.account_access_levels.get(conversation["account_id"])
     if access_level == "aucun":
-        logger.error(f"❌ [SEND-AUTO-TEMPLATE] Accès refusé (aucun)")
+        logger.error("❌ [SEND-AUTO-TEMPLATE] Accès refusé (aucun)")
         raise HTTPException(status_code=403, detail="account_access_denied")
     if access_level == "lecture":
-        logger.error(f"❌ [SEND-AUTO-TEMPLATE] Accès refusé (lecture seule)")
+        logger.error("❌ [SEND-AUTO-TEMPLATE] Accès refusé (lecture seule)")
         raise HTTPException(status_code=403, detail="write_access_denied")
 
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
 
-    logger.info(f"🔍 [SEND-AUTO-TEMPLATE] Vérification de la fenêtre gratuite...")
+    logger.info("🔍 [SEND-AUTO-TEMPLATE] Vérification de la fenêtre gratuite...")
     is_free, last_interaction_time = await is_within_free_window(conversation_id)
     logger.info(
         f"📊 [SEND-AUTO-TEMPLATE] Fenêtre gratuite: is_free={is_free}, "
@@ -189,7 +189,7 @@ async def send_with_auto_template(
             },
         )
 
-    logger.info(f"✅ [SEND-AUTO-TEMPLATE] Template créé avec succès, retour du message optimiste")
+    logger.info("✅ [SEND-AUTO-TEMPLATE] Template créé avec succès, retour du message optimiste")
     logger.info("=" * 80)
     return {
         "success": True,
@@ -337,7 +337,7 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         normalized_header_text = header_text.strip() if header_text and header_text.strip() else None
         normalized_footer_text = footer_text.strip() if footer_text and footer_text.strip() else None
 
-        logger.info(f"🔍 [SEND-INTERACTIVE] Paramètres pour le template:")
+        logger.info("🔍 [SEND-INTERACTIVE] Paramètres pour le template:")
         logger.info(f"   - header_text: {normalized_header_text}")
         logger.info(f"   - body_text: {body_text}")
         logger.info(f"   - footer_text: {normalized_footer_text}")
@@ -389,7 +389,7 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
         logger.info(f"✅ [SEND-INTERACTIVE] Message créé en base: message_id={message_id}")
 
         logger.info(f"🔧 [SEND-INTERACTIVE] Recherche/création du template pour account_id={conversation['account_id']}")
-        logger.info(f"🔧 [SEND-INTERACTIVE] Appel à find_or_create_template avec:")
+        logger.info("🔧 [SEND-INTERACTIVE] Appel à find_or_create_template avec:")
         logger.info(f"   - header_text={normalized_header_text}")
         logger.info(f"   - body_text={body_text}")
         logger.info(f"   - footer_text={normalized_footer_text}")
@@ -425,7 +425,7 @@ async def send_interactive_api_message(payload: dict, current_user: CurrentUser 
                 },
             )
 
-        logger.info(f"✅ [SEND-INTERACTIVE] Template créé avec succès, retour du message optimiste")
+        logger.info("✅ [SEND-INTERACTIVE] Template créé avec succès, retour du message optimiste")
         return {
             "status": "pending",
             "message_id": message_id,

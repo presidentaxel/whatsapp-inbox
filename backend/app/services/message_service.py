@@ -174,7 +174,7 @@ async def handle_incoming_message(data: dict, *, propagate_errors: bool = False)
                         from app.services.account_service import get_all_accounts
                         all_accounts = await get_all_accounts()
                         if all_accounts:
-                            logger.error(f"📋 Available accounts in database:")
+                            logger.error("📋 Available accounts in database:")
                             for acc in all_accounts:
                                 is_active = acc.get('is_active', False)
                                 status = "✅ ACTIVE" if is_active else "❌ INACTIVE"
@@ -443,7 +443,7 @@ async def _process_incoming_message(
         
         # Pour les messages interactifs, logger toute la structure
         if msg_type == "interactive":
-            logger.info(f"🔍 [MESSAGE PROCESSING] Full message structure for interactive:")
+            logger.info("🔍 [MESSAGE PROCESSING] Full message structure for interactive:")
             logger.info(f"   {json.dumps(message, indent=2, ensure_ascii=False)}")
 
         # Pour les réponses de boutons, traiter comme un message texte normal
@@ -581,19 +581,19 @@ async def _process_incoming_message(
                 # Vérifier que le compte a bien les colonnes Google Drive
                 logger.info(f"🔍 [AUTO-DOWNLOAD] Account retrieved: id={account.get('id')}, has_google_drive_enabled={'google_drive_enabled' in account}, has_google_drive_connected={'google_drive_connected' in account}")
                 if 'google_drive_enabled' not in account:
-                    logger.warning(f"⚠️ [AUTO-DOWNLOAD] Account cache might be stale, forcing refresh for Google Drive columns")
+                    logger.warning("⚠️ [AUTO-DOWNLOAD] Account cache might be stale, forcing refresh for Google Drive columns")
                     if get_pool():
                         fresh_row = await fetch_one("SELECT * FROM whatsapp_accounts WHERE id = $1::uuid LIMIT 1", account_id)
                         if fresh_row:
                             account = dict(fresh_row)
-                            logger.info(f"✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
+                            logger.info("✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
                     else:
                         fresh_account = await supabase_execute(
                             supabase.table("whatsapp_accounts").select("*").eq("id", account_id).limit(1)
                         )
                         if fresh_account.data:
                             account = fresh_account.data[0]
-                            logger.info(f"✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
+                            logger.info("✅ [AUTO-DOWNLOAD] Account refreshed with Google Drive columns")
             
             if message_db_id:
                 # Cas idéal : message_db_id disponible immédiatement
@@ -653,12 +653,12 @@ async def _process_incoming_message(
                                 filename=media_meta.get("media_filename")
                             ))
                             
-                            def log_retry_result(t):
+                            def log_retry_result(t, _retry_message_db_id=retry_message_db_id):
                                 try:
                                     if t.exception() is not None:
-                                        logger.error(f"❌ [AUTO-DOWNLOAD] Retry download failed for message_id={retry_message_db_id}: {t.exception()}", exc_info=t.exception())
+                                        logger.error(f"❌ [AUTO-DOWNLOAD] Retry download failed for message_id={_retry_message_db_id}: {t.exception()}", exc_info=t.exception())
                                     else:
-                                        logger.info(f"✅ [AUTO-DOWNLOAD] Retry download completed for message_id={retry_message_db_id}")
+                                        logger.info(f"✅ [AUTO-DOWNLOAD] Retry download completed for message_id={_retry_message_db_id}")
                                 except Exception as e:
                                     logger.error(f"❌ [AUTO-DOWNLOAD] Error in retry task callback: {e}")
                             
@@ -675,7 +675,7 @@ async def _process_incoming_message(
         elif has_media_id and not is_supported_type:
             logger.debug(f"ℹ️ [AUTO-DOWNLOAD] Media detected but type '{msg_type}' not supported for auto-download (supported: image, video, audio, document, sticker)")
         elif not has_media_id:
-            logger.debug(f"ℹ️ [AUTO-DOWNLOAD] Message has no media_id (not a media message)")
+            logger.debug("ℹ️ [AUTO-DOWNLOAD] Message has no media_id (not a media message)")
 
         await _update_conversation_timestamp(conversation["id"], timestamp_iso)
         await _increment_unread_count(conversation)
@@ -1070,7 +1070,7 @@ def _extract_content_text(message: Dict[str, Any]) -> str:
             title = list_reply.get("title", "")
             row_id = list_reply.get("id", "")
             description = list_reply.get("description", "")
-            logger.info(f"🔍 [EXTRACT TEXT] List reply detected:")
+            logger.info("🔍 [EXTRACT TEXT] List reply detected:")
             logger.info(f"   - title: {title}")
             logger.info(f"   - id: {row_id}")
             logger.info(f"   - description: {description}")
@@ -3486,7 +3486,7 @@ async def _send_image_with_template_queue(
             "message": error_message
         }
     
-    logger.info(f"✅ Template créé avec succès, en attente d'approbation Meta")
+    logger.info("✅ Template créé avec succès, en attente d'approbation Meta")
     return {
         "status": "pending",
         "message_id": message_id,

@@ -2263,21 +2263,25 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
 
         if p_create and not safe:
 
-            def _early_reply_and_graph() -> tuple[str, Optional[Dict[str, Any]]]:
-                r = parsed.get("reply")
+            def _early_reply_and_graph(
+                _parsed=parsed,
+                _raw_text=raw_text,
+                _partial_json=partial_json,
+            ) -> tuple[str, Optional[Dict[str, Any]]]:
+                r = _parsed.get("reply")
                 rs = r.strip() if isinstance(r, str) else ""
                 rs = _playground_assist_clean_reply_string(rs)
                 if not rs:
-                    rs = _playground_assist_clean_reply_string((raw_text or "").strip()) or "Réponse vide."
-                if partial_json:
+                    rs = _playground_assist_clean_reply_string((_raw_text or "").strip()) or "Réponse vide."
+                if _partial_json:
                     rs += (
                         "\n\n_(Le JSON de réponse était incomplet - souvent parce que le graphe a été coupé en cours de génération. "
                         "Tu peux relire le texte ci-dessus ; le bouton « Appliquer sur le canevas » n\u2019est pas disponible pour ce tour. "
                         "Réessaie avec une modification plus cible ou en mode Ask.)_"
                     )
                 og: Optional[Dict[str, Any]] = None
-                if not is_ask and not partial_json:
-                    g = parsed.get("graph")
+                if not is_ask and not _partial_json:
+                    g = _parsed.get("graph")
                     if g is not None and isinstance(g, dict):
                         merged = _normalize_graph(g)
                         if _validate_playground_assist_graph(merged):

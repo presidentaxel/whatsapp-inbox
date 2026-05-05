@@ -647,8 +647,6 @@ async def find_or_create_conversation(account_id: str, phone_number: str) -> Opt
     Returns:
         Dict de la conversation ou None si erreur
     """
-    from fastapi import HTTPException
-    
     # Normaliser le numéro
     try:
         normalized_phone = normalize_phone_number(phone_number)
@@ -825,7 +823,7 @@ async def find_or_create_conversation(account_id: str, phone_number: str) -> Opt
             await invalidate_cache_pattern(f"conversation:{conversation['id']}")
             return conversation
         else:
-            logger.error(f"Failed to create conversation: no data returned from insert")
+            logger.error("Failed to create conversation: no data returned from insert")
     except HTTPException as he:
         logger.error(f"HTTPException creating conversation: {he.detail} (status: {he.status_code})")
         # Si c'est une erreur de duplication (contrainte unique), récupérer la conversation existante

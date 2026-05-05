@@ -1509,13 +1509,13 @@ async def _run_axelia_with_tools(
 
         if p_create and not safe:
 
-            def _early_reply() -> str:
-                r = parsed.get("reply")
+            def _early_reply(_parsed=parsed, _raw_text=raw_text, _partial_json=partial_json) -> str:
+                r = _parsed.get("reply")
                 rs = r.strip() if isinstance(r, str) else ""
                 rs = _playground_assist_clean_reply_string(rs)
                 if not rs:
-                    rs = _playground_assist_clean_reply_string((raw_text or "").strip()) or "Réponse vide."
-                if partial_json:
+                    rs = _playground_assist_clean_reply_string((_raw_text or "").strip()) or "Réponse vide."
+                if _partial_json:
                     rs += (
                         "\n\n_(Réponse possiblement tronquée ; confirme la création du template ci-dessous "
                         "quand tu es prêt·e.)_"

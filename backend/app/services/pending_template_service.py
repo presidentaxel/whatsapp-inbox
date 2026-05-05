@@ -115,15 +115,15 @@ async def create_and_queue_template(
     """
     
     logger.info("=" * 80)
-    logger.info(f"🔧 [CREATE-TEMPLATE] ========== DÉBUT CRÉATION TEMPLATE ==========")
+    logger.info("🔧 [CREATE-TEMPLATE] ========== DÉBUT CRÉATION TEMPLATE ==========")
     logger.info(f"🔧 [CREATE-TEMPLATE] conversation_id={conversation_id}")
     logger.info(f"🔧 [CREATE-TEMPLATE] account_id={account_id}")
     logger.info(f"🔧 [CREATE-TEMPLATE] message_id={message_id}")
-    logger.info(f"🔧 [CREATE-TEMPLATE] =============================================")
+    logger.info("🔧 [CREATE-TEMPLATE] =============================================")
     
     # Normaliser les valeurs None et chaînes vides
     # S'assurer que header_text et footer_text sont None (pas "") si vides
-    logger.info(f"🔍 [CREATE-TEMPLATE] Analyse des paramètres reçus:")
+    logger.info("🔍 [CREATE-TEMPLATE] Analyse des paramètres reçus:")
     logger.info(f"   - header_text (avant normalisation): {repr(header_text)} (type: {type(header_text).__name__})")
     logger.info(f"   - body_text (avant normalisation): {repr(body_text)} (type: {type(body_text).__name__})")
     logger.info(f"   - footer_text (avant normalisation): {repr(footer_text)} (type: {type(footer_text).__name__})")
@@ -133,7 +133,7 @@ async def create_and_queue_template(
     normalized_header_text = header_text.strip() if header_text and header_text.strip() else None
     normalized_footer_text = footer_text.strip() if footer_text and footer_text.strip() else None
     
-    logger.info(f"🔍 [CREATE-TEMPLATE] Après normalisation:")
+    logger.info("🔍 [CREATE-TEMPLATE] Après normalisation:")
     logger.info(f"   - normalized_header_text: {repr(normalized_header_text)}")
     logger.info(f"   - normalized_footer_text: {repr(normalized_footer_text)}")
     
@@ -142,7 +142,7 @@ async def create_and_queue_template(
     logger.info(f"🔍 [CREATE-TEMPLATE] actual_body_text: {repr(actual_body_text[:100] if actual_body_text else None)}")
     logger.info(f"🔍 [CREATE-TEMPLATE] Header: {normalized_header_text}, Footer: {normalized_footer_text}, Buttons: {len(buttons) if buttons else 0}")
     if buttons:
-        logger.info(f"🔍 [CREATE-TEMPLATE] Détails des boutons:")
+        logger.info("🔍 [CREATE-TEMPLATE] Détails des boutons:")
         for idx, btn in enumerate(buttons):
             logger.info(f"   Bouton {idx + 1}: {repr(btn)}")
     
@@ -264,27 +264,27 @@ async def create_and_queue_template(
                     "buttons": meta_buttons
                 })
         
-        logger.info(f"📤 [CREATE-TEMPLATE] ========== AVANT APPEL API META ==========")
+        logger.info("📤 [CREATE-TEMPLATE] ========== AVANT APPEL API META ==========")
         logger.info(f"📤 [CREATE-TEMPLATE] WABA ID: {waba_id}")
         logger.info(f"📤 [CREATE-TEMPLATE] Template name: {template_name}")
-        logger.info(f"📤 [CREATE-TEMPLATE] Category: UTILITY")
-        logger.info(f"📤 [CREATE-TEMPLATE] Language: fr")
+        logger.info("📤 [CREATE-TEMPLATE] Category: UTILITY")
+        logger.info("📤 [CREATE-TEMPLATE] Language: fr")
         logger.info(f"📤 [CREATE-TEMPLATE] Nombre de components: {len(components)}")
         logger.info(f"📤 [CREATE-TEMPLATE] Header: {sanitized_header if sanitized_header else 'None (aucun header)'}")
         logger.info(f"📤 [CREATE-TEMPLATE] Body: {sanitized_body[:100] if len(sanitized_body) > 100 else sanitized_body}")
         logger.info(f"📤 [CREATE-TEMPLATE] Footer: {sanitized_footer if sanitized_footer else 'None (aucun footer)'}")
         logger.info(f"📤 [CREATE-TEMPLATE] Nombre de boutons: {len(meta_buttons)}")
         if meta_buttons:
-            logger.info(f"📤 [CREATE-TEMPLATE] Boutons détaillés:")
+            logger.info("📤 [CREATE-TEMPLATE] Boutons détaillés:")
             for idx, btn in enumerate(meta_buttons):
                 logger.info(f"   Bouton {idx + 1}: type={btn.get('type')}, text={btn.get('text')}")
         else:
-            logger.warning(f"⚠️ [CREATE-TEMPLATE] AUCUN BOUTON DÉTECTÉ!")
-        logger.info(f"📤 [CREATE-TEMPLATE] Components complets (JSON):")
+            logger.warning("⚠️ [CREATE-TEMPLATE] AUCUN BOUTON DÉTECTÉ!")
+        logger.info("📤 [CREATE-TEMPLATE] Components complets (JSON):")
         logger.info(f"   {json.dumps(components, indent=2, ensure_ascii=False)}")
-        logger.info(f"📤 [CREATE-TEMPLATE] =============================================")
+        logger.info("📤 [CREATE-TEMPLATE] =============================================")
         
-        logger.info(f"📤 [CREATE-TEMPLATE] Appel à whatsapp_api_service.create_message_template...")
+        logger.info("📤 [CREATE-TEMPLATE] Appel à whatsapp_api_service.create_message_template...")
         result = await whatsapp_api_service.create_message_template(
             waba_id=waba_id,
             access_token=access_token,
@@ -294,9 +294,9 @@ async def create_and_queue_template(
             components=components
         )
         
-        logger.info(f"📥 [CREATE-TEMPLATE] ========== RÉPONSE META ==========")
+        logger.info("📥 [CREATE-TEMPLATE] ========== RÉPONSE META ==========")
         logger.info(f"📥 [CREATE-TEMPLATE] Réponse complète: {json.dumps(result, indent=2, ensure_ascii=False)}")
-        logger.info(f"📥 [CREATE-TEMPLATE] =================================")
+        logger.info("📥 [CREATE-TEMPLATE] =================================")
         
         meta_template_id = result.get("id")
         
@@ -431,13 +431,13 @@ async def create_and_queue_image_template(
     """
     
     logger.info("=" * 80)
-    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] ========== DÉBUT CRÉATION TEMPLATE IMAGE ==========")
+    logger.info("🖼️ [CREATE-IMAGE-TEMPLATE] ========== DÉBUT CRÉATION TEMPLATE IMAGE ==========")
     logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] conversation_id={conversation_id}")
     logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] account_id={account_id}")
     logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] message_id={message_id}")
     logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] media_id={media_id}")
     logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] body_text={body_text}")
-    logger.info(f"🖼️ [CREATE-IMAGE-TEMPLATE] =============================================")
+    logger.info("🖼️ [CREATE-IMAGE-TEMPLATE] =============================================")
     
     # Valider le texte du body
     is_valid, errors = TemplateValidator.validate_text(body_text)
@@ -529,7 +529,7 @@ async def create_and_queue_image_template(
             # Selon la documentation Meta: https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates
             from app.services.storage_service import upload_template_media
             
-            logger.info(f"📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers Supabase Storage pour obtenir une URL publique...")
+            logger.info("📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers Supabase Storage pour obtenir une URL publique...")
             public_url = await upload_template_media(
                 template_name=template_name,
                 template_language="fr",
@@ -540,14 +540,14 @@ async def create_and_queue_image_template(
             )
             
             if not public_url:
-                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Impossible d'obtenir une URL publique pour l'image")
+                logger.error("❌ [CREATE-IMAGE-TEMPLATE] Impossible d'obtenir une URL publique pour l'image")
                 return {"success": False, "errors": ["Impossible d'obtenir une URL publique pour l'exemple"]}
             
             logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Image uploadée vers Supabase Storage, URL publique: {public_url}")
             
             # Uploader vers WhatsApp API (WABA) pour obtenir un media_id
             # Selon la documentation Meta, header_handle doit utiliser un media_id uploadé via leur API
-            logger.info(f"📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers WhatsApp API (WABA) pour obtenir le media_id...")
+            logger.info("📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers WhatsApp API (WABA) pour obtenir le media_id...")
             upload_result = await upload_media_from_bytes(
                 phone_number_id=phone_number_id,
                 access_token=access_token,
@@ -559,14 +559,14 @@ async def create_and_queue_image_template(
             uploaded_media_id = upload_result.get("id")
             
             if not uploaded_media_id:
-                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Pas de media_id retourné par WhatsApp API")
+                logger.error("❌ [CREATE-IMAGE-TEMPLATE] Pas de media_id retourné par WhatsApp API")
                 return {"success": False, "errors": ["Impossible d'uploader l'image vers WhatsApp API"]}
             
             logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Image uploadée vers WABA avec media_id: {uploaded_media_id}")
             
             # Attendre que l'image soit validée par Meta avant de créer le template
             # Meta exige que le media_id soit validé avant de pouvoir être utilisé dans un template
-            logger.info(f"⏳ [CREATE-IMAGE-TEMPLATE] Attente de validation de l'image par Meta...")
+            logger.info("⏳ [CREATE-IMAGE-TEMPLATE] Attente de validation de l'image par Meta...")
             max_retries = 60  # 60 tentatives maximum (5 minutes au total)
             retry_delay = 5.0  # 5 secondes entre chaque tentative
             template_created = False
@@ -608,13 +608,13 @@ async def create_and_queue_image_template(
                     meta_template_id = result.get("id")
                     if meta_template_id:
                         logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Template créé avec succès après {attempt + 1} tentatives!")
-                        logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] ========== RÉPONSE META ==========")
+                        logger.info("📥 [CREATE-IMAGE-TEMPLATE] ========== RÉPONSE META ==========")
                         logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Réponse complète: {json.dumps(result, indent=2, ensure_ascii=False)}")
-                        logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] =================================")
+                        logger.info("📥 [CREATE-IMAGE-TEMPLATE] =================================")
                         template_created = True
                         break
                     else:
-                        logger.warning(f"⚠️ [CREATE-IMAGE-TEMPLATE] Template créé mais pas d'ID retourné, nouvelle tentative...")
+                        logger.warning("⚠️ [CREATE-IMAGE-TEMPLATE] Template créé mais pas d'ID retourné, nouvelle tentative...")
                         if attempt < max_retries - 1:
                             await asyncio.sleep(retry_delay)
                         
@@ -678,9 +678,9 @@ async def create_and_queue_image_template(
                 }
             
             logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Template créé sur Meta avec l'ID: {meta_template_id}")
-            logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] ========== RÉPONSE META ==========")
+            logger.info("📥 [CREATE-IMAGE-TEMPLATE] ========== RÉPONSE META ==========")
             logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Réponse complète: {json.dumps(result, indent=2, ensure_ascii=False)}")
-            logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] =================================")
+            logger.info("📥 [CREATE-IMAGE-TEMPLATE] =================================")
             
         except Exception as media_error:
             logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Erreur lors du téléchargement/upload de l'image: {media_error}", exc_info=True)
@@ -688,7 +688,7 @@ async def create_and_queue_image_template(
         
         # Vérification de sécurité
         if not meta_template_id:
-            logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] meta_template_id n'est pas défini")
+            logger.error("❌ [CREATE-IMAGE-TEMPLATE] meta_template_id n'est pas défini")
             return {"success": False, "errors": ["Erreur: template non créé"]}
         
         # Stocker dans la base avec le media_id pour référence
@@ -1028,7 +1028,7 @@ async def check_and_update_template_status(message_id: str) -> Dict[str, Any]:
         
         # Si pas trouvé par ID (peut arriver si le template vient d'être créé), chercher par nom dans la liste
         if not template:
-            logger.info(f"🔍 [CHECK-STATUS] Template non trouvé par ID, recherche par nom dans la liste...")
+            logger.info("🔍 [CHECK-STATUS] Template non trouvé par ID, recherche par nom dans la liste...")
             all_templates = []
             after = None
             limit = 100

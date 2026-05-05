@@ -59,7 +59,7 @@ async def setup_webhook_subscription(
             "waba_id": waba_id,
             "account_id": account_id,
             "data": result,
-            "webhook_url": f"https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp",
+            "webhook_url": "https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp",
             "verify_token": settings.WHATSAPP_VERIFY_TOKEN[:20] + "..." if settings.WHATSAPP_VERIFY_TOKEN else None
         }
     except Exception as e:
@@ -88,7 +88,7 @@ async def get_webhook_status(
         return {
             "subscribed": False,
             "message": "WABA ID or access token not configured",
-            "webhook_url": f"https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp"
+            "webhook_url": "https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp"
         }
     
     try:
@@ -119,7 +119,7 @@ async def get_webhook_status(
             "subscribed": len(apps) > 0,
             "subscriptions": apps,
             "waba_id": waba_id,
-            "webhook_url": f"https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp",
+            "webhook_url": "https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp",
             "verify_token_configured": bool(settings.WHATSAPP_VERIFY_TOKEN),
             "recent_messages_count": len(recent_messages),
             "last_message_received": recent_messages[0].get("timestamp") if recent_messages else None,
@@ -130,6 +130,6 @@ async def get_webhook_status(
         return {
             "subscribed": False,
             "error": str(e),
-            "webhook_url": f"https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp"
+            "webhook_url": "https://whatsapp.lamaisonduchauffeurvtc.fr/webhook/whatsapp"
         }
 

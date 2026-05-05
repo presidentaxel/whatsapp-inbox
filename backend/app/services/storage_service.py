@@ -511,8 +511,8 @@ async def upload_message_media(
                     logger.error(f"   Vérifiez que le bucket '{MESSAGE_MEDIA_BUCKET}' existe dans Supabase Dashboard > Storage")
                 elif "permission" in error_str.lower() or "forbidden" in error_str.lower() or "401" in error_str or "403" in error_str:
                     logger.error(f"❌ Permission error: {upload_error}")
-                    logger.error(f"   Vérifiez que SUPABASE_KEY est la clé 'service_role' (pas 'anon')")
-                    logger.error(f"   Les uploads nécessitent la clé service_role pour bypasser RLS")
+                    logger.error("   Vérifiez que SUPABASE_KEY est la clé 'service_role' (pas 'anon')")
+                    logger.error("   Les uploads nécessitent la clé service_role pour bypasser RLS")
                 else:
                     logger.error(f"❌ Upload error in thread: {upload_error}", exc_info=True)
                 raise
@@ -526,7 +526,7 @@ async def upload_message_media(
             logger.info(f"✅ Message media uploaded to Supabase Storage: {public_url}")
             return public_url
         else:
-            logger.warning(f"⚠️ Upload returned None or empty result")
+            logger.warning("⚠️ Upload returned None or empty result")
         
         return None
         
@@ -909,7 +909,7 @@ async def upload_template_media(
             
             return public_url
         else:
-            logger.warning(f"⚠️ Upload returned None or empty result")
+            logger.warning("⚠️ Upload returned None or empty result")
         
         return None
         
@@ -966,7 +966,7 @@ async def get_template_media_url(
         # Si la table n'existe pas encore (erreur 42P01), retourner None silencieusement
         error_str = str(e).lower()
         if "does not exist" in error_str or "42p01" in error_str:
-            logger.debug(f"Table template_media does not exist yet, skipping media URL lookup")
+            logger.debug("Table template_media does not exist yet, skipping media URL lookup")
             return None
         # Pour les autres erreurs, logger mais retourner None pour ne pas faire planter l'endpoint
         logger.warning(f"⚠️ Error getting template media URL: {e}")

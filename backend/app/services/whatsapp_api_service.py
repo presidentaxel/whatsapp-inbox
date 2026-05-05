@@ -230,7 +230,7 @@ async def send_template_message(
     import logging
     logger = logging.getLogger(__name__)
     logger.info("=" * 80)
-    logger.info(f"📤 [WHATSAPP API] ========== ENVOI TEMPLATE MESSAGE ==========")
+    logger.info("📤 [WHATSAPP API] ========== ENVOI TEMPLATE MESSAGE ==========")
     logger.info(f"📤 [WHATSAPP API] template_name: {template_name}")
     logger.info(f"📤 [WHATSAPP API] language_code: {language_code}")
     logger.info(f"📤 [WHATSAPP API] to: {to}")
@@ -238,7 +238,7 @@ async def send_template_message(
     logger.info(f"📤 [WHATSAPP API] components type: {type(components)}")
     if components:
         logger.info(f"📤 [WHATSAPP API] Nombre de components: {len(components)}")
-        logger.info(f"📤 [WHATSAPP API] Détail des components:")
+        logger.info("📤 [WHATSAPP API] Détail des components:")
         for idx, comp in enumerate(components):
             comp_type = comp.get("type", "UNKNOWN")
             logger.info(f"📤 [WHATSAPP API]   Component {idx + 1}: type={comp_type}")
@@ -256,7 +256,7 @@ async def send_template_message(
                     logger.info(f"📤 [WHATSAPP API]       Bouton {btn_idx + 1}: type={btn.get('type')}, text={repr(btn.get('text'))}")
             logger.info(f"📤 [WHATSAPP API]     Component {idx + 1} complet: {json.dumps(comp, indent=2, ensure_ascii=False)}")
     else:
-        logger.warning(f"⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
+        logger.warning("⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
     logger.debug("[WHATSAPP API] Payload complet envoyé à Meta: %s", json.dumps(payload, ensure_ascii=False))
 
     response = await client.post(
@@ -971,7 +971,7 @@ async def create_message_template(
     }
     
     logger.info("=" * 80)
-    logger.info(f"📤 [WHATSAPP API] ========== CRÉATION TEMPLATE META ==========")
+    logger.info("📤 [WHATSAPP API] ========== CRÉATION TEMPLATE META ==========")
     logger.info(f"📤 [WHATSAPP API] template_name: {name}")
     logger.info(f"📤 [WHATSAPP API] category: {category}")
     logger.info(f"📤 [WHATSAPP API] language: {language}")
@@ -979,7 +979,7 @@ async def create_message_template(
     logger.info(f"📤 [WHATSAPP API] components type: {type(components)}")
     if components:
         logger.info(f"📤 [WHATSAPP API] Nombre de components: {len(components)}")
-        logger.info(f"📤 [WHATSAPP API] Détail des components:")
+        logger.info("📤 [WHATSAPP API] Détail des components:")
         for idx, comp in enumerate(components):
             comp_type = comp.get("type", "UNKNOWN")
             logger.info(f"📤 [WHATSAPP API]   Component {idx + 1}: type={comp_type}")
@@ -997,7 +997,7 @@ async def create_message_template(
                     logger.info(f"📤 [WHATSAPP API]       Bouton {btn_idx + 1}: type={btn.get('type')}, text={repr(btn.get('text'))}")
             logger.info(f"📤 [WHATSAPP API]     Component {idx + 1} complet: {json.dumps(comp, indent=2, ensure_ascii=False)}")
     else:
-        logger.warning(f"⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
+        logger.warning("⚠️ [WHATSAPP API] AUCUN COMPONENT FOURNI!")
     logger.debug("[WHATSAPP API] Payload complet envoyé à Meta: %s", json.dumps(payload, ensure_ascii=False))
 
     response = await client.post(
@@ -1587,7 +1587,7 @@ async def get_app_access_token(app_id: str, app_secret: str) -> Dict[str, Any]:
     client = await get_http_client()
     
     response = await client.get(
-        f"https://graph.facebook.com/oauth/access_token",
+        "https://graph.facebook.com/oauth/access_token",
         params={
             "client_id": app_id,
             "client_secret": app_secret,

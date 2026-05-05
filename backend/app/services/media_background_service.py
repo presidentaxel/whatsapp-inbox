@@ -80,7 +80,7 @@ async def process_unsaved_media_for_conversation(conversation_id: str, limit: in
         
         account_id = conversation.get("account_id")
         if not account_id:
-            logger.warning(f"❌ [MEDIA BACKGROUND] No account_id in conversation")
+            logger.warning("❌ [MEDIA BACKGROUND] No account_id in conversation")
             return stats
         
         # Récupérer l'account une seule fois
@@ -243,7 +243,7 @@ async def process_unsaved_media_messages(limit: int = MAX_MESSAGES_PER_CYCLE) ->
                 
                 account_id = conversation.get("account_id")
                 if not account_id:
-                    logger.warning(f"❌ [MEDIA BACKGROUND] No account_id in conversation")
+                    logger.warning("❌ [MEDIA BACKGROUND] No account_id in conversation")
                     stats['errors'] += 1
                     continue
                 
@@ -326,7 +326,7 @@ async def periodic_media_backfill():
     while True:
         try:
             await asyncio.sleep(CHECK_INTERVAL_SECONDS)
-            logger.debug(f"🔄 [MEDIA BACKGROUND] Starting new check cycle...")
+            logger.debug("🔄 [MEDIA BACKGROUND] Starting new check cycle...")
             await process_unsaved_media_messages(limit=MAX_MESSAGES_PER_CYCLE)
         except asyncio.CancelledError:
             logger.info("🛑 [MEDIA BACKGROUND] Periodic task cancelled")

@@ -152,7 +152,7 @@ class TemplateDeduplication:
                         "account_id": account_id
                     }
             
-            logger.info(f"🔍 [DEDUP] Aucun template similaire trouvé")
+            logger.info("🔍 [DEDUP] Aucun template similaire trouvé")
             return None
             
         except Exception as e:
