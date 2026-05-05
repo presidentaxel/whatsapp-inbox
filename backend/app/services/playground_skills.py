@@ -84,6 +84,49 @@ def _resolve_waba_credentials(account: Dict[str, Any]) -> tuple:
     return waba_id, token
 
 
+async def _resolve_account_for_template_skills(
+    account: Dict[str, Any],
+    *,
+    required_permission: str,
+) -> Dict[str, Any]:
+    """
+    Résout un compte exploitable pour les skills templates.
+    En mode périmètre `all`, `account` peut être vide: on choisit alors
+    le premier compte autorisé par permissions qui possède waba_id + access_token.
+    """
+    from app.services.account_service import get_account_by_id, get_all_accounts
+
+    if account.get("id"):
+        return account
+
+    rt = _axelia_rt()
+    user = rt.acting_user if rt else None
+    if not user:
+        return account
+
+    ids = user.accounts_for(required_permission)
+    if ids is None:
+        rows = await get_all_accounts(None)
+        candidate_ids = [str(r.get("id") or "") for r in rows]
+    else:
+        candidate_ids = [str(i) for i in ids]
+
+    for aid in candidate_ids[:50]:
+        if not aid:
+            continue
+        full = await get_account_by_id(aid)
+        if not full:
+            continue
+        if full.get("waba_id") and full.get("access_token"):
+            logger.info(
+                "Resolved template skill account automatically: account_id=%s permission=%s",
+                aid,
+                required_permission,
+            )
+            return full
+    return account
+
+
 SKILLS_CATALOG: List[Dict[str, Any]] = [
     {
         "name": "list_templates",
@@ -630,6 +673,10 @@ async def _skill_list_templates(
         list_message_templates,
     )
 
+    account = await _resolve_account_for_template_skills(
+        account,
+        required_permission=PermissionCodes.MESSAGES_VIEW,
+    )
     waba_id, token = _resolve_waba_credentials(account)
     if not waba_id or not token:
         account_id = str(account.get("id") or "")
@@ -697,6 +744,10 @@ async def _skill_get_template_status(
     if not template_name:
         return {"error": "template_name requis."}
 
+    account = await _resolve_account_for_template_skills(
+        account,
+        required_permission=PermissionCodes.MESSAGES_VIEW,
+    )
     waba_id, token = _resolve_waba_credentials(account)
     if not waba_id or not token:
         return {
@@ -753,6 +804,10 @@ async def _skill_create_template(
 ) -> Dict[str, Any]:
     from app.services.whatsapp_api_service import create_message_template
 
+    account = await _resolve_account_for_template_skills(
+        account,
+        required_permission=PermissionCodes.MESSAGES_SEND,
+    )
     waba_id, token = _resolve_waba_credentials(account)
     if not waba_id or not token:
         return {"error": "Compte sans waba_id ou access_token configuré."}
@@ -855,6 +910,10 @@ async def _skill_prepare_template_image_header(
             ),
         }
 
+    account = await _resolve_account_for_template_skills(
+        account,
+        required_permission=PermissionCodes.MESSAGES_SEND,
+    )
     waba_id, token = _resolve_waba_credentials(account)
     if not waba_id or not token:
         return {"error": "Compte sans waba_id ou access_token configuré."}
