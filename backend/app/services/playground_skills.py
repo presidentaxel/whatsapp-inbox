@@ -6,6 +6,7 @@ Le bot ne reçoit que le catalogue (nom + description) - les données sont charg
 """
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
 import logging
@@ -395,13 +396,16 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
 
 
 def get_axelia_skills_prompt_section() -> str:
-    """
-    Version Axelia (hub IA) : mêmes outils que le Playground, sans graphe ni todo.
-    """
+    """Texte injecté pour Axelia : catalogue skills + JSON (reply, tool_calls, task_plan optionnel)."""
     lines = [
         "OUTILS DISPONIBLES (skills) - Playground + inbox CRM Axelia :",
         "Tu réponds par un **unique** objet JSON ( MIME application/json ) avec les champs :",
-        '  {"reply": "<texte visible pour l’utilisateur>", "tool_calls": []}',
+        '  {"reply": "<texte visible pour l’utilisateur>", "tool_calls": [], "task_plan": []}',
+        'task_plan optionnel ; objets '
+        '{"id","title","thought","status","skill"} — tu peux l’omettre ou le laisser vide : '
+        "**le serveur génère alors automatiquement** la liste affichée à partir des tool_calls "
+        '(titres UX). Tu peux fournir un task_plan uniquement pour des libellés sur mesure. '
+        "Jusqu’à 5 tool_calls du même tour s’exécutent **en parallèle**.",
         'Chaque entrée de tool_calls : {"skill": "nom_du_skill", "args": { ... } }',
         "Le backend exécute les skills et te renvoie les résultats dans un message suivant.",
         "Ne devine pas les noms de templates, groupes ou UUID : appelle les skills.",
@@ -1314,21 +1318,20 @@ async def execute_tool_calls(
     *,
     axelia_runtime: Optional[AxeliaSkillsRuntime] = None,
 ) -> List[Dict[str, Any]]:
-    """Exécute une liste de tool_calls et retourne les résultats."""
+    """Exécute les tool_calls en parallèle ; résultats dans le même ordre que la liste (max 5)."""
     token = None
     if axelia_runtime is not None:
         token = _axelia_skills_runtime.set(axelia_runtime)
     try:
-        results = []
-        for tc in tool_calls[:5]:
+        subset = tool_calls[:5]
+
+        async def _one(tc: Dict[str, Any]) -> Dict[str, Any]:
             skill_name = (tc.get("skill") or tc.get("name") or "").strip()
             args = tc.get("args") or tc.get("arguments") or {}
             result = await execute_skill(skill_name, args, account)
-            results.append({
-                "skill": skill_name,
-                "result": result,
-            })
-        return results
+            return {"skill": skill_name, "result": result}
+
+        return list(await asyncio.gather(*(_one(tc) for tc in subset)))
     finally:
         if token is not None:
             _axelia_skills_runtime.reset(token)

@@ -338,6 +338,167 @@ def progress_clear(key: Optional[str]) -> None:
         _progress_store.pop(key, None)
 
 
+_VALID_AXELIA_TASK_STATUS = frozenset({"pending", "in_progress", "done", "cancelled"})
+
+# Titres courts + phrase UX (alignés sur l’UI Axelia) — utilisés si le modèle n’envoie pas task_plan.
+_AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
+    "list_templates": ("Templates Meta", "Je consulte la liste des modèles sur Meta…"),
+    "get_template_status": ("Statut template", "Je vérifie le statut du template sur Meta…"),
+    "create_template": ("Création template", "Je prépare la fiche template…"),
+    "prepare_template_image_header": ("Image template", "Je transfère l’image vers WhatsApp…"),
+    "list_broadcast_groups": ("Groupes diffusion", "Je charge les groupes de diffusion…"),
+    "search_inbox_messages": ("Recherche inbox", "Je parcours les messages de l’inbox…"),
+    "get_conversation_digest": ("Fil de discussion", "Je lis le détail de cette conversation…"),
+    "summarize_contact_inbox": ("Résumé contact", "Je synthétise l’historique avec ce contact…"),
+    "search_contacts": ("Recherche contacts", "Je recherche dans le CRM…"),
+    "get_contact": ("Fiche contact", "J’ouvre la fiche du contact…"),
+    "list_recent_conversations": ("Conversations récentes", "Je liste les derniers fils actifs…"),
+    "list_broadcast_campaigns": ("Campagnes", "Je charge les campagnes envoyées…"),
+    "get_campaign_summary": ("Statistiques campagne", "J’analyse les stats de livraison et de lecture…"),
+    "get_whatsapp_business_profile": ("Profil WABA", "Je lis le profil public WhatsApp Business…"),
+    "meta_block_contact": ("Blocage Meta", "Je prépare l’action sensible côté Meta…"),
+}
+
+
+def _axelia_synthetic_task_row(skill_name: str, row_id_suffix: int) -> Dict[str, Any]:
+    title, thought = _AXELIA_AUTO_PLAN_BY_SKILL.get(
+        skill_name,
+        ("Action outil", f"J’exécute « {skill_name} »…"),
+    )
+    return {
+        "id": f"auto-{row_id_suffix}",
+        "title": title,
+        "thought": thought,
+        "status": "pending",
+        "skill": skill_name,
+    }
+
+
+def _augment_axelia_task_plan_for_safe_calls(
+    todos: List[Dict[str, Any]],
+    safe: List[Dict[str, Any]],
+) -> None:
+    """Complète ``todos`` pour couvrir chaque entrée de ``safe`` sans exiger task_plan du modèle."""
+    names: List[str] = []
+    for tc in safe:
+        if not isinstance(tc, dict):
+            continue
+        sn = (tc.get("skill") or tc.get("name") or "").strip()
+        if sn:
+            names.append(sn)
+    if not names:
+        return
+
+    used_pending: set[int] = set()
+
+    def _consume_pending(sn: str) -> Optional[int]:
+        for j, t in enumerate(todos):
+            if j in used_pending or t.get("status") != "pending":
+                continue
+            if (t.get("skill") or "").strip() == sn:
+                return j
+        for j, t in enumerate(todos):
+            if j in used_pending or t.get("status") != "pending":
+                continue
+            if not (t.get("skill") or "").strip():
+                return j
+        return None
+
+    for sn in names:
+        j = _consume_pending(sn)
+        if j is not None:
+            used_pending.add(j)
+            row = todos[j]
+            if not (row.get("skill") or "").strip():
+                row["skill"] = sn
+            title, thought = _AXELIA_AUTO_PLAN_BY_SKILL.get(
+                sn,
+                ("Action outil", f"J’exécute « {sn} »…"),
+            )
+            row.setdefault("title", title)
+            row.setdefault("thought", thought)
+        else:
+            todos.append(_axelia_synthetic_task_row(sn, len(todos)))
+
+
+def _normalize_axelia_task_plan(raw: Any, *, limit: int = 16) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return out
+    for i, item in enumerate(raw[:limit]):
+        if not isinstance(item, dict):
+            continue
+        tid = str(item.get("id") or f"{i + 1}").strip() or f"{i + 1}"
+        title = str(item.get("title") or item.get("label") or "").strip() or f"Étape {i + 1}"
+        thought = str(item.get("thought") or item.get("note") or "").strip()
+        st = str(item.get("status") or "pending").strip().lower()
+        if st not in _VALID_AXELIA_TASK_STATUS:
+            st = "pending"
+        skill_raw = str(item.get("skill") or "").strip()
+        row: Dict[str, Any] = {
+            "id": tid,
+            "title": title,
+            "thought": thought,
+            "status": st,
+        }
+        if skill_raw:
+            row["skill"] = skill_raw
+        out.append(row)
+    return out
+
+
+def _pick_task_indices_for_tools(
+    todos: List[Dict[str, Any]], safe: List[Dict[str, Any]]
+) -> List[int]:
+    """Associe chaque appel à une entrée encore ``pending`` (champ ``skill`` sinon file)."""
+    pending_idx = [i for i, t in enumerate(todos) if t.get("status") == "pending"]
+    if not pending_idx or not safe:
+        return []
+    names = [
+        (tc.get("skill") or tc.get("name") or "").strip()
+        for tc in safe
+        if isinstance(tc, dict)
+    ]
+    picked: List[int] = []
+    for sn in names:
+        matched: Optional[int] = None
+        if sn:
+            for i in pending_idx:
+                if (todos[i].get("skill") or "").strip() == sn:
+                    matched = i
+                    break
+        if matched is None and pending_idx:
+            matched = pending_idx[0]
+        if matched is not None:
+            picked.append(matched)
+            pending_idx = [i for i in pending_idx if i != matched]
+    return picked
+
+
+def _apply_task_progress_payload(
+    *,
+    progress_key: Optional[str],
+    todos: List[Dict[str, Any]],
+    phase: str,
+    skills_used: List[str],
+    rounds_done: int,
+    running_skill_names: List[str],
+    skills_running: Optional[List[str]] = None,
+) -> None:
+    payload: Dict[str, Any] = {
+        "phase": phase,
+        "skill": (running_skill_names[0] if running_skill_names else None),
+        "skills_running": skills_running if skills_running is not None else running_skill_names,
+        "skills": list(skills_used),
+        "round": rounds_done,
+    }
+    if todos:
+        payload["todos"] = [dict(t) for t in todos]
+    else:
+        payload["todos"] = []
+    progress_set(progress_key, payload)
+
+
 # ---------------------------------------------------------------------------
 # Métriques d'observabilité (in-memory) - adapté à un déploiement single-instance.
 # Pour multi-worker, remplacer par un backend partagé (Redis / Prometheus).
@@ -1303,7 +1464,7 @@ async def _run_axelia_with_tools(
                 "text": (
                     "L’utilisateur a confirmé dans l’interface les actions sensibles suivantes. "
                     "Résultats d’exécution (JSON) :\n"
-                    + json.dumps(approve_results, ensure_ascii=False)
+                    + json.dumps(approve_results, ensure_ascii=False, default=str)
                 ),
             }
         )
@@ -1452,10 +1613,16 @@ async def _run_axelia_with_tools(
     parsed: Optional[Dict[str, Any]] = None
     partial_json = False
     raw_text = ""
+    last_todos: List[Dict[str, Any]] = []
 
-    progress_set(
-        progress_key,
-        {"phase": "thinking", "skills": list(skills_used), "round": 0},
+    _apply_task_progress_payload(
+        progress_key=progress_key,
+        todos=last_todos,
+        phase="thinking",
+        skills_used=list(skills_used),
+        rounds_done=0,
+        running_skill_names=[],
+        skills_running=[],
     )
 
     # Budget dynamique : on tourne tant que (rounds < hard cap) ET (tokens < budget)
@@ -1480,6 +1647,13 @@ async def _run_axelia_with_tools(
             reply_err = _axelia_json_fallback(raw_text, finish_reason=finish_reason)
             merged = list(dict.fromkeys([*pre_skills, *skills_used]))
             return reply_err, chosen_model, merged, frozen_pending or None
+
+        if "task_plan" in parsed:
+            tp = parsed.get("task_plan")
+            if tp == []:
+                last_todos = []
+            elif isinstance(tp, list):
+                last_todos = _normalize_axelia_task_plan(tp)
 
         tool_calls = parsed.get("tool_calls")
         if not tool_calls or not isinstance(tool_calls, list) or not tool_calls:
@@ -1526,20 +1700,29 @@ async def _run_axelia_with_tools(
             merged = list(dict.fromkeys([*pre_skills, *skills_used]))
             return er, chosen_model, merged, p_create
 
+        if safe:
+            _augment_axelia_task_plan_for_safe_calls(last_todos, safe)
+
         running_skill_names = [
             (tc.get("skill") or tc.get("name") or "").strip()
             for tc in safe
             if isinstance(tc, dict)
         ]
-        progress_set(
-            progress_key,
-            {
-                "phase": "tool",
-                "skill": (running_skill_names[0] if running_skill_names else None),
-                "skills_running": running_skill_names,
-                "skills": list(skills_used),
-                "round": rounds_done + 1,
-            },
+        batch_indices: List[int] = []
+        if last_todos:
+            batch_indices = _pick_task_indices_for_tools(last_todos, safe)
+            for i in batch_indices:
+                if 0 <= i < len(last_todos):
+                    last_todos[i]["status"] = "in_progress"
+
+        _apply_task_progress_payload(
+            progress_key=progress_key,
+            todos=last_todos,
+            phase="tool",
+            skills_used=list(skills_used),
+            rounds_done=rounds_done + 1,
+            running_skill_names=running_skill_names,
+            skills_running=running_skill_names,
         )
 
         skill_results = await execute_tool_calls(
@@ -1554,20 +1737,24 @@ async def _run_axelia_with_tools(
         else:
             rounds_no_progress += 1
 
-        progress_set(
-            progress_key,
-            {
-                "phase": "thinking",
-                "skill": None,
-                "skills_running": [],
-                "skills": list(skills_used),
-                "round": rounds_done + 1,
-            },
+        if batch_indices:
+            for i in batch_indices:
+                if 0 <= i < len(last_todos):
+                    last_todos[i]["status"] = "done"
+
+        _apply_task_progress_payload(
+            progress_key=progress_key,
+            todos=last_todos,
+            phase="thinking",
+            skills_used=list(skills_used),
+            rounds_done=rounds_done + 1,
+            running_skill_names=[],
+            skills_running=[],
         )
 
         tool_result_text = (
             "Résultats des skills demandés :\n"
-            + json.dumps(skill_results, ensure_ascii=False, indent=2)
+            + json.dumps(skill_results, ensure_ascii=False, indent=2, default=str)
         )
         hist.append({"role": "model", "parts": [{"text": raw_text}]})
         hist.append({"role": "user", "parts": [{"text": tool_result_text}]})
@@ -1601,11 +1788,32 @@ async def _run_axelia_with_tools(
             )
             if last_skill_results:
                 fb += "\n\nRésumé des données récupérées :\n" + json.dumps(
-                    last_skill_results, ensure_ascii=False
+                    last_skill_results, ensure_ascii=False, default=str
                 )
             return fb, chosen_model, merged_skills, frozen_pending or None
         in_tok_round, out_tok_round = _approx_tokens_in_response(data or {})
         cumulative_tokens += in_tok_round + out_tok_round
+
+    exited_with_final_reply = (
+        isinstance(parsed, dict)
+        and last_todos
+        and not (
+            isinstance(parsed.get("tool_calls"), list) and parsed.get("tool_calls")
+        )
+    )
+    if exited_with_final_reply and not budget_hit:
+        for t in last_todos:
+            if t.get("status") not in ("cancelled", "done"):
+                t["status"] = "done"
+        _apply_task_progress_payload(
+            progress_key=progress_key,
+            todos=last_todos,
+            phase="thinking",
+            skills_used=list(skills_used),
+            rounds_done=rounds_done,
+            running_skill_names=[],
+            skills_running=[],
+        )
 
     if metrics_out is not None:
         metrics_out["rounds"] = rounds_done
@@ -1838,7 +2046,7 @@ _STREAM_CHUNK_DELAY_S = 0.025
 
 
 def _format_sse(event: str, data: Dict[str, Any]) -> bytes:
-    payload = json.dumps(data, ensure_ascii=False)
+    payload = json.dumps(data, ensure_ascii=False, default=str)
     return f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
 
 
@@ -1964,7 +2172,7 @@ async def stream_axelia_chat(
 
     Événements émis :
     - ``meta``     : modèle choisi, classifier, périmètre.
-    - ``progress`` : phase, skill courant, skills cumulés.
+    - ``progress`` : phase, skill(s) courant(s), skills cumulés, ``todos`` si ``task_plan`` actif.
     - ``token``    : delta texte du reply final (peut être plusieurs).
     - ``done``     : payload final (text complet, skills, pending_tool_calls, model).
     - ``error``    : ``{code, message}`` côté serveur.

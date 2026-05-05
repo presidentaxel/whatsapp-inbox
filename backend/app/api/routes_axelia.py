@@ -416,7 +416,7 @@ async def axelia_chat_stream(
     Mêmes pré-conditions que `/axelia/chat` (auth, périmètre, persistance). Le corps de la
     réponse est un flux ``text/event-stream`` avec les évènements suivants :
     - ``meta``     : modèle choisi, classifier, périmètre, ``user_message_id``.
-    - ``progress`` : phase, skill courant, skills cumulés.
+    - ``progress`` : phase, skills courants, skills cumulés, éventuellement ``todos`` (task_plan).
     - ``token``    : delta texte de la réponse finale (peut survenir plusieurs fois).
     - ``done``     : payload final (``text``, ``model``, ``skills_used``, ``pending_tool_calls``,
                      ``assistant_message_id``).

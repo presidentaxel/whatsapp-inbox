@@ -1839,7 +1839,7 @@ async def generate_playground_assist_reply(
                 "content": (
                     "L'utilisateur a confirmé dans l'interface la création du ou des message templates "
                     "sur Meta. Résultat d'exécution (ne pas re-demander confirmation pour ces créations) :\n"
-                    + json.dumps(approve_results, ensure_ascii=False)
+                    + json.dumps(approve_results, ensure_ascii=False, default=str)
                 ),
             }
         )
@@ -2309,7 +2309,7 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
 
         tool_result_text = (
             "Résultats des skills demandés :\n"
-            + json.dumps(skill_results, ensure_ascii=False, indent=2)
+            + json.dumps(skill_results, ensure_ascii=False, indent=2, default=str)
         )
         hist.append({"role": "model", "parts": [{"text": raw_text}]})
         hist.append({"role": "user", "parts": [{"text": tool_result_text}]})
@@ -2335,7 +2335,7 @@ FORMAT DE SORTIE OBLIGATOIRE : un seul objet JSON valide, sans texte hors JSON :
             if last_skill_results:
                 fallback_reply += (
                     "\nRésultats skills (résumé JSON) :\n"
-                    + json.dumps(last_skill_results, ensure_ascii=False)
+                    + json.dumps(last_skill_results, ensure_ascii=False, default=str)
                 )
             return {
                 "reply": fallback_reply,

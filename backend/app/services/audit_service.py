@@ -38,7 +38,9 @@ async def log_action(
 
         if get_pool():
             details_val = payload.get("details") or {}
-            details_json = json.dumps(details_val) if isinstance(details_val, dict) else details_val
+            details_json = (
+                json.dumps(details_val, default=str) if isinstance(details_val, dict) else details_val
+            )
             await pg_execute(
                 """
                 INSERT INTO audit_log (action, resource_type, resource_id, user_id, account_id, details)

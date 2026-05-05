@@ -30,6 +30,7 @@ import { renderMarkdown } from "./renderMarkdown";
 import "../../styles/axelia.css";
 import {
   createAxeliaConversation,
+  getAxeliaChatProgress,
   getAxeliaConversations,
   getAxeliaMessages,
   patchAxeliaConversation,
@@ -179,6 +180,38 @@ function describePendingToolCalls(calls) {
   return { title, lines };
 }
 
+function AxeliaComposerPlan({ todos }) {
+  if (!Array.isArray(todos) || todos.length === 0) return null;
+  return (
+    <div className="axelia-composer-plan" aria-label="Plan d’action Axelia">
+      <div className="axelia-composer-plan__label">Plan</div>
+      <ul className="axelia-composer-plan__list">
+        {todos.map((t, idx) => {
+          const st = t?.status || "pending";
+          const rowKey = `${idx}-${String(t?.id ?? "").slice(0, 64)}`;
+          const showThought = st === "in_progress" && t?.thought;
+          return (
+            <li
+              key={rowKey}
+              className={`axelia-composer-plan__item axelia-composer-plan__item--${st}`}
+            >
+              <span className="axelia-composer-plan__mark" aria-hidden />
+              <div className="axelia-composer-plan__body">
+                <span className="axelia-composer-plan__title">
+                  {t?.title || "Étape"}
+                </span>
+                {showThought ? (
+                  <span className="axelia-composer-plan__thought">{t.thought}</span>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 /** @param {{ accounts: object[], profile: object | null, hasPermission?: (code: string, accountId?: string|null) => boolean, initialAccountId?: string | null }} props */
 export default function AxeliaChat({
   accounts = [],
@@ -322,6 +355,34 @@ export default function AxeliaChat({
     setProgressInfo(null);
     setStreamingText(null);
     setStreamingModel(null);
+  }, []);
+
+  const startProgressPolling = useCallback(() => {
+    if (progressTimerRef.current) {
+      window.clearInterval(progressTimerRef.current);
+      progressTimerRef.current = null;
+    }
+    progressTimerRef.current = window.setInterval(async () => {
+      const key = progressKeyRef.current;
+      if (!key) return;
+      const abort = abortRef.current;
+      try {
+        const res = await getAxeliaChatProgress(key, {
+          signal: abort?.signal,
+        });
+        if (progressKeyRef.current !== key) return;
+        const data = res?.data;
+        if (data && typeof data === "object" && Object.keys(data).length) {
+          setProgressInfo((prev) => ({ ...(prev || {}), ...data }));
+        }
+      } catch (err) {
+        const cancelled =
+          err?.code === "ERR_CANCELED" ||
+          err?.name === "CanceledError" ||
+          err?.name === "AbortError";
+        if (cancelled) return;
+      }
+    }, 400);
   }, []);
 
   const regenLockTimerRef = useRef(null);
@@ -789,6 +850,7 @@ export default function AxeliaChat({
     const ctrl =
       typeof AbortController !== "undefined" ? new AbortController() : null;
     abortRef.current = ctrl;
+    startProgressPolling();
 
     // États capturés pendant le stream pour usage post-`done` / `persisted`.
     let finalSkills = null;
@@ -1000,9 +1062,11 @@ export default function AxeliaChat({
     setProgressInfo({ phase: "received" });
     setStreamingText("");
     setStreamingModel(null);
+
     const ctrl =
       typeof AbortController !== "undefined" ? new AbortController() : null;
     abortRef.current = ctrl;
+    startProgressPolling();
 
     let finalAssistantId = null;
     let finalSkills = null;
@@ -1209,11 +1273,17 @@ export default function AxeliaChat({
     if (!loading) return null;
     if (aborting) return "Annulation…";
     if (progressInfo) {
-      if (progressInfo.phase === "tool" && progressInfo.skill) {
-        return (
-          SKILL_RUNNING_LABELS[progressInfo.skill] ||
-          `Outil : ${progressInfo.skill}…`
-        );
+      if (progressInfo.phase === "tool") {
+        const rs = progressInfo.skills_running;
+        if (Array.isArray(rs) && rs.length > 1) {
+          return `${rs.length} vérifications en parallèle…`;
+        }
+        if (progressInfo.skill) {
+          return (
+            SKILL_RUNNING_LABELS[progressInfo.skill] ||
+            `Outil : ${progressInfo.skill}…`
+          );
+        }
       }
       if (progressInfo.phase && PHASE_LABELS[progressInfo.phase]) {
         return PHASE_LABELS[progressInfo.phase];
@@ -1548,6 +1618,9 @@ export default function AxeliaChat({
                 </div>
               </div>
             )}
+            {loading && Array.isArray(progressInfo?.todos) && progressInfo.todos.length ? (
+              <AxeliaComposerPlan todos={progressInfo.todos} />
+            ) : null}
             {loading && streamingText ? (
               <div
                 className="axelia-model-block axelia-model-block--streaming"
