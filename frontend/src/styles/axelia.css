@@ -785,6 +785,62 @@
 
 @media (max-width: 720px) {
   .axelia-page {
+    height: 100%;
+    min-height: 100%;
+  }
+
+  .axelia-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 60;
+    background: #000000;
+  }
+
+  .axelia-topbar--sidebar-open .axelia-topbar__center {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .axelia-shell {
+    min-height: 0;
+  }
+
+  .axelia-chat-main {
+    min-height: 0;
+  }
+
+  .axelia-page__body {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .axelia-page__body--splash {
+    justify-content: center;
+    padding-bottom: 180px;
+  }
+
+  .axelia-dock--splash,
+  .axelia-dock--floating {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 55;
+    margin: 0;
+    max-width: none;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, #000000 78%, rgba(0, 0, 0, 0.65) 92%, transparent);
+  }
+
+  .axelia-dock-inner {
+    max-width: 100%;
+  }
+
+  .axelia-messages.axelia-messages--thread {
+    padding-bottom: 220px;
+  }
+
+  .axelia-page {
     --axelia-sidebar-width: min(300px, 88vw);
   }
 

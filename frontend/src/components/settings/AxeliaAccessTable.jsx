@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { FiCpu, FiZap } from "react-icons/fi";
 import {
   getUsersWithAccess,
@@ -14,6 +14,7 @@ export default function AxeliaAccessTable({
 }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const normalizedRole = currentUserRole?.toLowerCase() || "";
   const canEdit = canManagePermissions || normalizedRole === "admin";
@@ -87,6 +88,16 @@ export default function AxeliaAccessTable({
     }
   };
 
+  const visibleUsers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((user) => {
+      const email = (user.email || "").toLowerCase();
+      const role = (user.role_name || user.role_slug || "").toLowerCase();
+      return email.includes(q) || role.includes(q);
+    });
+  }, [users, searchQuery]);
+
   if (!canView) {
     return (
       <div className="permissions-table-container">
@@ -117,97 +128,94 @@ export default function AxeliaAccessTable({
         </p>
       </div>
 
-      <div className="permissions-table-wrapper">
-        <table className="permissions-table">
-          <thead>
-            <tr>
-              <th className="permissions-table-user-col">Utilisateur</th>
-              <th className="permissions-table-role-col">Rôle</th>
-              <th style={{ minWidth: 160 }} className="permissions-table-account-col">
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <FiZap aria-hidden /> Accès Axelia
-                </span>
-              </th>
-              <th style={{ minWidth: 160 }} className="permissions-table-account-col">
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <FiCpu aria-hidden /> Accès Playground
-                </span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => {
-              const effectiveAx = Boolean(user.axelia_access_effective);
-              const fromRoleAx = Boolean(user.axelia_access_role_default);
-              const effectivePg = Boolean(user.playground_access_effective);
-              const fromRolePg = Boolean(user.playground_access_role_default);
+      <div className="permissions-users-toolbar">
+        <input
+          type="search"
+          className="permissions-users-search"
+          placeholder="Rechercher un utilisateur…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </div>
 
-              return (
-                <tr key={user.user_id}>
-                  <td className="permissions-table-user-cell">
-                    <strong>{user.email || "Utilisateur"}</strong>
-                  </td>
-                  <td className="permissions-table-role-cell">{user.role_name || "-"}</td>
-                  <td className="permissions-table-access-cell">
-                    {canEdit ? (
-                      <label style={{ cursor: "pointer", userSelect: "none" }}>
-                        <input
-                          type="checkbox"
-                          checked={effectiveAx}
-                          onChange={(e) =>
-                            handleToggleAxelia(user.user_id, e.target.checked)
-                          }
-                          style={{ marginRight: 8 }}
-                        />
-                        {effectiveAx ? "Autorisé" : "Non autorisé"}
-                        {fromRoleAx && effectiveAx ? (
-                          <small className="muted" style={{ display: "block", marginTop: 4 }}>
-                            Inclus par défaut depuis le rôle
-                          </small>
-                        ) : null}
-                      </label>
+      <div className="permissions-users-list">
+        {visibleUsers.map((user) => {
+          const effectiveAx = Boolean(user.axelia_access_effective);
+          const fromRoleAx = Boolean(user.axelia_access_role_default);
+          const effectivePg = Boolean(user.playground_access_effective);
+          const fromRolePg = Boolean(user.playground_access_role_default);
+
+          return (
+            <article key={user.user_id} className="permissions-user-card">
+              <div className="permissions-user-card__header" style={{ cursor: "default" }}>
+                <div className="permissions-user-card__identity">
+                  <strong>{user.email || "Utilisateur"}</strong>
+                  <small>{user.role_name || "-"}</small>
+                </div>
+              </div>
+
+              <div className="permissions-user-card__accounts">
+                <div className="permissions-user-card__account-row">
+                  <div className="permissions-user-card__account-info">
+                    <strong style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <FiZap aria-hidden /> Accès Axelia
+                    </strong>
+                    {fromRoleAx && effectiveAx ? (
+                      <small>Inclus par défaut depuis le rôle</small>
                     ) : (
-                      <div
-                        className="permissions-table-access-badge"
-                        style={{ backgroundColor: "#1e293b", color: "#fff" }}
-                      >
-                        {effectiveAx ? "Oui" : "Non"}
-                      </div>
+                      <small>Accès individuel</small>
                     )}
-                  </td>
-                  <td className="permissions-table-access-cell">
-                    {canEdit ? (
-                      <label style={{ cursor: "pointer", userSelect: "none" }}>
-                        <input
-                          type="checkbox"
-                          checked={effectivePg}
-                          onChange={(e) =>
-                            handleTogglePlayground(user.user_id, e.target.checked)
-                          }
-                          style={{ marginRight: 8 }}
-                        />
-                        {effectivePg ? "Autorisé" : "Non autorisé"}
-                        {fromRolePg && effectivePg ? (
-                          <small className="muted" style={{ display: "block", marginTop: 4 }}>
-                            Inclus par défaut depuis le rôle
-                          </small>
-                        ) : null}
-                      </label>
+                  </div>
+                  {canEdit ? (
+                    <label style={{ cursor: "pointer", userSelect: "none" }}>
+                      <input
+                        type="checkbox"
+                        checked={effectiveAx}
+                        onChange={(e) => handleToggleAxelia(user.user_id, e.target.checked)}
+                        style={{ marginRight: 8 }}
+                      />
+                      {effectiveAx ? "Autorisé" : "Non autorisé"}
+                    </label>
+                  ) : (
+                    <div className="permissions-table-access-badge" style={{ backgroundColor: "#1e293b", color: "#fff" }}>
+                      {effectiveAx ? "Oui" : "Non"}
+                    </div>
+                  )}
+                </div>
+
+                <div className="permissions-user-card__account-row">
+                  <div className="permissions-user-card__account-info">
+                    <strong style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <FiCpu aria-hidden /> Accès Playground
+                    </strong>
+                    {fromRolePg && effectivePg ? (
+                      <small>Inclus par défaut depuis le rôle</small>
                     ) : (
-                      <div
-                        className="permissions-table-access-badge"
-                        style={{ backgroundColor: "#1e293b", color: "#fff" }}
-                      >
-                        {effectivePg ? "Oui" : "Non"}
-                      </div>
+                      <small>Accès individuel</small>
                     )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {!users.length && <p className="permissions-table-empty">Aucun utilisateur trouvé.</p>}
+                  </div>
+                  {canEdit ? (
+                    <label style={{ cursor: "pointer", userSelect: "none" }}>
+                      <input
+                        type="checkbox"
+                        checked={effectivePg}
+                        onChange={(e) => handleTogglePlayground(user.user_id, e.target.checked)}
+                        style={{ marginRight: 8 }}
+                      />
+                      {effectivePg ? "Autorisé" : "Non autorisé"}
+                    </label>
+                  ) : (
+                    <div className="permissions-table-access-badge" style={{ backgroundColor: "#1e293b", color: "#fff" }}>
+                      {effectivePg ? "Oui" : "Non"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </article>
+          );
+        })}
+
+        {!visibleUsers.length && <p className="permissions-table-empty">Aucun utilisateur trouvé.</p>}
       </div>
     </div>
   );

@@ -98,6 +98,24 @@ export default function DiscussionSettings() {
     updatePref('wallpaper', wallpaperId);
   };
 
+  const renderToggleOption = (id, title, description, value, prefKey) => (
+    <div className="discussion-settings__toggle-option">
+      <div className="discussion-settings__option-content">
+        <strong>{title}</strong>
+        <small>{description}</small>
+      </div>
+      <label className="discussion-settings__toggle-wrapper" htmlFor={id}>
+        <input
+          id={id}
+          type="checkbox"
+          checked={value}
+          onChange={(e) => updatePref(prefKey, e.target.checked)}
+        />
+        <span className="discussion-settings__toggle-slider" aria-hidden="true"></span>
+      </label>
+    </div>
+  );
+
   const activeThemeEntry = THEMES.find((t) => t.value === prefs.theme);
   const currentThemeLabel = activeThemeEntry?.label || "Thème par défaut du système";
   const ThemeIcon = activeThemeEntry?.icon || FiMonitor;
@@ -133,51 +151,27 @@ export default function DiscussionSettings() {
 
       <div className="discussion-settings__section">
         <h3 className="discussion-settings__section-title">Paramètres des discussions</h3>
-        
-        <label className="discussion-settings__toggle-option">
-          <div className="discussion-settings__option-content">
-            <strong>Vérification orthographique</strong>
-            <small>Vérifier l'orthographe pendant la saisie</small>
-          </div>
-          <label className="discussion-settings__toggle-wrapper">
-            <input
-              type="checkbox"
-              checked={prefs.spellCheck}
-              onChange={(e) => updatePref('spellCheck', e.target.checked)}
-            />
-            <div className="discussion-settings__toggle-slider"></div>
-          </label>
-        </label>
-
-        <label className="discussion-settings__toggle-option">
-          <div className="discussion-settings__option-content">
-            <strong>Remplacer le texte par un emoji</strong>
-            <small>Les emojis remplaceront certaines parties de texte à mesure que vous écrivez</small>
-          </div>
-          <label className="discussion-settings__toggle-wrapper">
-            <input
-              type="checkbox"
-              checked={prefs.emojiReplace}
-              onChange={(e) => updatePref('emojiReplace', e.target.checked)}
-            />
-            <div className="discussion-settings__toggle-slider"></div>
-          </label>
-        </label>
-
-        <label className="discussion-settings__toggle-option">
-          <div className="discussion-settings__option-content">
-            <strong>Entrée pour envoyer</strong>
-            <small>La touche Entrée enverra votre message.</small>
-          </div>
-          <label className="discussion-settings__toggle-wrapper">
-            <input
-              type="checkbox"
-              checked={prefs.enterToSend}
-              onChange={(e) => updatePref('enterToSend', e.target.checked)}
-            />
-            <div className="discussion-settings__toggle-slider"></div>
-          </label>
-        </label>
+        {renderToggleOption(
+          'discussion-spellcheck',
+          "Vérification orthographique",
+          "Vérifier l'orthographe pendant la saisie",
+          prefs.spellCheck,
+          'spellCheck'
+        )}
+        {renderToggleOption(
+          'discussion-emoji-replace',
+          'Remplacer le texte par un emoji',
+          'Les emojis remplaceront certaines parties de texte à mesure que vous écrivez',
+          prefs.emojiReplace,
+          'emojiReplace'
+        )}
+        {renderToggleOption(
+          'discussion-enter-to-send',
+          'Entrée pour envoyer',
+          'La touche Entrée enverra votre message.',
+          prefs.enterToSend,
+          'enterToSend'
+        )}
       </div>
 
       {/* Dialog Thème */}

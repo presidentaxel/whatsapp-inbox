@@ -60,6 +60,8 @@
   .sidebar {
     width: 100%;
     min-width: unset;
+    flex: 1 1 auto;
+    max-width: none;
   }
 
   .conversation-list {
@@ -70,6 +72,8 @@
   /* Chat window mobile */
   .chat-window {
     width: 100%;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .chat-header {
@@ -102,8 +106,8 @@
   /* WhatsApp Business Panel mobile */
   .whatsapp-business-panel {
     padding: 0.5rem;
-    height: calc(100vh - 100px);
-    height: calc(100dvh - 100px);
+    flex: 1;
+    min-height: 0;
   }
 
   .panel-header h2 {
@@ -123,8 +127,6 @@
 
   .panel-content {
     padding: 1rem;
-    max-height: calc(100vh - 220px);
-    max-height: calc(100dvh - 220px);
   }
 
   /* Templates en colonne unique sur mobile */

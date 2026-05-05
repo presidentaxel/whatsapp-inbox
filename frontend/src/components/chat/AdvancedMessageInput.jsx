@@ -1935,7 +1935,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                     rows={1}
                     value={text}
                     spellCheck={discussionPrefs?.spellCheck ?? true}
-                    lang="fr"
+                    autoCorrect={discussionPrefs?.spellCheck ? "on" : "off"}
+                    autoCapitalize={discussionPrefs?.spellCheck ? "sentences" : "off"}
+                    lang="fr-FR"
                     onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
                     placeholder={
                       discussionPrefs?.enterToSend
@@ -1965,15 +1967,6 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                   />
                 </div>
                 
-                {/* Affichage du prix - seulement si le message n'est pas gratuit */}
-                {priceInfo && mode === "text" && text.trim() && !priceInfo.is_free && (
-                  <div className="message-price-indicator">
-                    <span className="price-paid">
-                      💰 {parseFloat(priceInfo.price_eur || priceInfo.price_usd || 0).toFixed(2).replace(/\.0+$/, '')} {priceInfo.currency === "USD" ? "USD" : "EUR"}
-                    </span>
-                  </div>
-                )}
-
                 {/* Bouton d'envoi */}
                 <button
                   className="btn-send-whatsapp btn-send-flat"
@@ -2001,7 +1994,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                     rows={1}
                     value={text}
                     spellCheck={discussionPrefs?.spellCheck ?? true}
-                    lang="fr"
+                    autoCorrect={discussionPrefs?.spellCheck ? "on" : "off"}
+                    autoCapitalize={discussionPrefs?.spellCheck ? "sentences" : "off"}
+                    lang="fr-FR"
                     onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
                     placeholder="Écrire un message..."
                     onKeyDown={(e) => {
@@ -2027,12 +2022,6 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                   />
                 </div>
                 
-                {/* Indicateur pour l'auto-template */}
-                {text.trim() && (
-                  <div className="message-price-indicator" style={{ background: 'rgba(37, 211, 102, 0.1)', color: '#25d366' }}>
-                  </div>
-                )}
-
                 {/* Bouton d'envoi */}
                 <button
                   className="btn-send-whatsapp btn-send-flat"
@@ -2061,7 +2050,9 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
                     rows={1}
                     value={text}
                     spellCheck={discussionPrefs?.spellCheck ?? true}
-                    lang="fr"
+                    autoCorrect={discussionPrefs?.spellCheck ? "on" : "off"}
+                    autoCapitalize={discussionPrefs?.spellCheck ? "sentences" : "off"}
+                    lang="fr-FR"
                     onChange={(e) => setText(replaceEmojiShortcuts(e.target.value))}
                     placeholder="Écrire un message..."
                     onKeyDown={(e) => {

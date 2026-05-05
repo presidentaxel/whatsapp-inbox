@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FiMessageSquare, FiUsers, FiMessageCircle, FiUserCheck } from "react-icons/fi";
+import {
+  FiMessageSquare,
+  FiUsers,
+  FiMessageCircle,
+  FiUserCheck,
+  FiUser,
+  FiBell,
+  FiGlobe,
+  FiSettings,
+  FiLogOut,
+} from "react-icons/fi";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getConversations, markConversationRead } from "../api/conversationsApi";
 import { getAccounts } from "../api/accountsApi";
 import { getContacts, getMetaBlockedWaIdsBatch, metaBlockContact, metaUnblockContact } from "../api/contactsApi";
@@ -14,20 +25,44 @@ import MobileConversationsList from "../components/mobile/MobileConversationsLis
 import MobileChatWindow from "../components/mobile/MobileChatWindow";
 import MobileContactsPanel from "../components/mobile/MobileContactsPanel";
 import MobileWhatsAppPanel from "../components/mobile/MobileWhatsAppPanel";
-import MobileGeminiPanel from "../components/mobile/MobileGeminiPanel";
-import MobileSettings from "../components/mobile/MobileSettings";
+import AxeliaChat from "../components/axelia/AxeliaChat";
 import MobileConnectedDevices from "../components/mobile/MobileConnectedDevices";
 import MobileTeamPanel from "../components/mobile/MobileTeamPanel";
+import MobileAccountSettings from "../components/mobile/MobileAccountSettings";
+import MobileChatSettings from "../components/mobile/MobileChatSettings";
+import MobileNotificationSettingsPage from "../components/mobile/MobileNotificationSettingsPage";
+import MobileLanguageSettings from "../components/mobile/MobileLanguageSettings";
+import MobileSettingsHome from "../components/mobile/MobileSettingsHome";
+import MobileInviteUser from "../components/mobile/MobileInviteUser";
+import MobileAppUpdates from "../components/mobile/MobileAppUpdates";
 import MetaBlockAccountModal from "../components/contacts/MetaBlockAccountModal";
 import { useAuth } from "../context/AuthContext";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
+import { MOBILE_PATH_BY_MODE, mobilePathToMode } from "../routes/mobileInboxRoutes";
 import "../styles/mobile-inbox.css";
+import "../styles/mobile-settings.css";
 
 const SIDEBAR_CHAT_SYNC_DEBOUNCE_MS = 220;
 
+const inboundPreviewFromMessage = (msg) => {
+  const explicit = (msg?.content_text || "").trim();
+  if (explicit) return explicit;
+  const t = (msg?.message_type || "").toLowerCase();
+  if (t === "image") return "[image]";
+  if (t === "video") return "[video]";
+  if (t === "audio") return "[audio]";
+  if (t === "document") return "[document]";
+  if (t === "location") return "[location]";
+  if (t === "contacts") return "[contact]";
+  if (t === "reaction") return "Reaction";
+  return "Nouveau message";
+};
+
 export default function MobileInboxPage({ onLogout }) {
   const { hasPermission, profile } = useAuth();
-  const [activeTab, setActiveTab] = useState("conversations");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { conversationId } = useParams();
   const [accounts, setAccounts] = useState([]);
   const [activeAccount, setActiveAccount] = useState(null);
   const [conversations, setConversations] = useState([]);
@@ -36,6 +71,7 @@ export default function MobileInboxPage({ onLogout }) {
   const [loadingMoreConversations, setLoadingMoreConversations] = useState(false);
   const [selectedConversation, setSelectedConversation] = useState(null);
   const [contacts, setContacts] = useState([]);
+  const [settingsSearchTerm, setSettingsSearchTerm] = useState("");
   const [selectedContactFromChat, setSelectedContactFromChat] = useState(null);
   const [contactsListQ, setContactsListQ] = useState("");
   const [blockedByAccount, setBlockedByAccount] = useState({});
@@ -45,6 +81,14 @@ export default function MobileInboxPage({ onLogout }) {
   const selectedConversationIdRef = useRef(null);
   const conversationRealtimeDebounceTimerRef = useRef(null);
   const inboundFullRefreshDebounceTimerRef = useRef(null);
+  const navMode = useMemo(() => {
+    const mode = mobilePathToMode(location.pathname);
+    if (mode) return mode;
+    if (location.pathname.startsWith("/discussions/")) return "conversations";
+    return null;
+  }, [location.pathname]);
+  const canAccessAxelia = hasPermission?.("axelia.access");
+  const isSettingsSubpage = location.pathname.startsWith("/parametres/");
 
   useEffect(() => {
     selectedConversationIdRef.current = selectedConversation?.id ?? null;
@@ -267,10 +311,10 @@ export default function MobileInboxPage({ onLogout }) {
   }, [loadAccounts]);
 
   useEffect(() => {
-    if (activeTab === "contacts") {
+    if (navMode === "contacts") {
       loadContacts();
     }
-  }, [activeTab, contactsListQ, loadContacts]);
+  }, [navMode, contactsListQ, loadContacts]);
 
   // Sauvegarder le compte actif quand il change
   useEffect(() => {
@@ -295,10 +339,36 @@ export default function MobileInboxPage({ onLogout }) {
   }, [activeAccount, refreshConversations]);
 
   const onInboundMessage = useCallback(
-    (newMessage) => {
+    (newMessage, conversationFromEvent) => {
       if (!activeAccount) return;
       const convId = newMessage?.conversation_id;
       const isOpenChat = convId && convId === selectedConversationIdRef.current;
+      const preview = inboundPreviewFromMessage(newMessage);
+      const nextUpdatedAt =
+        newMessage?.timestamp ||
+        newMessage?.created_at ||
+        conversationFromEvent?.updated_at ||
+        new Date().toISOString();
+
+      // Aligne la liste mobile (preview + badge) sur le meme event entrant.
+      if (convId) {
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === convId);
+          if (idx === -1) return prev;
+          const next = [...prev];
+          const current = next[idx];
+          const shouldBumpUnread = !isOpenChat && (newMessage?.direction === "inbound" || !newMessage?.from_me);
+          const unread = Number(current.unread_count || 0);
+          next[idx] = {
+            ...current,
+            last_message: preview,
+            updated_at: nextUpdatedAt,
+            unread_count: shouldBumpUnread ? unread + 1 : unread,
+          };
+          return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
+        });
+      }
+
       const run = () => refreshConversations(activeAccount);
       if (!isOpenChat) {
         run();
@@ -411,6 +481,7 @@ export default function MobileInboxPage({ onLogout }) {
 
   const handleSelectConversation = async (conv) => {
     setSelectedConversation(conv);
+    navigate(`/discussions/${conv.id}`);
     if (conv?.unread_count) {
       optimisticallyMarkRead(conv.id);
       markConversationRead(conv.id).catch(() => refreshConversations(activeAccount));
@@ -419,6 +490,7 @@ export default function MobileInboxPage({ onLogout }) {
 
   const handleBackToList = () => {
     setSelectedConversation(null);
+    navigate(MOBILE_PATH_BY_MODE.conversations);
   };
 
   const handleLogout = () => {
@@ -427,8 +499,7 @@ export default function MobileInboxPage({ onLogout }) {
   };
 
   const handleConnectedDevices = () => {
-    // Afficher les informations du compte actif comme "appareils connectés"
-    setActiveTab("connected-devices");
+    navigate(MOBILE_PATH_BY_MODE.connectedDevices);
   };
 
   const handleImportant = () => {
@@ -456,12 +527,12 @@ export default function MobileInboxPage({ onLogout }) {
   };
 
   const handleSettings = () => {
-    setActiveTab("settings");
+    navigate(MOBILE_PATH_BY_MODE.settings);
   };
 
   const handleShowContact = (contact) => {
     setSelectedContactFromChat(contact);
-    setActiveTab("contacts");
+    navigate(MOBILE_PATH_BY_MODE.contacts);
   };
 
   const handleBotSettingsUpdated = (updated) => {
@@ -474,120 +545,230 @@ export default function MobileInboxPage({ onLogout }) {
     );
   };
 
-  // Si une conversation est sélectionnée, afficher le chat en plein écran
-  if (selectedConversation) {
+  useEffect(() => {
+    if (!conversationId) {
+      setSelectedConversation(null);
+      return;
+    }
+    const fromList = conversations.find((c) => String(c.id) === String(conversationId));
+    if (fromList) {
+      setSelectedConversation(fromList);
+    }
+  }, [conversationId, conversations]);
+
+  useEffect(() => {
+    if (navMode) return;
+    if (isSettingsSubpage) return;
+    if (location.pathname.startsWith("/discussions/")) return;
+    navigate(MOBILE_PATH_BY_MODE.conversations, { replace: true });
+  }, [navMode, isSettingsSubpage, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (navMode !== "axelia") return;
+    if (canAccessAxelia) return;
+    navigate(MOBILE_PATH_BY_MODE.conversations, { replace: true });
+  }, [navMode, canAccessAxelia, navigate]);
+
+  const settingsCategories = useMemo(
+    () => [
+      {
+        icon: <FiUser />,
+        title: "Compte",
+        subtitle: "Notifications de sécurité, changer de numéro",
+        onClick: () => navigate("/parametres/compte"),
+      },
+      {
+        icon: <FiMessageSquare />,
+        title: "Discussions",
+        subtitle: "Thèmes, fonds d'écran, historique des discussions",
+        onClick: () => navigate("/parametres/discussions"),
+      },
+      {
+        icon: <FiBell />,
+        title: "Notifications",
+        subtitle: "Sonneries des messages, groupes et appels",
+        onClick: () => navigate("/parametres/notifications"),
+      },
+      {
+        icon: <FiGlobe />,
+        title: "Langue de l'application",
+        subtitle: "Français (langue de l'appareil)",
+        onClick: () => navigate("/parametres/langue"),
+      },
+      {
+        icon: <FiUsers />,
+        title: "Inviter un contact",
+        onClick: () => navigate("/parametres/inviter"),
+      },
+      {
+        icon: <FiSettings />,
+        title: "Mises à jour de l'application",
+        onClick: () => navigate("/parametres/mises-a-jour"),
+      },
+      ...(typeof onLogout === "function"
+        ? [
+            {
+              icon: <FiLogOut />,
+              title: "Se déconnecter",
+              subtitle: "Quitter la session sur cet appareil",
+              onClick: handleLogout,
+            },
+          ]
+        : []),
+    ],
+    [navigate, onLogout]
+  );
+
+  const filteredSettingsCategories = useMemo(() => {
+    if (!settingsSearchTerm.trim()) return settingsCategories;
+    const term = settingsSearchTerm.toLowerCase();
+    return settingsCategories.filter(
+      (category) =>
+        category.title.toLowerCase().includes(term) ||
+        (category.subtitle && category.subtitle.toLowerCase().includes(term))
+    );
+  }, [settingsCategories, settingsSearchTerm]);
+
+  const renderContent = () => {
+    if (conversationId) {
+      if (selectedConversation) {
+        return (
+          <MobileChatWindow
+            conversation={selectedConversation}
+            onBack={handleBackToList}
+            onRefresh={() => refreshConversations(activeAccount)}
+            onShowContact={handleShowContact}
+            onBotSettingsUpdated={handleBotSettingsUpdated}
+            conversationInternallyBlocked={conversationInternallyBlocked}
+          />
+        );
+      }
+      return (
+        <div style={{ padding: "1rem", color: "#8696a0" }}>
+          Chargement de la conversation...
+        </div>
+      );
+    }
+
+    if (location.pathname === "/parametres") {
+      return (
+        <MobileSettingsHome
+          onBack={() => navigate(MOBILE_PATH_BY_MODE.conversations)}
+          searchTerm={settingsSearchTerm}
+          onSearchChange={setSettingsSearchTerm}
+          categories={filteredSettingsCategories}
+        />
+      );
+    }
+    if (location.pathname === "/parametres/compte") {
+      return <MobileAccountSettings onBack={() => navigate("/parametres")} />;
+    }
+    if (location.pathname === "/parametres/discussions") {
+      return <MobileChatSettings onBack={() => navigate("/parametres")} />;
+    }
+    if (location.pathname === "/parametres/notifications") {
+      return <MobileNotificationSettingsPage onBack={() => navigate("/parametres")} />;
+    }
+    if (location.pathname === "/parametres/langue") {
+      return <MobileLanguageSettings onBack={() => navigate("/parametres")} />;
+    }
+    if (location.pathname === "/parametres/inviter") {
+      return <MobileInviteUser onBack={() => navigate("/parametres")} />;
+    }
+    if (location.pathname === "/parametres/mises-a-jour") {
+      return <MobileAppUpdates onBack={() => navigate("/parametres")} />;
+    }
+    if (location.pathname === MOBILE_PATH_BY_MODE.connectedDevices) {
+      return (
+        <MobileConnectedDevices
+          accounts={accounts}
+          activeAccount={activeAccount}
+          onBack={() => navigate(MOBILE_PATH_BY_MODE.conversations)}
+        />
+      );
+    }
+
+    if (navMode === "contacts") {
+      return (
+        <>
+          <MobileContactsPanel
+            contacts={contacts}
+            activeAccount={activeAccount}
+            onRefresh={loadContacts}
+            initialContact={selectedContactFromChat}
+            metaBlockedNormalizedIds={mergedBlockedWaIds}
+            canModerateWaAny={canModerateWaAny}
+            metaBlockBusyId={metaBlockBusyId}
+            onMetaBlockOpen={(contact, action) => setMetaBlockModal({ contact, action })}
+            onContactsSearchQuery={setContactsListQ}
+          />
+          <MetaBlockAccountModal
+            open={Boolean(metaBlockModal)}
+            onClose={() => !metaBlockBusyId && setMetaBlockModal(null)}
+            action={metaBlockModal?.action}
+            accounts={metaBlockModalAccounts}
+            busy={Boolean(metaBlockBusyId && metaBlockModal?.contact?.id === metaBlockBusyId)}
+            onConfirm={handleMetaBlockModalConfirm}
+          />
+        </>
+      );
+    }
+
+    if (navMode === "whatsapp") {
+      return <MobileWhatsAppPanel accounts={accounts} activeAccount={activeAccount} />;
+    }
+
+    if (navMode === "axelia") {
+      if (!canAccessAxelia) return null;
+      return (
+        <AxeliaChat
+          accounts={accounts}
+          initialAccountId={activeAccount}
+          profile={profile}
+          hasPermission={hasPermission}
+        />
+      );
+    }
+
+    if (navMode === "team") {
+      return <MobileTeamPanel onBack={() => navigate(MOBILE_PATH_BY_MODE.conversations)} />;
+    }
+
     return (
-      <MobileChatWindow
-        conversation={selectedConversation}
-        onBack={handleBackToList}
-        onRefresh={() => refreshConversations(activeAccount)}
-        onShowContact={handleShowContact}
-        onBotSettingsUpdated={handleBotSettingsUpdated}
-        conversationInternallyBlocked={conversationInternallyBlocked}
+      <MobileConversationsList
+        conversations={conversations}
+        accounts={accounts}
+        activeAccount={activeAccount}
+        onSelectAccount={setActiveAccount}
+        onSelectConversation={handleSelectConversation}
+        onConnectedDevices={handleConnectedDevices}
+        onImportant={handleImportant}
+        onMarkAllRead={handleMarkAllRead}
+        onSettings={handleSettings}
+        hasMore={hasMoreConversations}
+        loadingMore={loadingMoreConversations}
+        onLoadMore={loadMoreConversations}
       />
     );
-  }
-
-  // Rendu du contenu selon l'onglet actif
-  const renderContent = () => {
-    switch (activeTab) {
-      case "conversations":
-        return (
-          <MobileConversationsList
-            conversations={conversations}
-            accounts={accounts}
-            activeAccount={activeAccount}
-            onSelectAccount={setActiveAccount}
-            onSelectConversation={handleSelectConversation}
-            onConnectedDevices={handleConnectedDevices}
-            onImportant={handleImportant}
-            onMarkAllRead={handleMarkAllRead}
-            onSettings={handleSettings}
-            hasMore={hasMoreConversations}
-            loadingMore={loadingMoreConversations}
-            onLoadMore={loadMoreConversations}
-          />
-        );
-      
-      case "contacts":
-        return (
-          <>
-            <MobileContactsPanel
-              contacts={contacts}
-              activeAccount={activeAccount}
-              onRefresh={loadContacts}
-              initialContact={selectedContactFromChat}
-              metaBlockedNormalizedIds={mergedBlockedWaIds}
-              canModerateWaAny={canModerateWaAny}
-              metaBlockBusyId={metaBlockBusyId}
-              onMetaBlockOpen={(contact, action) => setMetaBlockModal({ contact, action })}
-              onContactsSearchQuery={setContactsListQ}
-            />
-            <MetaBlockAccountModal
-              open={Boolean(metaBlockModal)}
-              onClose={() => !metaBlockBusyId && setMetaBlockModal(null)}
-              action={metaBlockModal?.action}
-              accounts={metaBlockModalAccounts}
-              busy={Boolean(metaBlockBusyId && metaBlockModal?.contact?.id === metaBlockBusyId)}
-              onConfirm={handleMetaBlockModalConfirm}
-            />
-          </>
-        );
-      
-      case "whatsapp":
-        return (
-          <MobileWhatsAppPanel
-            accounts={accounts}
-            activeAccount={activeAccount}
-          />
-        );
-      
-      case "gemini":
-        return (
-          <MobileGeminiPanel
-            accounts={accounts}
-            activeAccount={activeAccount}
-          />
-        );
-      
-      case "settings":
-        return (
-          <MobileSettings onBack={() => setActiveTab("conversations")} onLogout={handleLogout} />
-        );
-      
-      case "connected-devices":
-        return (
-          <MobileConnectedDevices
-            accounts={accounts}
-            activeAccount={activeAccount}
-            onBack={() => setActiveTab("conversations")}
-          />
-        );
-      
-      case "team":
-        return (
-          <MobileTeamPanel
-            onBack={() => setActiveTab("conversations")}
-          />
-        );
-      
-      default:
-        return null;
-    }
   };
+
+  const showBottomNav = !conversationId;
+  const contentClassName = `mobile-inbox__content${
+    navMode === "axelia" ? " mobile-inbox__content--axelia" : ""
+  }`;
 
   return (
     <div className="mobile-inbox">
       {/* Contenu principal */}
-      <div className="mobile-inbox__content">
+      <div className={contentClassName}>
         {renderContent()}
       </div>
 
       {/* Navigation en bas (comme WhatsApp) */}
-      <nav className="mobile-inbox__nav">
+      {showBottomNav && <nav className="mobile-inbox__nav">
         <button
-          className={`mobile-inbox__nav-btn ${activeTab === "conversations" ? "active" : ""}`}
-          onClick={() => setActiveTab("conversations")}
+          className={`mobile-inbox__nav-btn ${navMode === "conversations" ? "active" : ""}`}
+          onClick={() => navigate(MOBILE_PATH_BY_MODE.conversations)}
         >
           <FiMessageSquare />
           <span>Discussions</span>
@@ -601,29 +782,31 @@ export default function MobileInboxPage({ onLogout }) {
         </button>
 
         <button
-          className={`mobile-inbox__nav-btn ${activeTab === "contacts" ? "active" : ""}`}
-          onClick={() => setActiveTab("contacts")}
+          className={`mobile-inbox__nav-btn ${navMode === "contacts" ? "active" : ""}`}
+          onClick={() => navigate(MOBILE_PATH_BY_MODE.contacts)}
         >
           <FiUsers />
           <span>Contacts</span>
         </button>
 
-        <button
-          className={`mobile-inbox__nav-btn ${activeTab === "gemini" ? "active" : ""}`}
-          onClick={() => setActiveTab("gemini")}
-        >
-          <FiMessageCircle />
-          <span>Assistant</span>
-        </button>
+        {canAccessAxelia && (
+          <button
+            className={`mobile-inbox__nav-btn ${navMode === "axelia" ? "active" : ""}`}
+            onClick={() => navigate(MOBILE_PATH_BY_MODE.axelia)}
+          >
+            <FiMessageCircle />
+            <span>Axelia</span>
+          </button>
+        )}
 
         <button
-          className={`mobile-inbox__nav-btn ${activeTab === "team" ? "active" : ""}`}
-          onClick={() => setActiveTab("team")}
+          className={`mobile-inbox__nav-btn ${navMode === "team" ? "active" : ""}`}
+          onClick={() => navigate(MOBILE_PATH_BY_MODE.team)}
         >
           <FiUserCheck />
           <span>Équipe</span>
         </button>
-      </nav>
+      </nav>}
     </div>
   );
 }

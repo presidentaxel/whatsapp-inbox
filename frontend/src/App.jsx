@@ -133,7 +133,36 @@ function MobileApp() {
   return (
     <Suspense fallback={fallback}>
       <AuthProvider>
-        <MobileInboxPage onLogout={handleLogout} />
+        <BrowserRouter
+          future={{
+            v7_startTransition: true,
+            v7_relativeSplatPath: true,
+          }}
+        >
+          <Routes>
+            <Route path="/" element={<Navigate to="/discussions" replace />} />
+            <Route path="/404" element={<HttpErrorPage code={404} />} />
+            <Route path="/500" element={<HttpErrorPage code={500} />} />
+            <Route path="/502" element={<HttpErrorPage code={502} />} />
+            <Route path="/503" element={<HttpErrorPage code={503} />} />
+            <Route path="/discussions" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/discussions/:conversationId" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/contacts" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/assistant" element={<Navigate to="/axelia" replace />} />
+            <Route path="/axelia" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/equipe" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/whatsapp-business" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/parametres" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/parametres/compte" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/parametres/discussions" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/parametres/notifications" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/parametres/langue" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/parametres/inviter" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/parametres/mises-a-jour" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="/appareils-connectes" element={<MobileInboxPage onLogout={handleLogout} />} />
+            <Route path="*" element={<HttpErrorPage code={404} />} />
+          </Routes>
+        </BrowserRouter>
       </AuthProvider>
     </Suspense>
   );

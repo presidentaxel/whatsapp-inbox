@@ -145,31 +145,51 @@
   }
 
   /* Boutons en dehors de la bulle pour mobile */
-  .mobile-chat__messages .bubble-buttons-wrapper {
-    max-width: calc(100vw - 80px);
-    gap: 0.5rem;
-    flex-direction: row;
-    flex-wrap: wrap;
+  .mobile-chat__messages .bubble .bubble__buttons {
+    margin: 0.5rem -0.5rem -0.125rem;
+    padding: 0.125rem 0.5rem 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.14);
   }
 
   .mobile-chat__messages .bubble-media__buttons-container {
-    flex-direction: row;
-    flex-wrap: wrap;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    width: 100%;
+    margin-top: 0;
   }
 
   .mobile-chat__messages .bubble-media__button {
-    border-radius: 18px;
-    padding: 0.625rem 1rem;
-    font-size: 0.875rem;
-    /* Prendre 50% du conteneur, ou s'adapter au texte si plus grand */
-    flex: 1 1 auto;
+    width: 100%;
+    max-width: none;
     min-width: 0;
-    max-width: calc(50% - 4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+    padding: 0.72rem 0.25rem 0.68rem;
+    background: transparent;
+    font-size: 0.92rem;
+    line-height: 1.25;
   }
 
-  .mobile-chat__messages .bubble-media__buttons-container:has(.bubble-media__button:only-child) .bubble-media__button {
-    flex: 1 1 auto;
+  .mobile-chat__messages .bubble-media__button:last-child {
+    border-bottom: none;
+  }
+
+  .mobile-chat__messages .bubble-media__button-icon {
+    font-size: 0.92rem;
+    opacity: 0.9;
+  }
+
+  .mobile-chat__messages .bubble-media__button-text {
+    display: block;
+    text-align: center;
     max-width: 100%;
+    overflow-wrap: anywhere;
   }
 
   .mobile-chat__messages .interactive-bubble__footer {

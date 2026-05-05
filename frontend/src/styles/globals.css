@@ -1150,6 +1150,8 @@ body {
   flex: 1;
   display: flex;
   min-height: 0;
+  /* Permet au panneau chat de se rétrécir sous sa largeur intrinsèque (flex) */
+  min-width: 0;
 }
 
 .workspace-main.contacts-mode {
@@ -1562,12 +1564,18 @@ body {
 
 .sidebar {
   border-top-left-radius: 10px;
-  width: 360px;
+  /* Largeur fluide : PC étroits / tablettes en mode bureau (évite 360px fixe qui mange le chat) */
+  flex: 0 0 clamp(220px, 32vw, 380px);
+  width: clamp(220px, 32vw, 380px);
+  max-width: 380px;
+  container-type: inline-size;
+  container-name: discussion-sidebar;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border-light);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
 }
 
 .account-selector {
@@ -1684,13 +1692,29 @@ body {
 
 .conversation-filters button {
   flex: 1;
+  min-width: 0;
   border: none;
   border-radius: 20px;
-  padding: 6px 0;
+  padding: 6px 4px;
   background: var(--bg-hover);
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
+  font-size: clamp(0.68rem, 0.2vw + 0.62rem, 0.82rem);
+}
+
+@container discussion-sidebar (max-width: 352px) {
+  .conversation-filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .conversation-filters button {
+    flex: unset;
+    width: 100%;
+    padding: 7px 5px;
+  }
 }
 
 .conversation-filters button:hover {
@@ -1849,12 +1873,13 @@ body {
 }
 
 .chat-window {
-  flex: 1;
+  flex: 1 1 0%;
   display: flex;
   flex-direction: column;
   background: var(--chat-surface);
   background-blend-mode: overlay;
   min-height: 0;
+  min-width: 0;
   position: relative;
 }
 
@@ -1903,6 +1928,13 @@ body {
   border-bottom: 1px solid var(--border-light);
   position: relative;
   z-index: 2;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.chat-header > div:first-child {
+  flex: 1 1 160px;
+  min-width: 0;
 }
 
 .chat-bot-toggle {
@@ -2025,7 +2057,9 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  max-width: min(520px, 62vw);
+  flex: 1 1 220px;
+  max-width: min(520px, 100%);
+  min-width: 0;
   padding: 6px 10px;
 }
 
@@ -2145,11 +2179,17 @@ body {
 .chat-title {
   font-size: 1.1rem;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-subtitle {
   font-size: 0.85rem;
   color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-actions button {
@@ -2170,6 +2210,8 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .chat-actions button:hover {
@@ -4382,6 +4424,10 @@ body {
 }
 
 .settings-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
   padding: 10px 20px;
   border-radius: 8px;
   border: none;
@@ -4400,6 +4446,27 @@ body {
 .settings-btn--danger:hover {
   background: rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.3);
+}
+
+.settings-btn--subtle {
+  padding: 8px 14px;
+  font-size: 13px;
+}
+
+.settings-btn--secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border: 1px solid var(--border-light);
+}
+
+.settings-btn--secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-color);
+}
+
+.settings-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Settings Cards - Legacy support, but new design uses settings-content__section */
@@ -5803,9 +5870,11 @@ body {
 
 /* Broadcast Group Chat */
 .broadcast-group-chat {
-  flex: 1;
+  flex: 1 1 0%;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  min-width: 0;
   background: var(--chat-surface);
 }
 

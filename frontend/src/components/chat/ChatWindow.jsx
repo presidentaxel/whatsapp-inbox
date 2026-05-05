@@ -45,6 +45,7 @@ export default function ChatWindow({
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [oldestMessageTimestamp, setOldestMessageTimestamp] = useState(null);
   const [replyingToMessage, setReplyingToMessage] = useState(null);
+  const [isRealtimeSubscribed, setIsRealtimeSubscribed] = useState(false);
   const [playgroundFlows, setPlaygroundFlows] = useState([]);
   const [playgroundFlowsLoading, setPlaygroundFlowsLoading] = useState(false);
   const [playgroundFlowPending, setPlaygroundFlowPending] = useState(false);
@@ -319,20 +320,30 @@ export default function ChatWindow({
     }
     let cancelled = false;
     let timeoutId;
+    // Safety net: même si le canal est "SUBSCRIBED", des events peuvent ne pas arriver
+    // (RLS/publication/filtre). On garde donc un polling court.
+    const pollDelay = isRealtimeSubscribed ? 6000 : 2500;
     const poll = async () => {
       await refreshMessages();
       if (!cancelled) {
-        timeoutId = setTimeout(poll, 45000);
+        timeoutId = setTimeout(poll, pollDelay);
       }
     };
-    timeoutId = setTimeout(poll, 45000);
+    // Si le realtime est indisponible, lancer rapidement un refresh initial.
+    timeoutId = setTimeout(poll, isRealtimeSubscribed ? pollDelay : 250);
     return () => {
       cancelled = true;
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
     };
-  }, [conversationId, refreshMessages, isWindowActive, conversationInternallyBlocked]);
+  }, [
+    conversationId,
+    refreshMessages,
+    isWindowActive,
+    conversationInternallyBlocked,
+    isRealtimeSubscribed,
+  ]);
 
   // Détecter si l'autre personne est en train d'écrire
   // Basé sur le timing des messages entrants récents
@@ -388,6 +399,7 @@ export default function ChatWindow({
 
   useEffect(() => {
     if (!conversationId) {
+      setIsRealtimeSubscribed(false);
       return undefined;
     }
 
@@ -478,9 +490,22 @@ export default function ChatWindow({
           });
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          setIsRealtimeSubscribed(true);
+          return;
+        }
+        if (
+          status === "TIMED_OUT" ||
+          status === "CHANNEL_ERROR" ||
+          status === "CLOSED"
+        ) {
+          setIsRealtimeSubscribed(false);
+        }
+      });
 
     return () => {
+      setIsRealtimeSubscribed(false);
       supabaseClient.removeChannel(channel);
     };
   }, [conversationId, conversationInternallyBlocked, refreshMessages]);

@@ -1,9 +1,3 @@
-## Prérequis (Windows, machine neuve)
-```bash
-python --version
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-```
-
 ## Lancer l'app
 ```bash
 cd backend
@@ -25,7 +19,7 @@ docker compose build
 docker compose up
 ```
 
-## Push Online
+## Push Github
 ```bash
 git add .
 git commit -m "****"

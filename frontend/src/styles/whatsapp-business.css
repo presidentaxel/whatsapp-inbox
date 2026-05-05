@@ -1,8 +1,13 @@
 /* ============================================================================
    WhatsApp Business Panel Styles
+   (scroll : hauteur du workspace, pas du viewport brut — cohérence avec Paramètres)
    ============================================================================ */
 
 .whatsapp-business-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 1.5rem;
   width: 100%;
   max-width: 100%;
@@ -10,10 +15,12 @@
   color: var(--text-primary);
   box-sizing: border-box;
   background: var(--bg-secondary);
+  overflow: hidden;
 }
 
 .panel-header {
   margin-bottom: 2rem;
+  flex-shrink: 0;
 }
 
 .panel-header h2 {
@@ -33,6 +40,7 @@
   margin-bottom: 1.5rem;
   overflow-x: auto;
   padding-bottom: 1rem;
+  flex-shrink: 0;
 }
 
 .panel-tabs button {
@@ -56,22 +64,27 @@
 }
 
 .panel-tabs button.active {
-  color: #fff;
-  background: #00a884;
+  color: #0b141a;
+  background: #25d366;
+  font-weight: 600;
+}
+
+.panel-error,
+.panel-loading {
+  flex-shrink: 0;
 }
 
 .panel-content {
-  background: var(--bg-hover);
+  background: var(--bg-primary);
   border-radius: 12px;
   padding: 1.5rem;
-  min-height: 600px;
-  max-height: calc(100vh - 200px);
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   border: 1px solid var(--border-light);
-  /* Permettre le scroll vertical */
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-color: rgba(37, 211, 102, 0.45) rgba(255, 255, 255, 0.04);
 }
 
 .panel-content::-webkit-scrollbar {
@@ -104,8 +117,9 @@
 }
 
 .panel-error {
-  background: #ff4444;
-  color: white;
+  background: rgba(241, 90, 90, 0.15);
+  color: #f15a5a;
+  border: 1px solid rgba(241, 90, 90, 0.4);
   padding: 1rem;
   border-radius: 8px;
   margin-bottom: 1rem;
@@ -130,8 +144,8 @@
 }
 
 .info-item {
-  background: var(--bg-hover);
-  border: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
   padding: 1rem;
   border-radius: 8px;
 }
@@ -165,8 +179,8 @@
 
 .quality-badge.green,
 .status-badge.approved {
-  background: #00a884;
-  color: white;
+  background: #25d366;
+  color: #0b141a;
 }
 
 .quality-badge.yellow {
@@ -175,8 +189,8 @@
 }
 
 .quality-badge.red {
-  background: #ff4444;
-  color: white;
+  background: rgba(241, 90, 90, 0.22);
+  color: #f15a5a;
 }
 
 .quality-badge.unknown,
@@ -247,7 +261,7 @@
 .form-group textarea:focus,
 .form-group select:focus {
   outline: none;
-  border-color: #00a884;
+  border-color: #25d366;
   background: var(--bg-secondary);
 }
 
@@ -277,16 +291,17 @@
 }
 
 .btn-primary {
-  background: #00a884;
-  color: white;
+  background: #25d366;
+  color: #0b141a;
 }
 
 .btn-primary:hover {
-  background: #008c6c;
+  background: #20ba5a;
 }
 
 .btn-primary:disabled {
-  background: #8696a0;
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-muted);
   cursor: not-allowed;
 }
 
@@ -302,13 +317,14 @@
 
 .btn-danger-small {
   padding: 0.5rem 1rem;
-  background: #ff4444;
-  color: white;
+  background: rgba(241, 90, 90, 0.2);
+  color: #f15a5a;
+  border: 1px solid rgba(241, 90, 90, 0.45);
   font-size: 0.875rem;
 }
 
 .btn-danger-small:hover {
-  background: #cc3333;
+  background: rgba(241, 90, 90, 0.3);
 }
 
 /* ============================================================================
@@ -342,7 +358,7 @@
 
 /* Template Card */
 .template-card {
-  background: var(--bg-hover);
+  background: var(--bg-secondary);
   border-radius: 12px;
   border: 1px solid var(--border-color);
   overflow: hidden;
@@ -352,8 +368,8 @@
 }
 
 .template-card:hover {
-  border-color: #00a884;
-  box-shadow: 0 4px 12px rgba(0, 168, 132, 0.15);
+  border-color: #25d366;
+  box-shadow: 0 4px 14px rgba(37, 211, 102, 0.12);
 }
 
 .template-card-header {
@@ -402,8 +418,8 @@
 }
 
 .template-status-badge.status-approved {
-  background: rgba(0, 168, 132, 0.2);
-  color: #00a884;
+  background: rgba(37, 211, 102, 0.2);
+  color: #25d366;
 }
 
 .template-status-badge.status-pending {
@@ -412,8 +428,8 @@
 }
 
 .template-status-badge.status-rejected {
-  background: rgba(255, 68, 68, 0.2);
-  color: #ff4444;
+  background: rgba(241, 90, 90, 0.18);
+  color: #f15a5a;
 }
 
 .template-category-badge {
@@ -428,10 +444,10 @@
 
 .btn-delete-template {
   padding: 0.5rem 1rem;
-  background: rgba(255, 68, 68, 0.1);
-  border: 1px solid rgba(255, 68, 68, 0.3);
+  background: rgba(241, 90, 90, 0.12);
+  border: 1px solid rgba(241, 90, 90, 0.4);
   border-radius: 6px;
-  color: #ff4444;
+  color: #f15a5a;
   cursor: pointer;
   font-size: 0.85rem;
   font-weight: 500;
@@ -440,8 +456,8 @@
 }
 
 .btn-delete-template:hover {
-  background: rgba(255, 68, 68, 0.2);
-  border-color: #ff4444;
+  background: rgba(241, 90, 90, 0.22);
+  border-color: #f15a5a;
 }
 
 .btn-delete-template:disabled {
@@ -452,7 +468,7 @@
 /* Template Preview (WhatsApp-like bubble) */
 .template-preview {
   padding: 1.25rem;
-  background: #0b141a;
+  background: var(--bg-primary);
   display: flex;
   justify-content: flex-start;
   min-height: 150px;
@@ -463,16 +479,26 @@
   border-radius: 8px;
   padding: 0;
   max-width: 85%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   overflow: hidden;
+}
+
+[data-theme="light"] .template-preview-bubble {
+  background: #dcf8c6;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .template-preview-header {
   padding: 0.75rem 1rem 0.5rem;
   font-weight: 600;
-  color: #e9edef;
+  color: var(--text-primary);
   font-size: 0.95rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--border-color);
+}
+
+[data-theme="dark"] .template-preview-header {
+  color: #e9edef;
+  border-bottom-color: rgba(255, 255, 255, 0.1);
 }
 
 .template-preview-media {
@@ -526,11 +552,15 @@
 
 .template-preview-body {
   padding: 0.75rem 1rem;
-  color: #e9edef;
+  color: var(--text-primary);
   line-height: 1.5;
   font-size: 0.9rem;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+[data-theme="dark"] .template-preview-body {
+  color: #e9edef;
 }
 
 .template-preview-footer {
@@ -586,7 +616,7 @@
 
 /* Template Form */
 .template-form {
-  background: var(--bg-hover);
+  background: var(--bg-secondary);
   padding: 1.5rem;
   border-radius: 12px;
   margin-bottom: 1.5rem;
@@ -601,7 +631,7 @@
 
 /* Generic Card */
 .card {
-  background: var(--bg-hover);
+  background: var(--bg-secondary);
   border-radius: 12px;
   padding: 1.5rem;
   margin-bottom: 1rem;
@@ -654,7 +684,7 @@
 }
 
 .media-upload-zone label.uploading {
-  color: #00a884;
+  color: #25d366;
   cursor: wait;
 }
 
@@ -693,7 +723,7 @@
   border-radius: 6px;
   font-family: 'Courier New', monospace;
   font-size: 0.875rem;
-  color: #00a884;
+  color: #25d366;
   user-select: all;
 }
 
@@ -775,9 +805,10 @@
 }
 
 .mode-selector button.active {
-  background: #00a884;
-  color: white;
-  border-color: #00a884;
+  background: #25d366;
+  color: #0b141a;
+  border-color: #25d366;
+  font-weight: 600;
 }
 
 .media-upload,
@@ -813,7 +844,7 @@
 
 .small-input:focus {
   outline: none;
-  border-color: #00a884;
+  border-color: #25d366;
   background: var(--bg-secondary);
 }
 
@@ -841,10 +872,10 @@
 
 .btn-remove {
   padding: 0.5rem;
-  background: #ff4444;
-  border: none;
+  background: rgba(241, 90, 90, 0.25);
+  border: 1px solid rgba(241, 90, 90, 0.5);
   border-radius: 6px;
-  color: white;
+  color: #f15a5a;
   cursor: pointer;
   font-size: 1.25rem;
   line-height: 1;
@@ -856,16 +887,16 @@
 }
 
 .btn-remove:hover {
-  background: #cc3333;
+  background: rgba(241, 90, 90, 0.35);
 }
 
 .btn-add,
 .btn-add-small {
   padding: 0.5rem 1rem;
   background: var(--bg-hover);
-  border: 1px solid #00a884;
+  border: 1px solid #25d366;
   border-radius: 6px;
-  color: #00a884;
+  color: #25d366;
   cursor: pointer;
   font-size: 0.875rem;
   width: 100%;
@@ -874,8 +905,8 @@
 
 .btn-add:hover,
 .btn-add-small:hover {
-  background: #00a884;
-  color: white;
+  background: #25d366;
+  color: #0b141a;
 }
 
 .btn-add-small {
@@ -929,7 +960,7 @@
 .input-area input:focus {
   outline: none;
   background: var(--bg-secondary);
-  border-color: #00a884;
+  border-color: #25d366;
 }
 
 .input-area input:disabled {
@@ -939,10 +970,10 @@
 
 .input-area button[aria-label="Envoyer"] {
   padding: 0.75rem 1.5rem;
-  background: #00a884;
+  background: #25d366;
   border: none;
   border-radius: 8px;
-  color: white;
+  color: #0b141a;
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -952,7 +983,7 @@
 }
 
 .input-area button[aria-label="Envoyer"]:hover:not(:disabled) {
-  background: #008c6c;
+  background: #20ba5a;
 }
 
 .input-area button[aria-label="Envoyer"]:disabled {
@@ -968,7 +999,6 @@
 
   .panel-content {
     padding: 1rem;
-    max-height: calc(100vh - 150px);
   }
 
   .info-grid {

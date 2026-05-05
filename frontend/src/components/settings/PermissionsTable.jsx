@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { 
   getUsersWithAccess, 
   updateUserAccountAccess, 
@@ -24,7 +24,9 @@ export default function PermissionsTable({
   const [roles, setRoles] = useState([]);
   const [accounts, setAccounts] = useState([]); // Comptes chargés pour la table des permissions (tous les comptes)
   const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [savingKey, setSavingKey] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [expandedUsers, setExpandedUsers] = useState({});
 
   // Normaliser le rôle en minuscules pour la comparaison
   const normalizedRole = currentUserRole?.toLowerCase() || "";
@@ -52,7 +54,13 @@ export default function PermissionsTable({
       
       // Charger les utilisateurs et leurs accès
       const usersRes = await getUsersWithAccess();
-      setUsers(usersRes.data || []);
+      const loadedUsers = usersRes.data || [];
+      setUsers(loadedUsers);
+      setExpandedUsers((prev) => {
+        if (Object.keys(prev).length) return prev;
+        const firstUserId = loadedUsers[0]?.user_id;
+        return firstUserId ? { [firstUserId]: true } : {};
+      });
     } catch (error) {
       console.error("Erreur lors du chargement des données:", error);
     } finally {
@@ -102,7 +110,8 @@ export default function PermissionsTable({
     const currentLevel = getAccessLevel(userId, accountId);
     if (newLevel === currentLevel) return; // Pas de changement, pas besoin de sauvegarder
 
-    setSaving(true);
+    const key = `access:${userId}:${accountId}`;
+    setSavingKey(key);
     try {
       await updateUserAccountAccess(userId, accountId, newLevel);
       await loadUsers(); // Recharger seulement les utilisateurs (les comptes ne changent pas)
@@ -117,7 +126,7 @@ export default function PermissionsTable({
       // Optionnel : recharger pour restaurer l'état précédent
       await loadUsers();
     } finally {
-      setSaving(false);
+      setSavingKey(null);
     }
   };
 
@@ -136,7 +145,8 @@ export default function PermissionsTable({
       return;
     }
 
-    setSaving(true);
+    const key = `role:${userId}`;
+    setSavingKey(key);
     try {
       // Assigner le nouveau rôle (sans account_id pour qu'il soit global)
       await setUserRoles(userId, [{ role_id: newRole.id, account_id: null }]);
@@ -151,7 +161,7 @@ export default function PermissionsTable({
       alert("Erreur lors de la sauvegarde du rôle");
       await loadUsers();
     } finally {
-      setSaving(false);
+      setSavingKey(null);
     }
   };
 
@@ -186,6 +196,20 @@ export default function PermissionsTable({
     }
   };
 
+  const visibleUsers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return users;
+    return users.filter((user) => {
+      const email = (user.email || "").toLowerCase();
+      const role = (user.role_name || user.role_slug || "").toLowerCase();
+      return email.includes(q) || role.includes(q);
+    });
+  }, [users, searchQuery]);
+
+  const toggleUserExpanded = (userId) => {
+    setExpandedUsers((prev) => ({ ...prev, [userId]: !prev[userId] }));
+  };
+
   if (!canView) {
     return (
       <div className="permissions-table-container">
@@ -206,122 +230,123 @@ export default function PermissionsTable({
     <div className="permissions-table-container">
       <div className="permissions-table-header">
         <p className="permissions-table-description">
-          Gérer les accès des utilisateurs par compte WhatsApp. Chaque cellule représente l'accès
-          d'un utilisateur à un compte.
+          Gérer les accès des utilisateurs par compte WhatsApp.
         </p>
         {canEdit && (
           <p className="permissions-table-hint">
-            Sélectionnez une option pour modifier l'accès automatiquement.
+            Modifications sauvegardées automatiquement.
           </p>
         )}
       </div>
 
-      <div className="permissions-table-wrapper">
-        <table className="permissions-table">
-          <thead>
-            <tr>
-              <th className="permissions-table-user-col">Utilisateur</th>
-              <th className="permissions-table-role-col">Rôle</th>
-              {accounts.map((account) => (
-                <th key={account.id} className="permissions-table-account-col">
-                  <div className="permissions-table-account-header">
-                    <strong>{account.name}</strong>
-                    <small>{account.phone_number || "Pas de numéro"}</small>
-                  </div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => (
-              <tr key={user.user_id}>
-                <td className="permissions-table-user-cell">
-                  <div className="permissions-table-user-info">
-                    <strong>{user.email || "Utilisateur"}</strong>
-                  </div>
-                </td>
-                <td className="permissions-table-role-cell">
-                  {canEdit ? (
-                    <select
-                      value={user.role_slug || ""}
-                      onChange={(e) => handleRoleChange(user.user_id, e.target.value)}
-                      className="permissions-table-select"
-                      disabled={saving}
-                      style={{
-                        backgroundColor: getRoleColor(user.role_slug),
-                        color: "#fff",
-                        border: "none",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {roles.map((role) => (
-                        <option key={role.id} value={role.slug}>
-                          {role.name}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <div
-                      className="permissions-table-access-badge"
-                      style={{
-                        backgroundColor: getRoleColor(user.role_slug),
-                        color: "#fff",
-                      }}
-                    >
-                      {user.role_name || "Aucun rôle"}
-                    </div>
-                  )}
-                </td>
-                {accounts.map((account) => {
-                  const currentLevel = getAccessLevel(user.user_id, account.id);
+      <div className="permissions-users-toolbar">
+        <input
+          type="search"
+          className="permissions-users-search"
+          placeholder="Rechercher un utilisateur…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </div>
 
-                  return (
-                    <td
-                      key={account.id}
-                      className="permissions-table-access-cell"
-                      style={{
-                        cursor: canEdit ? "pointer" : "default",
-                      }}
-                    >
-                      {canEdit ? (
-                        <select
-                          value={currentLevel}
-                          onChange={(e) => handleAccessChange(user.user_id, account.id, e.target.value)}
-                          className="permissions-table-select"
-                          disabled={saving}
-                          style={{
-                            backgroundColor: getAccessColor(currentLevel),
-                            color: "#fff",
-                            border: "none",
-                            cursor: "pointer",
-                          }}
-                        >
-                          {ACCESS_LEVELS.map((level) => (
-                            <option key={level.value} value={level.value}>
-                              {level.label}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <div
-                          className="permissions-table-access-badge"
-                          style={{
-                            backgroundColor: getAccessColor(currentLevel),
-                            color: "#fff",
-                          }}
-                        >
-                          {getAccessLabel(currentLevel)}
+      <div className="permissions-users-list">
+        {visibleUsers.map((user) => {
+          const isExpanded = Boolean(expandedUsers[user.user_id]);
+          return (
+            <article key={user.user_id} className="permissions-user-card">
+              <button
+                type="button"
+                className="permissions-user-card__header"
+                onClick={() => toggleUserExpanded(user.user_id)}
+              >
+                <div className="permissions-user-card__identity">
+                  <strong>{user.email || "Utilisateur"}</strong>
+                  <small>{isExpanded ? "Masquer les comptes" : "Afficher les comptes"}</small>
+                </div>
+                <span className="permissions-user-card__chevron" aria-hidden="true">
+                  {isExpanded ? "−" : "+"}
+                </span>
+              </button>
+
+              <div className="permissions-user-card__role">
+                <span>Rôle global</span>
+                {canEdit ? (
+                  <select
+                    value={user.role_slug || ""}
+                    onChange={(e) => handleRoleChange(user.user_id, e.target.value)}
+                    className="permissions-table-select"
+                    disabled={savingKey === `role:${user.user_id}`}
+                    style={{
+                      backgroundColor: getRoleColor(user.role_slug),
+                      color: "#fff",
+                      border: "none",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {roles.map((role) => (
+                      <option key={role.id} value={role.slug}>
+                        {role.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div
+                    className="permissions-table-access-badge"
+                    style={{ backgroundColor: getRoleColor(user.role_slug), color: "#fff" }}
+                  >
+                    {user.role_name || "Aucun rôle"}
+                  </div>
+                )}
+              </div>
+
+              {isExpanded && (
+                <div className="permissions-user-card__accounts">
+                  {accounts.map((account) => {
+                    const currentLevel = getAccessLevel(user.user_id, account.id);
+                    const key = `access:${user.user_id}:${account.id}`;
+                    return (
+                      <div key={account.id} className="permissions-user-card__account-row">
+                        <div className="permissions-user-card__account-info">
+                          <strong>{account.name}</strong>
+                          <small>{account.phone_number || "Pas de numéro"}</small>
                         </div>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                        {canEdit ? (
+                          <select
+                            value={currentLevel}
+                            onChange={(e) => handleAccessChange(user.user_id, account.id, e.target.value)}
+                            className="permissions-table-select"
+                            disabled={savingKey === key}
+                            style={{
+                              backgroundColor: getAccessColor(currentLevel),
+                              color: "#fff",
+                              border: "none",
+                              cursor: "pointer",
+                            }}
+                          >
+                            {ACCESS_LEVELS.map((level) => (
+                              <option key={level.value} value={level.value}>
+                                {level.label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div
+                            className="permissions-table-access-badge"
+                            style={{ backgroundColor: getAccessColor(currentLevel), color: "#fff" }}
+                          >
+                            {getAccessLabel(currentLevel)}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </article>
+          );
+        })}
 
-        {users.length === 0 && (
+        {!visibleUsers.length && (
           <p className="permissions-table-empty">Aucun utilisateur trouvé.</p>
         )}
       </div>

@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # PostgreSQL direct (optionnel en dev, requis en prod - cf. main.py boot check).
     # Format: postgresql://user:password@host:port/dbname
     DATABASE_URL: str | None = None
+    # Limite typique du pooler Supabase *session* : ~15 clients par user → rester en dessous.
+    PG_POOL_MIN_SIZE: int = Field(default=1, ge=1, le=50)
+    PG_POOL_MAX_SIZE: int = Field(default=5, ge=1, le=100)
 
     # ─── WhatsApp ──────────────────────────────────────────────────────────────
     WHATSAPP_TOKEN: str | None = None

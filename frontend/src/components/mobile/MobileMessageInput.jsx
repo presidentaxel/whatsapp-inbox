@@ -612,7 +612,9 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
           onChange={handleTextChange}
           onKeyDown={handleKeyDown}
           spellCheck={discussionPrefs?.spellCheck ?? true}
-          lang="fr"
+          autoCorrect={discussionPrefs?.spellCheck ? "on" : "off"}
+          autoCapitalize={discussionPrefs?.spellCheck ? "sentences" : "off"}
+          lang="fr-FR"
           placeholder={
             discussionPrefs?.enterToSend
               ? "Message"

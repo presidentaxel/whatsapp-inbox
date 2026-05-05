@@ -21,6 +21,119 @@
   font-style: italic;
 }
 
+.permissions-users-toolbar {
+  margin-bottom: 16px;
+}
+
+.permissions-users-search {
+  width: 100%;
+  max-width: 420px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.permissions-users-search:focus {
+  outline: none;
+  border-color: var(--border-color);
+}
+
+.permissions-users-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.permissions-user-card {
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.permissions-user-card__header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+  border: none;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  padding: 14px 16px;
+  cursor: pointer;
+}
+
+.permissions-user-card__identity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.permissions-user-card__identity strong {
+  font-size: 14px;
+}
+
+.permissions-user-card__identity small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.permissions-user-card__chevron {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.permissions-user-card__role {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+.permissions-user-card__role > span {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.permissions-user-card__accounts {
+  border-top: 1px solid var(--border-light);
+}
+
+.permissions-user-card__account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.permissions-user-card__account-row + .permissions-user-card__account-row {
+  border-top: 1px solid var(--border-light);
+}
+
+.permissions-user-card__account-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.permissions-user-card__account-info strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.permissions-user-card__account-info small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .permissions-table-wrapper {
   overflow-x: auto;
   border: 1px solid var(--border-light);

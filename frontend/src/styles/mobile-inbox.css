@@ -18,6 +18,16 @@
   padding-bottom: env(safe-area-inset-bottom);
 }
 
+.mobile-inbox__content--axelia {
+  overflow: hidden;
+  padding-bottom: 0;
+}
+
+.mobile-inbox__content--axelia .axelia-page {
+  height: 100%;
+  min-height: 100%;
+}
+
 /* ============================================================================
    Navigation en bas (comme WhatsApp)
    ============================================================================ */
@@ -127,12 +137,18 @@
   transition: background 0.2s;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   width: 40px;
   height: 40px;
   min-width: 40px;
   min-height: 40px;
   flex-shrink: 0;
+  line-height: 0;
+}
+
+.icon-btn svg,
+.icon-btn-round svg {
+  display: block;
 }
 
 .icon-btn:active,
@@ -605,6 +621,11 @@
   min-height: 40px;
   flex-shrink: 0;
   transition: background 0.2s;
+  line-height: 0;
+}
+
+.mobile-chat__back svg {
+  display: block;
 }
 
 .mobile-chat__back:active {

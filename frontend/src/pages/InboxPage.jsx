@@ -46,6 +46,21 @@ import {
 /** Délai avant de rafraîchir la ligne de conversation dans la sidebar quand ce chat est ouvert (sync avec le fil realtime des messages). */
 const SIDEBAR_CHAT_SYNC_DEBOUNCE_MS = 220;
 
+const inboundPreviewFromMessage = (msg) => {
+  const explicit = (msg?.content_text || "").trim();
+  if (explicit) return explicit;
+  const t = (msg?.message_type || "").toLowerCase();
+  if (t === "image") return "Photo";
+  if (t === "video") return "Video";
+  if (t === "audio") return "Audio";
+  if (t === "document") return "Document";
+  if (t === "sticker") return "Sticker";
+  if (t === "location") return "Localisation";
+  if (t === "contacts") return "Contact";
+  if (t === "reaction") return "Reaction";
+  return "Nouveau message";
+};
+
 // Lazy-loaded heavy panels (code-split to reduce initial bundle)
 const ContactsPanel = lazy(() => import("../components/contacts/ContactsPanel"));
 const AccountMediaGallery = lazy(() => import("../components/gallery/AccountMediaGallery"));
@@ -435,10 +450,37 @@ export default function InboxPage() {
   }, [refreshConversations, optimisticallyMarkRead]);
 
   const onInboundMessage = useCallback(
-    (newMessage) => {
+    (newMessage, conversationFromEvent) => {
       if (!activeAccount) return;
       const convId = newMessage?.conversation_id;
       const isOpenChat = convId && convId === selectedConversationIdRef.current;
+      const preview = inboundPreviewFromMessage(newMessage);
+      const nextUpdatedAt =
+        newMessage?.timestamp ||
+        newMessage?.created_at ||
+        conversationFromEvent?.updated_at ||
+        new Date().toISOString();
+
+      // Aligner "conversation-meta" sur le meme flux que le badge vert:
+      // on injecte tout de suite l'aperçu message + tri.
+      if (convId) {
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === convId);
+          if (idx === -1) return prev;
+          const next = [...prev];
+          const current = next[idx];
+          const shouldBumpUnread = !isOpenChat && (newMessage?.direction === "inbound" || !newMessage?.from_me);
+          const unread = Number(current.unread_count || 0);
+          next[idx] = {
+            ...current,
+            last_message: preview,
+            updated_at: nextUpdatedAt,
+            unread_count: shouldBumpUnread ? unread + 1 : unread,
+          };
+          return next.sort((a, b) => (b.updated_at > a.updated_at ? 1 : -1));
+        });
+      }
+
       const run = () => refreshConversations(activeAccount, { delta: true });
       if (!isOpenChat) {
         run();

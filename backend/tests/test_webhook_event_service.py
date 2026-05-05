@@ -170,7 +170,7 @@ def test_claim_returns_none_when_no_pool():
 def test_periodic_worker_exits_cleanly_when_no_pool():
     """
     Le worker périodique doit se *terminer* (pas boucler) quand le pool est
-    absent - sinon on log en boucle "DATABASE_URL non configuré".
+    absent - sinon on log en boucle sur pool PostgreSQL indisponible.
     """
     with patch("app.services.webhook_event_service.get_pool", return_value=None):
         # Doit se terminer immédiatement sans timeout.

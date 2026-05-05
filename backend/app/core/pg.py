@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 _pool: Any = None
 
 
+class PgSessionPoolExhausted(Exception):
+    """Saturation du pooler Postgres en mode session (ex. limite Supabase ~15 connexions)."""
+
+
+def is_pg_session_pool_exhausted(exc: BaseException) -> bool:
+    msg = str(exc)
+    return "EMAXCONNSESSION" in msg or "max clients reached in session mode" in msg
+
+
 def is_transient_pg_pool_error(exc: BaseException) -> bool:
     """
     True when the asyncpg pool handed out a dead connection (idle timeout, network reset, etc.).
@@ -61,16 +70,34 @@ async def init_pool() -> None:
     logger.info("Initializing PostgreSQL pool: %s", url_safe)
     try:
         import asyncpg
+        min_s = settings.PG_POOL_MIN_SIZE
+        max_s = max(min_s, settings.PG_POOL_MAX_SIZE)
+        try:
+            parsed = urlparse(settings.DATABASE_URL or "")
+            host = (parsed.hostname or "").lower()
+            port = parsed.port or 5432
+            if "pooler.supabase.com" in host and port == 5432:
+                capped = min(max_s, 5)
+                if capped < max_s:
+                    logger.info(
+                        "PostgreSQL pool max_size capped %s → %s for Supabase session pooler.",
+                        max_s,
+                        capped,
+                    )
+                    max_s = capped
+                min_s = min(min_s, max_s)
+        except Exception:
+            pass
         _pool = await asyncpg.create_pool(
             settings.DATABASE_URL,
-            min_size=5,
-            max_size=20,
+            min_size=min_s,
+            max_size=max_s,
             command_timeout=30,
             # Recycle idle connections so we use the pooler less often with half-dead TCP sockets
             # (common on Windows / VPN when the server closed the session).
             max_inactive_connection_lifetime=120.0,
         )
-        logger.info("PostgreSQL pool created (min=5, max=20)")
+        logger.info("PostgreSQL pool created (min=%s, max=%s)", min_s, max_s)
     except Exception as e:
         exc_type = type(e).__name__
         exc_msg = str(e)
@@ -87,6 +114,13 @@ async def init_pool() -> None:
                 "credentials copied from another project, or project paused/deleted. "
                 "Regenerate: Dashboard → Project Settings → Database → Connection string → "
                 "Connection pooling (Session or Transaction)."
+            )
+        elif "EMAXCONNSESSION" in exc_msg or "max clients reached in session mode" in exc_msg:
+            logger.warning(
+                "Le pooler PostgreSQL en mode *session* (ex. Supabase) plafonne souvent les "
+                "connexions à ~15. Réduisez PG_POOL_MAX_SIZE / PG_POOL_MIN_SIZE, fermez les "
+                "autres clients (IDE, autres instances uvicorn), ou utilisez le pooler "
+                "*transaction* (port 6543) si votre usage le permet."
             )
         elif "getaddrinfo failed" in exc_msg or (getattr(e, "errno", None) == 11001):
             host = urlparse(settings.DATABASE_URL).hostname if settings.DATABASE_URL else "?"
@@ -139,6 +173,12 @@ async def fetch_one(
             row = await conn.fetchrow(query, *args, timeout=timeout)
             return dict(row) if row else None
     except Exception as e:
+        if is_pg_session_pool_exhausted(e):
+            logger.warning(
+                "PostgreSQL session pool saturated; closing asyncpg pool (fallback REST possible)."
+            )
+            await close_pool()
+            raise PgSessionPoolExhausted from e
         logger.error("pg fetch_one error: %s", e, exc_info=True)
         raise
 
@@ -159,6 +199,12 @@ async def fetch_all(
             rows = await conn.fetch(query, *args, timeout=timeout)
             return [dict(r) for r in rows]
     except Exception as e:
+        if is_pg_session_pool_exhausted(e):
+            logger.warning(
+                "PostgreSQL session pool saturated; closing asyncpg pool (fallback REST possible)."
+            )
+            await close_pool()
+            raise PgSessionPoolExhausted from e
         logger.error("pg fetch_all error: %s", e, exc_info=True)
         raise
 
@@ -179,5 +225,11 @@ async def execute(
             await conn.execute(query, *args, timeout=timeout)
             return "OK"
     except Exception as e:
+        if is_pg_session_pool_exhausted(e):
+            logger.warning(
+                "PostgreSQL session pool saturated; closing asyncpg pool (fallback REST possible)."
+            )
+            await close_pool()
+            raise PgSessionPoolExhausted from e
         logger.error("pg execute error: %s", e, exc_info=True)
         raise

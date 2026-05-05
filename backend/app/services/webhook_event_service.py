@@ -420,8 +420,9 @@ async def periodic_process_webhook_events() -> None:
 
     if not get_pool():
         logger.warning(
-            "DATABASE_URL non configuré - worker webhook_events désactivé. "
-            "Les webhooks repasseront par le fallback asyncio.create_task."
+            "Pool PostgreSQL indisponible (DATABASE_URL absent ou création du pool échouée) : "
+            "worker webhook_events désactivé. Les webhooks repasseront par le fallback "
+            "asyncio.create_task."
         )
         return
 

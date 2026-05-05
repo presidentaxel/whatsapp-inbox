@@ -8,25 +8,46 @@ from fastapi import HTTPException
 from app.core.db import supabase, supabase_execute
 from app.core.cache import invalidate_cache_pattern
 from app.core.permissions import PermissionCodes
-from app.core.pg import get_pool, fetch_all, fetch_one, execute
+from app.core.pg import (
+    PgSessionPoolExhausted,
+    execute,
+    fetch_all,
+    fetch_one,
+    get_pool,
+)
 
 logger = logging.getLogger(__name__)
 
 
+async def _admin_pg_fallback(pg_fn, rest_fn):
+    """Exécute la voie PostgreSQL si le pool existe ; bascule REST si saturation session Supabase."""
+    if not get_pool():
+        return await rest_fn()
+    try:
+        return await pg_fn()
+    except PgSessionPoolExhausted:
+        logger.warning(
+            "Saturation du pool PostgreSQL (mode session); bascule Supabase REST pour cette opération admin."
+        )
+        return await rest_fn()
+
+
 async def list_permissions() -> Sequence[Dict[str, Any]]:
-    pool = get_pool()
-    if pool:
+    async def via_pg():
         rows = await fetch_all("SELECT * FROM app_permissions ORDER BY code")
         return [dict(r) for r in rows]
-    res = await supabase_execute(
-        supabase.table("app_permissions").select("*").order("code")
-    )
-    return res.data
+
+    async def via_rest():
+        res = await supabase_execute(
+            supabase.table("app_permissions").select("*").order("code")
+        )
+        return res.data
+
+    return await _admin_pg_fallback(via_pg, via_rest)
 
 
 async def list_roles() -> Sequence[Dict[str, Any]]:
-    pool = get_pool()
-    if pool:
+    async def via_pg():
         roles = [dict(r) for r in await fetch_all("SELECT * FROM app_roles ORDER BY name")]
         if not roles:
             return []
@@ -43,27 +64,30 @@ async def list_roles() -> Sequence[Dict[str, Any]]:
             role["permissions"] = sorted(perms_by_role.get(str(role["id"]), []))
         return roles
 
-    roles_res = await supabase_execute(
-        supabase.table("app_roles").select("*").order("name")
-    )
-    roles = roles_res.data
-    if not roles:
-        return []
+    async def via_rest():
+        roles_res = await supabase_execute(
+            supabase.table("app_roles").select("*").order("name")
+        )
+        roles = roles_res.data
+        if not roles:
+            return []
 
-    role_ids = [role["id"] for role in roles]
-    perms_res = await supabase_execute(
-        supabase.table("role_permissions")
-        .select("role_id, permission_code")
-        .in_("role_id", role_ids)
-    )
-    perms = perms_res.data
-    perms_by_role: Dict[str, List[str]] = {}
-    for item in perms:
-        perms_by_role.setdefault(item["role_id"], []).append(item["permission_code"])
+        role_ids = [role["id"] for role in roles]
+        perms_res = await supabase_execute(
+            supabase.table("role_permissions")
+            .select("role_id, permission_code")
+            .in_("role_id", role_ids)
+        )
+        perms = perms_res.data
+        perms_by_role: Dict[str, List[str]] = {}
+        for item in perms:
+            perms_by_role.setdefault(item["role_id"], []).append(item["permission_code"])
 
-    for role in roles:
-        role["permissions"] = sorted(perms_by_role.get(role["id"], []))
-    return roles
+        for role in roles:
+            role["permissions"] = sorted(perms_by_role.get(role["id"], []))
+        return roles
+
+    return await _admin_pg_fallback(via_pg, via_rest)
 
 
 async def create_role(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -124,9 +148,38 @@ async def delete_role(role_id: str):
     )
 
 
+def _attach_app_user_roles_overrides(
+    users: List[Dict[str, Any]],
+    role_rows: List[Dict[str, Any]],
+    role_map: Dict[str, Dict[str, Any]],
+    overrides: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    roles_by_user: Dict[str, List[Dict[str, Any]]] = {}
+    for row in role_rows:
+        role_info = role_map.get(str(row["role_id"]), {})
+        roles_by_user.setdefault(row["user_id"], []).append(
+            {
+                "id": row["id"],
+                "role_id": row["role_id"],
+                "role_slug": role_info.get("slug"),
+                "role_name": role_info.get("name"),
+                "account_id": row.get("account_id"),
+            }
+        )
+
+    overrides_by_user: Dict[str, List[Dict[str, Any]]] = {}
+    for item in overrides:
+        overrides_by_user.setdefault(item["user_id"], []).append(item)
+
+    for user in users:
+        user["roles"] = roles_by_user.get(user["user_id"], [])
+        user["overrides"] = overrides_by_user.get(user["user_id"], [])
+
+    return users
+
+
 async def list_app_users() -> Sequence[Dict[str, Any]]:
-    pool = get_pool()
-    if pool:
+    async def via_pg():
         users = [dict(r) for r in await fetch_all("SELECT * FROM app_users ORDER BY created_at")]
         if not users:
             return []
@@ -148,7 +201,9 @@ async def list_app_users() -> Sequence[Dict[str, Any]]:
             f"SELECT id, user_id, permission_code, account_id, is_allowed FROM app_user_overrides WHERE user_id IN ({placeholders})",
             *user_ids,
         )]
-    else:
+        return _attach_app_user_roles_overrides(users, role_rows, role_map, overrides)
+
+    async def via_rest():
         users_res = await supabase_execute(
             supabase.table("app_users").select("*").order("created_at")
         )
@@ -175,29 +230,9 @@ async def list_app_users() -> Sequence[Dict[str, Any]]:
             .in_("user_id", user_ids)
         )
         overrides = overrides_res.data
+        return _attach_app_user_roles_overrides(users, role_rows, role_map, overrides)
 
-    roles_by_user: Dict[str, List[Dict[str, Any]]] = {}
-    for row in role_rows:
-        role_info = role_map.get(str(row["role_id"]), {})
-        roles_by_user.setdefault(row["user_id"], []).append(
-            {
-                "id": row["id"],
-                "role_id": row["role_id"],
-                "role_slug": role_info.get("slug"),
-                "role_name": role_info.get("name"),
-                "account_id": row.get("account_id"),
-            }
-        )
-
-    overrides_by_user: Dict[str, List[Dict[str, Any]]] = {}
-    for item in overrides:
-        overrides_by_user.setdefault(item["user_id"], []).append(item)
-
-    for user in users:
-        user["roles"] = roles_by_user.get(user["user_id"], [])
-        user["overrides"] = overrides_by_user.get(user["user_id"], [])
-
-    return users
+    return await _admin_pg_fallback(via_pg, via_rest)
 
 
 async def set_user_status(user_id: str, is_active: bool):
@@ -247,8 +282,18 @@ async def set_user_overrides(user_id: str, overrides: Sequence[Dict[str, Any]]):
 
 async def list_users_with_access() -> Sequence[Dict[str, Any]]:
     """Liste tous les utilisateurs avec leurs rôles et accès par compte"""
-    pool = get_pool()
-    if pool:
+    if get_pool():
+        try:
+            return await _list_users_with_access_impl(use_pg=True)
+        except PgSessionPoolExhausted:
+            logger.warning(
+                "Saturation du pool PostgreSQL (mode session); bascule Supabase REST pour list_users_with_access."
+            )
+    return await _list_users_with_access_impl(use_pg=False)
+
+
+async def _list_users_with_access_impl(use_pg: bool) -> Sequence[Dict[str, Any]]:
+    if use_pg:
         users = [dict(r) for r in await fetch_all("SELECT * FROM app_users ORDER BY created_at")]
     else:
         users_res = await supabase_execute(
@@ -260,7 +305,7 @@ async def list_users_with_access() -> Sequence[Dict[str, Any]]:
 
     user_ids = [u["user_id"] for u in users]
 
-    if pool:
+    if use_pg:
         placeholders = ", ".join(f"${i+1}" for i in range(len(user_ids)))
         role_rows = [dict(r) for r in await fetch_all(
             f"SELECT id, user_id, role_id, account_id FROM app_user_roles WHERE user_id IN ({placeholders})",
@@ -349,7 +394,7 @@ async def list_users_with_access() -> Sequence[Dict[str, Any]]:
         for u in users:
             defaults_by_uid[u["user_id"]] = False
 
-        if pool:
+        if use_pg:
             grant_rows = await fetch_all(
                 """
                 SELECT DISTINCT aur.user_id
@@ -429,21 +474,23 @@ async def list_users_with_access() -> Sequence[Dict[str, Any]]:
 
 async def user_role_grants_permission(user_id: str, permission_code: str) -> bool:
     """True si au moins un rôle utilisateur attribue la permission globale donnée (hors overrides)."""
-    pool = get_pool()
-    if pool:
-        row = await fetch_one(
-            """
-            SELECT EXISTS (
-              SELECT 1
-              FROM app_user_roles aur
-              INNER JOIN role_permissions rp ON rp.role_id = aur.role_id
-              WHERE aur.user_id = $1::uuid AND rp.permission_code = $2
-            ) AS e
-            """,
-            user_id,
-            permission_code,
-        )
-        return bool(row and row["e"])
+    if get_pool():
+        try:
+            row = await fetch_one(
+                """
+                SELECT EXISTS (
+                  SELECT 1
+                  FROM app_user_roles aur
+                  INNER JOIN role_permissions rp ON rp.role_id = aur.role_id
+                  WHERE aur.user_id = $1::uuid AND rp.permission_code = $2
+                ) AS e
+                """,
+                user_id,
+                permission_code,
+            )
+            return bool(row and row["e"])
+        except PgSessionPoolExhausted:
+            pass
     role_rows_res = await supabase_execute(
         supabase.table("app_user_roles").select("role_id").eq("user_id", user_id)
     )
@@ -467,24 +514,32 @@ async def user_role_grants_axelia(user_id: str) -> bool:
 async def set_user_global_permission_override(user_id: str, permission_code: str, allowed: bool) -> None:
     """Override global (account_id NULL) pour une permission ; supprimé si aligné sur le défaut des rôles."""
     role_grants = await user_role_grants_permission(user_id, permission_code)
-    pool = get_pool()
-    if pool:
-        await execute(
-            "DELETE FROM app_user_overrides WHERE user_id = $1::uuid AND permission_code = $2 AND account_id IS NULL",
-            user_id,
-            permission_code,
-        )
-        if allowed != role_grants:
+    wrote_via_pg = False
+    if get_pool():
+        try:
             await execute(
-                """
-                INSERT INTO app_user_overrides (user_id, permission_code, account_id, is_allowed)
-                VALUES ($1::uuid, $2, NULL, $3)
-                """,
+                "DELETE FROM app_user_overrides WHERE user_id = $1::uuid AND permission_code = $2 AND account_id IS NULL",
                 user_id,
                 permission_code,
-                allowed,
             )
-    else:
+            if allowed != role_grants:
+                await execute(
+                    """
+                    INSERT INTO app_user_overrides (user_id, permission_code, account_id, is_allowed)
+                    VALUES ($1::uuid, $2, NULL, $3)
+                    """,
+                    user_id,
+                    permission_code,
+                    allowed,
+                )
+            wrote_via_pg = True
+        except PgSessionPoolExhausted:
+            logger.warning(
+                "Saturation pool PostgreSQL ; écriture overrides via Supabase REST pour user=%s perm=%s",
+                user_id,
+                permission_code,
+            )
+    if not wrote_via_pg:
         await supabase_execute(
             supabase.table("app_user_overrides")
             .delete()

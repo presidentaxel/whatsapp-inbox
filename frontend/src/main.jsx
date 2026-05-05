@@ -11,7 +11,7 @@ import "./styles/mobile-inbox.css";
 import "./styles/mobile-bubbles.css";
 import "./styles/mobile-simple-input.css";
 import "./styles/permissions-table.css";
-import { registerServiceWorker, setupInstallPrompt } from "./registerSW";
+import { registerServiceWorker } from "./registerSW";
 import { initNotifications } from "./utils/notifications";
 import { getDeviceType } from "./utils/deviceDetection";
 
@@ -32,9 +32,6 @@ if (typeof window !== "undefined") {
 
 // Enregistrer le Service Worker pour la PWA
 registerServiceWorker();
-
-// Configurer le prompt d'installation
-setupInstallPrompt();
 
 // Initialiser les notifications push
 initNotifications();

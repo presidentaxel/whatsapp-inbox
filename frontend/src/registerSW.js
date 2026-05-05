@@ -89,18 +89,23 @@ export function isAppInstalled() {
 }
 
 /**
- * Gérer l'installation de la PWA
+ * Installation PWA (Chrome / Edge).
+ *
+ * N'appelez pas `beforeinstallprompt.preventDefault()` tant qu'un bouton « Installer »
+ * n'appelle pas `showInstallPrompt()` sur clic utilisateur — sinon la console affiche :
+ * « Banner not shown … must call … prompt() ».
+ *
+ * Pour un flux custom : au montage du composant qui propose l’installation :
+ *   setupInstallPrompt();
  */
 let deferredPrompt = null;
 
 export function setupInstallPrompt() {
   window.addEventListener('beforeinstallprompt', (e) => {
-    // Empêcher le prompt automatique
     e.preventDefault();
     deferredPrompt = e;
   });
 
-  // Détecter quand l'app est installée
   window.addEventListener('appinstalled', () => {
     deferredPrompt = null;
   });

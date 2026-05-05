@@ -1,21 +1,20 @@
 import { useState } from 'react';
 import {
-  FiArrowLeft,
-  FiSearch,
   FiUser,
   FiMessageSquare,
   FiBell,
   FiGlobe,
-  FiHelpCircle,
   FiUsers,
   FiSettings,
   FiLogOut,
 } from "react-icons/fi";
 import MobileAccountSettings from './MobileAccountSettings';
 import MobileChatSettings from './MobileChatSettings';
-import MobileNotificationSettings from './MobileNotificationSettings';
+import MobileNotificationSettingsPage from './MobileNotificationSettingsPage';
 import MobileAppUpdates from './MobileAppUpdates';
 import MobileInviteUser from './MobileInviteUser';
+import MobileLanguageSettings from './MobileLanguageSettings';
+import MobileSettingsHome from './MobileSettingsHome';
 import '../../styles/mobile-settings.css';
 
 export default function MobileSettings({ onBack, onLogout }) {
@@ -45,17 +44,7 @@ export default function MobileSettings({ onBack, onLogout }) {
       icon: <FiGlobe />,
       title: 'Langue de l\'application',
       subtitle: 'Français (langue de l\'appareil)',
-      onClick: () => {
-        alert('La langue de l\'application est actuellement en français. Le support multilingue arrivera prochainement.');
-      }
-    },
-    {
-      icon: <FiHelpCircle />,
-      title: 'Aide et commentaires',
-      subtitle: 'Pages d\'aide, nous contacter, Politique de confidentialité',
-      onClick: () => {
-        alert('Cette fonctionnalité arrivera prochainement. Pour toute question, contactez le support.');
-      }
+      onClick: () => setActiveView('language')
     },
     {
       icon: <FiUsers />,
@@ -95,19 +84,11 @@ export default function MobileSettings({ onBack, onLogout }) {
   }
 
   if (activeView === 'notifications') {
-    return (
-      <div className="mobile-settings">
-        <header className="mobile-settings__header">
-          <button className="icon-btn" onClick={() => setActiveView('list')} title="Retour">
-            <FiArrowLeft />
-          </button>
-          <h1>Notifications</h1>
-        </header>
-        <div className="mobile-settings__content" style={{ padding: '1rem' }}>
-          <MobileNotificationSettings />
-        </div>
-      </div>
-    );
+    return <MobileNotificationSettingsPage onBack={() => setActiveView('list')} />;
+  }
+
+  if (activeView === 'language') {
+    return <MobileLanguageSettings onBack={() => setActiveView('list')} />;
   }
 
   if (activeView === 'updates') {
@@ -119,46 +100,12 @@ export default function MobileSettings({ onBack, onLogout }) {
   }
 
   return (
-    <div className="mobile-settings">
-      <header className="mobile-settings__header">
-        <button className="icon-btn" onClick={onBack} title="Retour">
-          <FiArrowLeft />
-        </button>
-        <h1>Paramètres</h1>
-      </header>
-
-      <div className="mobile-settings__search">
-        <div className="search-box">
-          <FiSearch />
-          <input
-            type="text"
-            placeholder="Rechercher dans les paramètres..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-      </div>
-
-      <div className="mobile-settings__content">
-        {filteredCategories.map((category, index) => (
-          <div
-            key={index}
-            className="mobile-settings__item"
-            onClick={category.onClick}
-          >
-            <div className="mobile-settings__item-icon">
-              {category.icon}
-            </div>
-            <div className="mobile-settings__item-content">
-              <div className="mobile-settings__item-title">{category.title}</div>
-              {category.subtitle && (
-                <div className="mobile-settings__item-subtitle">{category.subtitle}</div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+    <MobileSettingsHome
+      onBack={onBack}
+      searchTerm={searchTerm}
+      onSearchChange={setSearchTerm}
+      categories={filteredCategories}
+    />
   );
 }
 

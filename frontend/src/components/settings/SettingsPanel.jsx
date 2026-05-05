@@ -567,7 +567,7 @@ export default function SettingsPanel({
                                     Compte Google connecté
                                   </span>
                                   <button
-                                    className="danger subtle"
+                                    className="settings-btn settings-btn--danger settings-btn--subtle"
                                     onClick={() => handleDisconnectGoogleDrive(acc.id)}
                                     type="button"
                                   >
@@ -609,7 +609,7 @@ export default function SettingsPanel({
                                         </div>
                                         <button
                                           type="button"
-                                          className="btn-secondary"
+                                          className="settings-btn settings-btn--secondary"
                                           onClick={() => handleOpenFolderPicker(acc.id)}
                                         >
                                           <FiFolder /> Parcourir les dossiers
@@ -624,7 +624,7 @@ export default function SettingsPanel({
                                     {canManageAccounts && (
                                       <button
                                         type="button"
-                                        className="btn-secondary"
+                                        className="settings-btn settings-btn--secondary"
                                         onClick={() => handleBackfillGoogleDrive(acc.id)}
                                         disabled={backfilling[acc.id]}
                                         style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}
@@ -654,7 +654,7 @@ export default function SettingsPanel({
                     {/* Bouton Supprimer - uniquement pour canManageAccounts */}
                     {canManageAccounts && (
                       <button
-                        className="danger subtle"
+                        className="settings-btn settings-btn--danger settings-btn--subtle"
                         onClick={() => handleDeleteAccount(acc.id)}
                         type="button"
                       >

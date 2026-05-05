@@ -11,11 +11,6 @@ if (typeof window !== "undefined" && "Worker" in window) {
   // Construire le chemin en évitant les doubles slashes
   const workerPath = `${baseUrl}/pdf.worker.min.mjs`.replace(/\/+/g, "/");
   pdfjsLib.GlobalWorkerOptions.workerSrc = workerPath;
-  
-  // Debug en dev pour vérifier le chemin
-  if (import.meta.env.DEV) {
-    console.log("[PDF Worker] Worker path:", workerPath);
-  }
 }
 
 export default function PDFThumbnail({ url, width = 200, height = 200, onError }) {
