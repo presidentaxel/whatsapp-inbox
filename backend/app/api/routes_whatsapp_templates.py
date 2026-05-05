@@ -1,6 +1,7 @@
 """
 Routes API pour la gestion des templates de messages WhatsApp
 """
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 
@@ -8,13 +9,17 @@ from app.core.auth import get_current_user
 from app.core.permissions import CurrentUser, PermissionCodes
 from app.services.account_service import get_account_by_id
 from app.services import whatsapp_api_service
-from app.services.whatsapp_api_service import WhatsAppAPIError
+from app.services.whatsapp_api_service import (
+    WhatsAppAPIError,
+    http_status_and_detail_for_whatsapp_api_error,
+)
 from app.schemas.whatsapp import (
     CreateMessageTemplateRequest,
     DeleteMessageTemplateRequest,
 )
 
 router = APIRouter(prefix="/whatsapp/templates", tags=["WhatsApp Templates"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/list/{account_id}")
@@ -55,9 +60,21 @@ async def list_templates(
         )
         return {"success": True, "data": result}
     except WhatsAppAPIError as e:
-        status_code = 401 if e.is_token_expired else 400
-        raise HTTPException(status_code=status_code, detail=str(e))
+        status_code, detail = http_status_and_detail_for_whatsapp_api_error(e)
+        logger.warning(
+            "List WhatsApp templates failed for account_id=%s, user_id=%s, waba_id=%s: %s",
+            account_id,
+            current_user.id,
+            waba_id,
+            str(e),
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
+        logger.exception(
+            "Unexpected error while listing templates for account_id=%s, user_id=%s",
+            account_id,
+            current_user.id,
+        )
         raise HTTPException(status_code=400, detail=f"Erreur lors de la récupération des templates: {str(e)}")
 
 
@@ -94,7 +111,7 @@ async def create_template(
         }
     ]
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    current_user.require(PermissionCodes.MESSAGES_SEND, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -145,9 +162,23 @@ async def create_template(
         )
         return {"success": True, "data": result}
     except WhatsAppAPIError as e:
-        status_code = 401 if e.is_token_expired else 400
-        raise HTTPException(status_code=status_code, detail=str(e))
+        status_code, detail = http_status_and_detail_for_whatsapp_api_error(e)
+        logger.warning(
+            "Create WhatsApp template failed for account_id=%s, user_id=%s, waba_id=%s, template=%s: %s",
+            account_id,
+            current_user.id,
+            waba_id,
+            request.name,
+            str(e),
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
+        logger.exception(
+            "Unexpected error while creating template for account_id=%s, user_id=%s, template=%s",
+            account_id,
+            current_user.id,
+            request.name,
+        )
         raise HTTPException(status_code=400, detail=f"Erreur lors de la création du template: {str(e)}")
 
 
@@ -161,7 +192,7 @@ async def delete_template(
     Supprime un template de message
     DELETE /{WABA-ID}/message_templates
     """
-    current_user.require(PermissionCodes.ACCOUNTS_MANAGE, account_id)
+    current_user.require(PermissionCodes.MESSAGES_SEND, account_id)
     
     account = await get_account_by_id(account_id)
     if not account:
@@ -188,8 +219,22 @@ async def delete_template(
         )
         return {"success": True, "data": result}
     except WhatsAppAPIError as e:
-        status_code = 401 if e.is_token_expired else 400
-        raise HTTPException(status_code=status_code, detail=str(e))
+        status_code, detail = http_status_and_detail_for_whatsapp_api_error(e)
+        logger.warning(
+            "Delete WhatsApp template failed for account_id=%s, user_id=%s, waba_id=%s, template=%s: %s",
+            account_id,
+            current_user.id,
+            waba_id,
+            request.name,
+            str(e),
+        )
+        raise HTTPException(status_code=status_code, detail=detail)
     except Exception as e:
+        logger.exception(
+            "Unexpected error while deleting template for account_id=%s, user_id=%s, template=%s",
+            account_id,
+            current_user.id,
+            request.name,
+        )
         raise HTTPException(status_code=400, detail=f"Erreur lors de la suppression du template: {str(e)}")
 

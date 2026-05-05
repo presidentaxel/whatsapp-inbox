@@ -816,7 +816,14 @@ async def list_message_templates(
         headers={"Authorization": f"Bearer {access_token}"},
         params=params
     )
-    response.raise_for_status()
+    if response.status_code >= 400:
+        logger.error(
+            "Failed to list templates from Meta: status=%s waba_id=%s body=%s",
+            response.status_code,
+            waba_id,
+            response.text[:1000],
+        )
+        raise parse_whatsapp_error(response)
     result = response.json()
 
     if after is None:
@@ -1049,7 +1056,15 @@ async def delete_message_template(
         headers={"Authorization": f"Bearer {access_token}"},
         params=params
     )
-    response.raise_for_status()
+    if response.status_code >= 400:
+        logger.error(
+            "Failed to delete template on Meta: status=%s waba_id=%s template=%s body=%s",
+            response.status_code,
+            waba_id,
+            name,
+            response.text[:1000],
+        )
+        raise parse_whatsapp_error(response)
     return response.json()
 
 

@@ -169,6 +169,12 @@ class CurrentUser:
 
     def require(self, permission: str, account_id: Optional[str] = None):
         if not self.permissions.has(permission, account_id):
+            logger.warning(
+                "Permission denied: user_id=%s permission=%s account_id=%s",
+                self.id,
+                permission,
+                account_id,
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="permission_denied",

@@ -73,10 +73,14 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate caddy
 #rebuild complet
 ssh ubuntu@217.182.65.32
 cd /opt/whatsapp-inbox/deploy
-docker compose -f docker-compose.prod.yml stop
+# 1) Prépare les nouvelles images pendant que l'app tourne encore
 docker compose -f docker-compose.prod.yml build --no-cache backend frontend
 docker compose -f docker-compose.prod.yml pull caddy prometheus grafana
-docker compose -f docker-compose.prod.yml up -d
+# 2) Recrée seulement les services modifiés (un par un)
+docker compose -f docker-compose.prod.yml up -d --no-deps backend
+docker compose -f docker-compose.prod.yml up -d --no-deps frontend
+# 3) (optionnel) Met à jour les autres sans forcer de restart inutile
+docker compose -f docker-compose.prod.yml up -d caddy prometheus grafana
 ```
 
 ## Grafana reset
