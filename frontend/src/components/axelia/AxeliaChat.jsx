@@ -124,29 +124,29 @@ const FOCUS_LABELS = Object.fromEntries(
 
 const SUGGESTIONS = [
   {
-    text: "Créer une image",
-    icon: <FiImage aria-hidden />,
-    fill: "Imagine une bannière WhatsApp minimaliste pour promotion.",
+    text: "Résumé du contact",
+    icon: <FiSearch aria-hidden />,
+    fill: "Résume les 30 derniers messages de cette conversation et donne 3 points d'action.",
   },
   {
-    text: "Créer de la musique",
-    icon: <FiHeadphones aria-hidden />,
-    fill: "Donne des idées pour une courte mélodie d’attente téléphonique.",
-  },
-  {
-    text: "Aide-moi à apprendre",
-    icon: <FiZap aria-hidden />,
-    fill: "Explique-moi pas à pas comment structurer une réponse client difficile.",
-  },
-  {
-    text: "Rédiger",
+    text: "Réponse pro",
     icon: <FiEdit3 aria-hidden />,
-    fill: "Rédige un message professionnel pour confirmer une réservation.",
+    fill: "Rédige une réponse professionnelle courte pour ce client, ton clair et rassurant.",
   },
   {
-    text: "Donne du peps à ma journée",
+    text: "Templates Meta",
+    icon: <FiFileText aria-hidden />,
+    fill: "Liste les templates Meta disponibles pour ce compte et propose le plus adapté à une relance.",
+  },
+  {
+    text: "Groupes diffusion",
+    icon: <FiHeadphones aria-hidden />,
+    fill: "Montre les groupes de diffusion existants et propose lequel utiliser pour une campagne de rappel.",
+  },
+  {
+    text: "Message de relance",
     icon: <FiZap aria-hidden />,
-    fill: "Une petite phrase motivante pour une équipe support client.",
+    fill: "Rédige un message de relance WhatsApp poli avec 2 variantes (court et détaillé).",
   },
 ];
 
@@ -230,6 +230,16 @@ export default function AxeliaChat({
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((open) => !open);
+  }, []);
+
+  const closeSidebarOnMobile = useCallback(() => {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 720px)").matches
+    ) {
+      setSidebarOpen(false);
+    }
   }, []);
 
   const [conversations, setConversations] = useState([]);
@@ -692,6 +702,7 @@ export default function AxeliaChat({
       await bootstrapNewConversation(
         selectedContext || AXELIA_CONTEXT_ALL,
       );
+      closeSidebarOnMobile();
     } catch {
       setError("Impossible de créer une discussion.");
     }
@@ -700,6 +711,7 @@ export default function AxeliaChat({
   const onPickConversation = async (id) => {
     setConversationId(id);
     setMenuOpenId(null);
+    closeSidebarOnMobile();
   };
 
   const onChangeContextDropdown = async (next) => {
@@ -1360,7 +1372,11 @@ export default function AxeliaChat({
         </aside>
 
         <div className="axelia-chat-main">
-          <div className="axelia-sidebar-overlay" aria-hidden="true" />
+          <div
+            className="axelia-sidebar-overlay"
+            aria-hidden="true"
+            onClick={() => setSidebarOpen(false)}
+          />
 
           <div
             className={`axelia-page__body ${

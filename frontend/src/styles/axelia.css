@@ -785,6 +785,10 @@
 
 @media (max-width: 720px) {
   .axelia-page {
+    --axelia-topbar-mobile-height: 52px;
+  }
+
+  .axelia-page {
     height: 100%;
     min-height: 100%;
   }
@@ -792,7 +796,7 @@
   .axelia-topbar {
     position: sticky;
     top: 0;
-    z-index: 60;
+    z-index: 130;
     background: #000000;
   }
 
@@ -846,24 +850,25 @@
 
   .axelia-shell.axelia-shell--sidebar-open .axelia-sidebar-overlay {
     display: block;
-    position: absolute;
+    position: fixed;
     inset: 0;
-    z-index: 25;
+    z-index: 135;
     background: rgba(0, 0, 0, 0.45);
     cursor: default;
   }
 
   .axelia-sidebar {
-    position: absolute;
-    top: 0;
+    position: fixed;
+    top: calc(var(--axelia-topbar-mobile-height) + env(safe-area-inset-top));
     left: 0;
-    bottom: 0;
+    bottom: auto;
+    height: calc(100dvh - var(--axelia-topbar-mobile-height) - env(safe-area-inset-top));
     max-width: var(--axelia-sidebar-width);
     width: var(--axelia-sidebar-width);
     transform: translateX(-104%);
     opacity: 1;
     transition: transform 0.22s ease;
-    z-index: 40;
+    z-index: 140;
     box-shadow: 8px 0 24px rgba(0, 0, 0, 0.35);
   }
 
