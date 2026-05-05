@@ -19,7 +19,7 @@
 -- IMPORTANT avant déploiement :
 -- 1. Vérifier que toutes les requêtes frontend utilisent un JWT
 --    authentifié (pas la clé `anon` brute).
--- 2. Tester sur staging d'abord — RLS activée sans policy = blocage total.
+-- 2. Tester sur staging d'abord - RLS activée sans policy = blocage total.
 -- 3. Le backend (service_role) bypass RLS, donc les jobs n'auront pas de
 --    régression.
 -- ============================================

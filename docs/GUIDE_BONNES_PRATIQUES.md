@@ -15,7 +15,7 @@ En cas de doute, ce guide prime sur les habitudes legacy. Si un dossier ancien n
 | `backend/`             | API FastAPI, logique métier, webhooks Meta, clé **service_role** (hors RLS)      |
 | `supabase/migrations/` | Source de vérité du schéma Postgres et des politiques RLS                        |
 | `supabase/functions/`  | Edge Functions (Deno), ex. webhook WhatsApp                                      |
-| `supabase/archive/`    | Anciens scripts conservés pour mémoire — **ne plus exécuter**                    |
+| `supabase/archive/`    | Anciens scripts conservés pour mémoire - **ne plus exécuter**                    |
 
 
 Avant de modifier du code : identifier **où** vit la règle (UI, API, SQL, edge) pour ne pas dupliquer ni contredire la sécurité.

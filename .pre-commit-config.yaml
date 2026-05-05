@@ -1,0 +1,19 @@
+# Installation : pip install pre-commit && pre-commit install
+# Voir aussi CONTRIBUTING.md et make check / npm run ci:check
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.9
+    hooks:
+      - id: ruff
+        args: [--config, backend/pyproject.toml]
+        files: ^backend/
+
+  - repo: local
+    hooks:
+      - id: frontend-lint-ci
+        name: frontend eslint (CI vars)
+        entry: npm --prefix frontend run lint:ci
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

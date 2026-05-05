@@ -161,22 +161,13 @@ jobs:
         run: npm ci
 
       - name: Lint
-        env:
-          VITE_SUPABASE_URL: https://mock.supabase.co
-          VITE_SUPABASE_ANON_KEY: mock_anon_key_for_ci
-        run: npm run lint
+        run: npm run lint:ci
 
       - name: Build
-        env:
-          VITE_SUPABASE_URL: https://mock.supabase.co
-          VITE_SUPABASE_ANON_KEY: mock_anon_key_for_ci
-        run: npm run build
+        run: npm run build:ci
 
       - name: Unit tests (Vitest)
-        env:
-          VITE_SUPABASE_URL: https://mock.supabase.co
-          VITE_SUPABASE_ANON_KEY: mock_anon_key_for_ci
-        run: npm run test
+        run: npm run test:ci
 
       - name: Validate package.json
         run: |

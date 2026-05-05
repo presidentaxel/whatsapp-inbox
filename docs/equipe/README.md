@@ -16,6 +16,7 @@ Ensemble des guides pour **intégrer un développeur** et faire tourner le produ
 | [premiere-contribution.md](./premiere-contribution.md)       | Objectif « premier PR », idées de tâches      |
 | [troubleshooting.md](./troubleshooting.md)                   | Webhook, Supabase, auth, erreurs courantes    |
 | [securite-conformite.md](./securite-conformite.md)           | Secrets, logs, données personnelles           |
+| [SECURITY.md](../../SECURITY.md) (racine du dépôt)            | Signalement responsable des vulnérabilités     |
 | [glossaire.md](./glossaire.md)                               | Termes WhatsApp / Meta / produit              |
 | [schema-lmdcvtc-inbox.md](./schema-lmdcvtc-inbox.md)         | Tables inbox sur le projet Supabase LMDCVTC   |
 | [supabase-source-of-truth.md](./supabase-source-of-truth.md) | Migrations : source de vérité, squash, pièges |

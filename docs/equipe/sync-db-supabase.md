@@ -51,7 +51,7 @@ Avant de toucher à quoi que ce soit, vérifier l'état remote :
 ls supabase/migrations/ | sort
 ```
 
-Lancer aussi les advisors Supabase (security + performance) — ils signalent les
+Lancer aussi les advisors Supabase (security + performance) - ils signalent les
 tables sans RLS, les fonctions `SECURITY DEFINER` exposées, etc.
 
 ## 4. Renommer les collisions de numéros

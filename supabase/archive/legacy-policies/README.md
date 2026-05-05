@@ -10,4 +10,4 @@ de vérité. Les évolutions ultérieures sont distribuées dans des migrations
 dédiées (`014_message_reactions.sql`, `026_pending_template_messages_rls.sql`,
 `035_broadcast_and_pinned_rls.sql`, `057_enable_rls_critical_tables.sql`, …).
 
-Ne pas réappliquer ce fichier sur une base déjà migrée — risques de conflits.
+Ne pas réappliquer ce fichier sur une base déjà migrée - risques de conflits.

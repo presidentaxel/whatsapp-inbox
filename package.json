@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "ci:check": "node scripts/ci-check.mjs"
+  },
   "devDependencies": {
     "supabase": "^2.98.0"
   }
