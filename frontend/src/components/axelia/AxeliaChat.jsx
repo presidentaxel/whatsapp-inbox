@@ -23,6 +23,7 @@ import {
   FiSquare,
   FiSearch,
   FiFileText,
+  FiShare2,
 } from "react-icons/fi";
 import SparkleGlyph from "./SparkleGlyph";
 import { renderMarkdown } from "./renderMarkdown";
@@ -37,9 +38,12 @@ import {
   createAxeliaConversation,
   getAxeliaChatProgress,
   getAxeliaConversations,
+  getAxeliaConversationShares,
+  getAxeliaShareCandidates,
   getAxeliaMessages,
   patchAxeliaConversation,
   patchAxeliaMessageRating,
+  postAxeliaConversationShare,
   postAxeliaRegenerate,
   streamAxeliaChat,
 } from "../../api/axeliaApi";
@@ -336,6 +340,13 @@ export default function AxeliaChat({
   const [streamingText, setStreamingText] = useState(null);
   /** Modèle annoncé par l'évènement `meta` ; affiché à côté de la bulle live. */
   const [streamingModel, setStreamingModel] = useState(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareQuery, setShareQuery] = useState("");
+  const [shareCandidates, setShareCandidates] = useState([]);
+  const [shareTargetUserId, setShareTargetUserId] = useState("");
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSubmitting, setShareSubmitting] = useState(false);
+  const [shareNotice, setShareNotice] = useState("");
 
   const scrollRef = useRef(null);
   const toastTimerRef = useRef(null);
@@ -562,6 +573,9 @@ export default function AxeliaChat({
     () => conversations.find((c) => c.id === conversationId),
     [conversations, conversationId],
   );
+  const isReadOnlyConversation = !!activeConversation?.read_only;
+  const canShareConversation = !!conversationId && !isReadOnlyConversation;
+  const canUseComposer = canUseSend && !isReadOnlyConversation;
 
   /** Aligné sur le sélecteur de périmètre (le serveur garde la vérité sur nom / téléphone). */
   const uiPerimeterHint = useMemo(() => {
@@ -800,7 +814,7 @@ export default function AxeliaChat({
 
   const sendMessage = async () => {
     const text = input.trim();
-    if (!canUseSend || loading) return;
+    if (!canUseComposer || loading) return;
     if (!conversationId) return;
     if (!text && !pendingFile) return;
 
@@ -974,6 +988,8 @@ export default function AxeliaChat({
                     ? "Format de fichier non pris en charge (images et PDF uniquement)."
                     : code === "attachment_invalid_base64"
                       ? "Pièce jointe illisible."
+                      : code === "conversation_read_only"
+                        ? "Cette discussion est en lecture seule."
                       : serverError.message || "Erreur lors de l’envoi.";
         setError(msg);
         return;
@@ -1193,7 +1209,7 @@ export default function AxeliaChat({
   };
 
   const regenerate = async () => {
-    if (!conversationId || loading || regenLocked) return;
+    if (!conversationId || loading || regenLocked || isReadOnlyConversation) return;
     setLoading(true);
     setError(null);
     setProgressInfo({ phase: "received" });
@@ -1262,6 +1278,77 @@ export default function AxeliaChat({
     }
     setMenuOpenId(null);
   };
+
+  const loadShareCandidates = useCallback(
+    async (query = "") => {
+      if (!conversationId) return [];
+      const res = await getAxeliaShareCandidates({ q: query, limit: 30 });
+      const rows = Array.isArray(res?.data) ? res.data : [];
+      setShareCandidates(rows);
+      return rows;
+    },
+    [conversationId],
+  );
+
+  const openShareModal = useCallback(async () => {
+    if (!canShareConversation || !conversationId) return;
+    setShareOpen(true);
+    setShareNotice("");
+    setShareQuery("");
+    setShareTargetUserId("");
+    setShareLoading(true);
+    try {
+      const [candRes, sharesRes] = await Promise.all([
+        getAxeliaShareCandidates({ limit: 30 }),
+        getAxeliaConversationShares(conversationId),
+      ]);
+      const candidates = Array.isArray(candRes?.data) ? candRes.data : [];
+      const shares = Array.isArray(sharesRes?.data) ? sharesRes.data : [];
+      const already = new Set(
+        shares
+          .map((s) => s?.shared_with_user_id)
+          .filter((v) => typeof v === "string" && v),
+      );
+      setShareCandidates(candidates.filter((c) => !already.has(c.user_id)));
+      if (shares.length > 0) {
+        setShareNotice(`Déjà partagé avec ${shares.length} personne(s).`);
+      }
+    } catch {
+      setShareCandidates([]);
+      setShareNotice("Impossible de charger la liste des collègues.");
+    } finally {
+      setShareLoading(false);
+    }
+  }, [canShareConversation, conversationId]);
+
+  const submitShareConversation = useCallback(async () => {
+    if (!conversationId || !shareTargetUserId || shareSubmitting) return;
+    setShareSubmitting(true);
+    setError(null);
+    try {
+      const res = await postAxeliaConversationShare(conversationId, {
+        target_user_id: shareTargetUserId,
+      });
+      const warning = res?.data?.warning;
+      const target = shareCandidates.find((c) => c.user_id === shareTargetUserId);
+      const targetName = target?.display_name || target?.email || "le collègue";
+      showToast("Discussion partagée");
+      if (warning) {
+        setShareNotice(`Alerte droits: ${warning}`);
+      } else {
+        setShareNotice(`Partagé avec ${targetName}.`);
+      }
+      setShareCandidates((prev) => prev.filter((c) => c.user_id !== shareTargetUserId));
+      setShareTargetUserId("");
+    } catch (err) {
+      const d = err?.response?.data?.detail;
+      setShareNotice(
+        typeof d === "string" ? `Partage impossible: ${d}` : "Partage impossible.",
+      );
+    } finally {
+      setShareSubmitting(false);
+    }
+  }, [conversationId, shareCandidates, shareSubmitting, shareTargetUserId, showToast]);
 
   const hasThread =
     messages.length > 0 || loading || optimisticOutgoing != null;
@@ -1337,7 +1424,23 @@ export default function AxeliaChat({
         <div className="axelia-topbar__center">
           <h1 className="axelia-topbar__title">{topbarConversationTitle}</h1>
         </div>
-        <div className="axelia-topbar__side" aria-hidden="true" />
+        <div className="axelia-topbar__side">
+          <button
+            type="button"
+            className="axelia-topbar__iconbtn"
+            onClick={openShareModal}
+            disabled={!canShareConversation}
+            aria-label="Partager la discussion"
+            title={
+              isReadOnlyConversation
+                ? "Lecture seule: partage indisponible"
+                : "Partager la discussion"
+            }
+          >
+            <FiShare2 size={18} aria-hidden />
+            <span>Partager</span>
+          </button>
+        </div>
       </header>
 
       <div
@@ -1530,7 +1633,7 @@ export default function AxeliaChat({
                             confirmPendingCreates(m.id, pendingCreates)
                           }
                           disabled={
-                            loading || !toolsAvailable || !conversationId
+                            loading || !toolsAvailable || !conversationId || isReadOnlyConversation
                           }
                         >
                           <FiCheck aria-hidden /> Confirmer
@@ -1575,9 +1678,11 @@ export default function AxeliaChat({
                       type="button"
                       aria-label="Régénérer"
                       onClick={regenerate}
-                      disabled={loading || regenLocked}
+                      disabled={loading || regenLocked || isReadOnlyConversation}
                       title={
-                        regenLocked && !loading
+                        isReadOnlyConversation
+                          ? "Discussion partagée en lecture seule"
+                          : regenLocked && !loading
                           ? "Patiente une seconde…"
                           : "Régénérer la réponse"
                       }
@@ -1717,6 +1822,16 @@ export default function AxeliaChat({
                 Aucun compte accessible pour les conversations.
               </p>
             )}
+            {isReadOnlyConversation ? (
+              <p className="axelia-share-readonly-note" role="status">
+                Discussion partagée en lecture seule: tu peux lire, mais pas écrire dans ce fil.
+              </p>
+            ) : null}
+            {activeConversation?.share_warning ? (
+              <p className="axelia-share-warning-note" role="status">
+                {activeConversation.share_warning}
+              </p>
+            ) : null}
 
             <div className="axelia-input-card">
               {pendingFile && (
@@ -1764,7 +1879,7 @@ export default function AxeliaChat({
                 placeholder="Pose une question ou décris ce dont tu as besoin…"
                 rows={2}
                 value={input}
-                disabled={loading}
+                disabled={loading || !canUseComposer}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
@@ -1779,7 +1894,7 @@ export default function AxeliaChat({
                     type="button"
                     className="axelia-icon-btn axelia-icon-btn--solo"
                     onClick={handlePickFile}
-                    disabled={!canUseSend || loading}
+                    disabled={!canUseComposer || loading}
                     title="Joindre une image"
                     aria-label="Joindre une image"
                   >
@@ -1872,7 +1987,7 @@ export default function AxeliaChat({
                       type="button"
                       className="axelia-send-btn"
                       disabled={
-                        (!input.trim() && !pendingFile) || !canUseSend
+                        (!input.trim() && !pendingFile) || !canUseComposer
                       }
                       onClick={sendMessage}
                       title="Envoyer"
@@ -1908,7 +2023,7 @@ export default function AxeliaChat({
                     key={s.text}
                     type="button"
                     className="axelia-chip"
-                    disabled={!canUseSend || loading}
+                    disabled={!canUseComposer || loading}
                     onClick={() => onChip(s.fill)}
                   >
                     {s.icon}
@@ -1924,6 +2039,70 @@ export default function AxeliaChat({
         </div>
         </div>
       </div>
+      {shareOpen ? (
+        <div className="axelia-share-modal-backdrop" onClick={() => setShareOpen(false)}>
+          <div
+            className="axelia-share-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Partager la discussion"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3>Partager la discussion</h3>
+            <p className="axelia-share-modal__hint">
+              Le collègue invité aura un accès lecture seule sur ce fil.
+            </p>
+            <input
+              type="search"
+              className="axelia-share-modal__search"
+              placeholder="Rechercher un collègue"
+              value={shareQuery}
+              onChange={async (e) => {
+                const q = e.target.value;
+                setShareQuery(q);
+                try {
+                  await loadShareCandidates(q);
+                } catch {
+                  /* noop */
+                }
+              }}
+              disabled={shareLoading || shareSubmitting}
+            />
+            <select
+              className="axelia-share-modal__select"
+              value={shareTargetUserId}
+              onChange={(e) => setShareTargetUserId(e.target.value)}
+              disabled={shareLoading || shareSubmitting}
+            >
+              <option value="">Choisir un collègue…</option>
+              {shareCandidates.map((u) => (
+                <option key={u.user_id} value={u.user_id}>
+                  {u.display_name || u.email || u.user_id}
+                </option>
+              ))}
+            </select>
+            {shareNotice ? <p className="axelia-share-modal__notice">{shareNotice}</p> : null}
+            <div className="axelia-share-modal__actions">
+              <button
+                type="button"
+                className="axelia-pending-tools__cancel"
+                onClick={() => setShareOpen(false)}
+                disabled={shareSubmitting}
+              >
+                Fermer
+              </button>
+              <button
+                type="button"
+                className="axelia-pending-tools__confirm"
+                onClick={submitShareConversation}
+                disabled={!shareTargetUserId || shareSubmitting || shareLoading}
+              >
+                {shareSubmitting ? "Partage…" : "Partager"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

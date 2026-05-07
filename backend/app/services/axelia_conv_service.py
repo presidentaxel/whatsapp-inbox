@@ -36,13 +36,60 @@ async def conv_list_visible(
     limit: Optional[int] = None,
     offset: int = 0,
 ) -> List[Dict[str, Any]]:
-    res = await supabase_execute(
+    owned_res = await supabase_execute(
         supabase.table("axelia_conversations")
         .select("id,user_id,account_context,title,pinned,created_at,updated_at,hidden_at")
         .eq("user_id", user_id)
         .is_("hidden_at", "null")
     )
-    rows = list(res.data or [])
+    owned_rows = [
+        {
+            **r,
+            "read_only": False,
+            "access_mode": "owner",
+            "shared_by_user_id": None,
+            "share_warning": None,
+        }
+        for r in list(owned_res.data or [])
+    ]
+    shared_res = await supabase_execute(
+        supabase.table("axelia_conversation_shares")
+        .select("conversation_id,owner_user_id,warning_message")
+        .eq("shared_with_user_id", user_id)
+    )
+    shared_meta = list(shared_res.data or [])
+    shared_ids = [
+        str(r.get("conversation_id"))
+        for r in shared_meta
+        if str(r.get("conversation_id") or "").strip()
+    ]
+    shared_rows: List[Dict[str, Any]] = []
+    if shared_ids:
+        conv_res = await supabase_execute(
+            supabase.table("axelia_conversations")
+            .select("id,user_id,account_context,title,pinned,created_at,updated_at,hidden_at")
+            .in_("id", shared_ids)
+            .is_("hidden_at", "null")
+        )
+        conv_map = {str(r.get("id")): r for r in list(conv_res.data or [])}
+        for s in shared_meta:
+            cid = str(s.get("conversation_id") or "")
+            conv = conv_map.get(cid)
+            if not conv:
+                continue
+            if str(conv.get("user_id") or "") == user_id:
+                # Défense en profondeur: ne pas dupliquer une conv dont on est propriétaire.
+                continue
+            shared_rows.append(
+                {
+                    **conv,
+                    "read_only": True,
+                    "access_mode": "shared",
+                    "shared_by_user_id": s.get("owner_user_id"),
+                    "share_warning": s.get("warning_message"),
+                }
+            )
+    rows = [*owned_rows, *shared_rows]
     pinned = [r for r in rows if r.get("pinned")]
     unpinned = [r for r in rows if not r.get("pinned")]
     pinned.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
@@ -71,6 +118,49 @@ async def conv_get_owned(user_id: str, conversation_id: str) -> Optional[Dict[st
     if isinstance(data, dict):
         return data
     return None
+
+
+async def conv_get_accessible(user_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
+    """Retourne une conversation visible par l'utilisateur (owner ou partagée)."""
+    owned = await conv_get_owned(user_id, conversation_id)
+    if owned:
+        return {
+            **owned,
+            "read_only": False,
+            "access_mode": "owner",
+            "shared_by_user_id": None,
+            "share_warning": None,
+        }
+    if not _is_uuid(conversation_id):
+        return None
+    share_res = await supabase_execute(
+        supabase.table("axelia_conversation_shares")
+        .select("conversation_id,owner_user_id,warning_message")
+        .eq("conversation_id", conversation_id)
+        .eq("shared_with_user_id", user_id)
+        .limit(1)
+    )
+    srows = list(share_res.data or [])
+    if not srows:
+        return None
+    conv_res = await supabase_execute(
+        supabase.table("axelia_conversations")
+        .select("*")
+        .eq("id", conversation_id)
+        .is_("hidden_at", "null")
+        .limit(1)
+    )
+    crows = list(conv_res.data or [])
+    if not crows:
+        return None
+    conv = crows[0]
+    return {
+        **conv,
+        "read_only": True,
+        "access_mode": "shared",
+        "shared_by_user_id": srows[0].get("owner_user_id"),
+        "share_warning": srows[0].get("warning_message"),
+    }
 
 
 async def conv_update(
@@ -104,6 +194,47 @@ async def conv_update(
     if isinstance(data, dict):
         return data
     return None
+
+
+async def conversation_share_create(
+    owner_user_id: str,
+    conversation_id: str,
+    shared_with_user_id: str,
+    *,
+    warning_message: Optional[str] = None,
+) -> Dict[str, Any]:
+    payload = {
+        "conversation_id": conversation_id,
+        "owner_user_id": owner_user_id,
+        "shared_with_user_id": shared_with_user_id,
+        "warning_message": warning_message,
+    }
+    res = await supabase_execute(
+        supabase.table("axelia_conversation_shares").upsert(
+            payload,
+            on_conflict="conversation_id,shared_with_user_id",
+        )
+    )
+    data = res.data
+    if isinstance(data, list) and data:
+        return data[0]
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+async def conversation_shares_list(
+    owner_user_id: str,
+    conversation_id: str,
+) -> List[Dict[str, Any]]:
+    res = await supabase_execute(
+        supabase.table("axelia_conversation_shares")
+        .select("id,conversation_id,owner_user_id,shared_with_user_id,warning_message,created_at")
+        .eq("owner_user_id", owner_user_id)
+        .eq("conversation_id", conversation_id)
+        .order("created_at", desc=False)
+    )
+    return list(res.data or [])
 
 
 async def messages_list(conversation_id: str) -> List[Dict[str, Any]]:

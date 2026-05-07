@@ -1,19 +1,24 @@
 import json as _json
 import logging
+from types import SimpleNamespace
 from typing import Any, AsyncIterator, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.core.auth import get_current_user
-from app.core.permissions import CurrentUser, PermissionCodes
+from app.core.permissions import CurrentUser, PermissionCodes, load_current_user_async
 from app.schemas.axelia import (
     AxeliaChatRequest,
     AxeliaChatResponse,
     AxeliaConversationCreate,
     AxeliaConversationPatch,
+    AxeliaConversationShareCreate,
+    AxeliaConversationShareResult,
+    AxeliaShareCandidate,
     AxeliaMessageRating,
 )
+from app.core.db import supabase, supabase_execute
 from app.services.account_service import get_account_by_id, get_all_accounts
 from app.services.axelia_chat_service import (
     context_cache_stats,
@@ -23,7 +28,10 @@ from app.services.axelia_chat_service import (
     stream_axelia_chat,
 )
 from app.services.axelia_conv_service import (
+    conversation_share_create,
+    conversation_shares_list,
     conv_create,
+    conv_get_accessible,
     conv_get_owned,
     conv_list_visible,
     conv_update,
@@ -139,6 +147,61 @@ async def _check_account_access(current_user: CurrentUser, account_id: str):
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
 
 
+async def _load_user_by_app_user_id(user_id: str) -> Optional[CurrentUser]:
+    row_res = await supabase_execute(
+        supabase.table("app_users")
+        .select("user_id,email,is_active")
+        .eq("user_id", user_id)
+        .limit(1)
+    )
+    rows = list(row_res.data or [])
+    if not rows:
+        return None
+    row = rows[0]
+    if not bool(row.get("is_active", True)):
+        return None
+    pseudo = SimpleNamespace(
+        id=str(row.get("user_id")),
+        email=row.get("email"),
+        user_metadata={},
+    )
+    try:
+        return await load_current_user_async(pseudo)
+    except Exception:
+        logger.warning("axelia share: failed loading target user permissions", exc_info=True)
+        return None
+
+
+def _build_share_warning(
+    *,
+    account_context: str,
+    target_user: Optional[CurrentUser],
+) -> Optional[str]:
+    if not target_user:
+        return (
+            "Le collègue destinataire n'a pas un profil d'accès résolu côté serveur. "
+            "Certaines données peuvent ne pas lui être accessibles."
+        )
+    if account_context == _AXELIA_CONTEXT_ALL:
+        can_all = _user_can_scope_all_accounts(target_user)
+        if not can_all:
+            return (
+                "Le collègue n'a pas accès à l'ensemble des comptes de ce fil. "
+                "Certaines données de la discussion peuvent être indisponibles pour lui."
+            )
+        return None
+    has_account_access = target_user.permissions.has(
+        PermissionCodes.CONVERSATIONS_VIEW,
+        account_context,
+    )
+    if not has_account_access:
+        return (
+            "Le collègue n'a pas l'accès conversation à ce compte. "
+            "Certaines données mentionnées dans ce fil peuvent lui être indisponibles."
+        )
+    return None
+
+
 @router.get("/conversations")
 async def list_axelia_conversations(
     current_user: CurrentUser = Depends(get_current_user),
@@ -147,6 +210,35 @@ async def list_axelia_conversations(
 ):
     """Liste légère (sans messages). Pagination optionnelle : `limit` + `offset` sur la liste triée (épinglés d’abord)."""
     return await conv_list_visible(current_user.id, limit=limit, offset=offset)
+
+
+@router.get("/share/candidates", response_model=List[AxeliaShareCandidate])
+async def list_axelia_share_candidates(
+    q: str = Query("", max_length=120),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    needle = (q or "").strip().lower()
+    res = await supabase_execute(
+        supabase.table("app_users")
+        .select("user_id,email,display_name,is_active")
+        .eq("is_active", True)
+        .order("display_name")
+    )
+    out: List[AxeliaShareCandidate] = []
+    for row in res.data or []:
+        uid = str(row.get("user_id") or "")
+        if not uid or uid == current_user.id:
+            continue
+        dn = (row.get("display_name") or "").strip()
+        em = (row.get("email") or "").strip()
+        hay = f"{dn} {em}".lower()
+        if needle and needle not in hay:
+            continue
+        out.append(AxeliaShareCandidate(user_id=uid, display_name=dn or None, email=em or None))
+        if len(out) >= limit:
+            break
+    return out
 
 
 @router.post("/conversations")
@@ -161,6 +253,78 @@ async def create_axelia_conversation(
     if not row.get("id"):
         raise HTTPException(status_code=500, detail="create_failed")
     return row
+
+
+@router.get("/conversations/{conversation_id}/shares")
+async def get_axelia_conversation_shares(
+    conversation_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    conv = await conv_get_owned(current_user.id, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    rows = await conversation_shares_list(current_user.id, conversation_id)
+    if not rows:
+        return []
+    user_ids = [str(r.get("shared_with_user_id")) for r in rows if r.get("shared_with_user_id")]
+    users_map: dict[str, dict[str, Any]] = {}
+    if user_ids:
+        ures = await supabase_execute(
+            supabase.table("app_users")
+            .select("user_id,display_name,email")
+            .in_("user_id", user_ids)
+        )
+        users_map = {str(r.get("user_id")): r for r in (ures.data or [])}
+    out = []
+    for r in rows:
+        uid = str(r.get("shared_with_user_id") or "")
+        u = users_map.get(uid) or {}
+        out.append(
+            {
+                **r,
+                "shared_with_display_name": u.get("display_name"),
+                "shared_with_email": u.get("email"),
+            }
+        )
+    return out
+
+
+@router.post("/conversations/{conversation_id}/shares", response_model=AxeliaConversationShareResult)
+async def post_axelia_conversation_share(
+    conversation_id: str,
+    body: AxeliaConversationShareCreate,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    conv = await conv_get_owned(current_user.id, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    target_user_id = (body.target_user_id or "").strip()
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="target_user_id_required")
+    if target_user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="cannot_share_with_self")
+
+    target_user = await _load_user_by_app_user_id(target_user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="target_user_not_found")
+    if not target_user.permissions.has(PermissionCodes.AXELIA_ACCESS):
+        raise HTTPException(status_code=400, detail="target_user_axelia_access_required")
+
+    warning = _build_share_warning(
+        account_context=str(conv.get("account_context") or _AXELIA_CONTEXT_ALL),
+        target_user=target_user,
+    )
+    await conversation_share_create(
+        current_user.id,
+        conversation_id,
+        target_user_id,
+        warning_message=warning,
+    )
+    return AxeliaConversationShareResult(
+        conversation_id=conversation_id,
+        target_user_id=target_user_id,
+        warning=warning,
+    )
 
 
 @router.patch("/conversations/{conversation_id}")
@@ -186,7 +350,7 @@ async def get_axelia_messages(
     conversation_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    conv = await conv_get_owned(current_user.id, conversation_id)
+    conv = await conv_get_accessible(current_user.id, conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="conversation_not_found")
     rows = await messages_list(conversation_id)
@@ -210,9 +374,11 @@ async def regenerate_axelia_reply(
     conversation_id: str,
     current_user: CurrentUser = Depends(get_current_user),
 ):
-    conv = await conv_get_owned(current_user.id, conversation_id)
+    conv = await conv_get_accessible(current_user.id, conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="conversation_not_found")
+    if conv.get("read_only"):
+        raise HTTPException(status_code=403, detail="conversation_read_only")
 
     await _check_account_access(current_user, conv.get("account_context") or _AXELIA_CONTEXT_ALL)
 
@@ -281,9 +447,11 @@ async def axelia_chat(
 ):
     await _check_account_access(current_user, body.account_id)
 
-    conv = await conv_get_owned(current_user.id, body.conversation_id)
+    conv = await conv_get_accessible(current_user.id, body.conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="conversation_not_found")
+    if conv.get("read_only"):
+        raise HTTPException(status_code=403, detail="conversation_read_only")
 
     if conv.get("account_context") != body.account_id:
         raise HTTPException(status_code=400, detail="account_context_mismatch")
@@ -454,9 +622,11 @@ async def axelia_chat_stream(
     """
     await _check_account_access(current_user, body.account_id)
 
-    conv = await conv_get_owned(current_user.id, body.conversation_id)
+    conv = await conv_get_accessible(current_user.id, body.conversation_id)
     if not conv:
         raise HTTPException(status_code=404, detail="conversation_not_found")
+    if conv.get("read_only"):
+        raise HTTPException(status_code=403, detail="conversation_read_only")
     if conv.get("account_context") != body.account_id:
         raise HTTPException(status_code=400, detail="account_context_mismatch")
 

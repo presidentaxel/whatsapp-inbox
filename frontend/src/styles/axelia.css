@@ -1392,6 +1392,84 @@
   opacity: 0.5;
 }
 
+.axelia-share-readonly-note,
+.axelia-share-warning-note {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.axelia-share-readonly-note {
+  color: #e8eaed;
+  background: rgba(138, 180, 248, 0.12);
+  border: 1px solid rgba(138, 180, 248, 0.35);
+}
+
+.axelia-share-warning-note {
+  color: #fdd663;
+  background: rgba(251, 188, 5, 0.08);
+  border: 1px solid rgba(251, 188, 5, 0.22);
+}
+
+.axelia-share-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 15000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.axelia-share-modal {
+  width: min(520px, 96vw);
+  background: #1e1e1e;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+  padding: 16px;
+}
+
+.axelia-share-modal h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.axelia-share-modal__hint {
+  margin: 0 0 12px;
+  color: var(--axelia-muted);
+  font-size: 0.85rem;
+}
+
+.axelia-share-modal__search,
+.axelia-share-modal__select {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--axelia-text);
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  margin-bottom: 10px;
+}
+
+.axelia-share-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.axelia-share-modal__notice {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+  color: #fdd663;
+}
+
 /* Aperçu pièce jointe : version PDF (icône à la place de l'image) */
 .axelia-attach-preview__icon {
   display: inline-flex;

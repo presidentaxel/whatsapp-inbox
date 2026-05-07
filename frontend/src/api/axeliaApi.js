@@ -13,6 +13,15 @@ export const createAxeliaConversation = (payload) =>
 export const patchAxeliaConversation = (conversationId, payload) =>
   api.patch(`/axelia/conversations/${conversationId}`, payload);
 
+export const getAxeliaShareCandidates = (params) =>
+  api.get("/axelia/share/candidates", { params: params || {} });
+
+export const getAxeliaConversationShares = (conversationId) =>
+  api.get(`/axelia/conversations/${conversationId}/shares`);
+
+export const postAxeliaConversationShare = (conversationId, payload) =>
+  api.post(`/axelia/conversations/${conversationId}/shares`, payload);
+
 export const getAxeliaMessages = (conversationId) =>
   api.get(`/axelia/conversations/${conversationId}/messages`);
 

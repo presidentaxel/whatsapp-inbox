@@ -53,3 +53,19 @@ class AxeliaConversationPatch(BaseModel):
 
 class AxeliaMessageRating(BaseModel):
     rating: Optional[Literal[-1, 1]] = None
+
+
+class AxeliaConversationShareCreate(BaseModel):
+    target_user_id: str
+
+
+class AxeliaConversationShareResult(BaseModel):
+    conversation_id: str
+    target_user_id: str
+    warning: Optional[str] = None
+
+
+class AxeliaShareCandidate(BaseModel):
+    user_id: str
+    display_name: Optional[str] = None
+    email: Optional[str] = None
