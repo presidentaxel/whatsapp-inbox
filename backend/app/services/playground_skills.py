@@ -21,6 +21,8 @@ from app.core.permissions import PermissionCodes
 
 logger = logging.getLogger("uvicorn.error").getChild("playground_skills")
 
+_PARALLEL_SKILL_CALLS = 5
+
 
 @dataclass(frozen=True)
 class AxeliaPendingAttachment:
@@ -1318,20 +1320,25 @@ async def execute_tool_calls(
     *,
     axelia_runtime: Optional[AxeliaSkillsRuntime] = None,
 ) -> List[Dict[str, Any]]:
-    """Exécute les tool_calls en parallèle ; résultats dans le même ordre que la liste (max 5)."""
+    """Enchaîne les tool_calls par paquets parallèles (5) ; ordre global préservé."""
+
+    async def _one(tc: Dict[str, Any]) -> Dict[str, Any]:
+        skill_name = (tc.get("skill") or tc.get("name") or "").strip()
+        args = tc.get("args") or tc.get("arguments") or {}
+        result = await execute_skill(skill_name, args, account)
+        return {"skill": skill_name, "result": result}
+
     token = None
     if axelia_runtime is not None:
         token = _axelia_skills_runtime.set(axelia_runtime)
     try:
-        subset = tool_calls[:5]
-
-        async def _one(tc: Dict[str, Any]) -> Dict[str, Any]:
-            skill_name = (tc.get("skill") or tc.get("name") or "").strip()
-            args = tc.get("args") or tc.get("arguments") or {}
-            result = await execute_skill(skill_name, args, account)
-            return {"skill": skill_name, "result": result}
-
-        return list(await asyncio.gather(*(_one(tc) for tc in subset)))
+        all_out: List[Dict[str, Any]] = []
+        for off in range(0, len(tool_calls), _PARALLEL_SKILL_CALLS):
+            subset = tool_calls[off : off + _PARALLEL_SKILL_CALLS]
+            all_out.extend(
+                list(await asyncio.gather(*(_one(tc) for tc in subset)))
+            )
+        return all_out
     finally:
         if token is not None:
             _axelia_skills_runtime.reset(token)

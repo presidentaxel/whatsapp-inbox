@@ -51,6 +51,32 @@ router = APIRouter(
 _AXELIA_CONTEXT_ALL = "__all__"
 
 
+def _consume_sse_done_from_buffer(buffer: str) -> tuple[str, Optional[dict[str, Any]]]:
+    """Consomme les frames SSE complètes et extrait le dernier payload `event: done` trouvé."""
+    done_payload: Optional[dict[str, Any]] = None
+    while True:
+        sep = buffer.find("\n\n")
+        if sep < 0:
+            break
+        frame = buffer[:sep]
+        buffer = buffer[sep + 2 :]
+        if "event: done" not in frame:
+            continue
+        data_lines = []
+        for line in frame.splitlines():
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+        if not data_lines:
+            continue
+        try:
+            payload = _json.loads("\n".join(data_lines))
+            if isinstance(payload, dict):
+                done_payload = payload
+        except Exception:
+            logger.debug("axelia stream: invalid done payload", exc_info=True)
+    return buffer, done_payload
+
+
 async def build_axelia_perimeter_context(
     current_user: CurrentUser,
     account_id: str,
@@ -416,7 +442,7 @@ async def axelia_chat_stream(
     Mêmes pré-conditions que `/axelia/chat` (auth, périmètre, persistance). Le corps de la
     réponse est un flux ``text/event-stream`` avec les évènements suivants :
     - ``meta``     : modèle choisi, classifier, périmètre, ``user_message_id``.
-    - ``progress`` : phase, skills courants, skills cumulés, éventuellement ``todos`` (task_plan).
+    - ``progress`` : phase, skills courants, skills cumulés, ``todos`` (mis à jour en direct pendant les outils).
     - ``token``    : delta texte de la réponse finale (peut survenir plusieurs fois).
     - ``done``     : payload final (``text``, ``model``, ``skills_used``, ``pending_tool_calls``,
                      ``assistant_message_id``).
@@ -484,6 +510,18 @@ async def axelia_chat_stream(
     )
 
     progress_key = (body.progress_key or "").strip()[:80] or None
+    if progress_key:
+        from app.services.axelia_chat_service import progress_set as _pset
+
+        _pset(
+            progress_key,
+            {
+                "phase": "received",
+                "user_id": current_user.id,
+                "conversation_id": body.conversation_id,
+                "skills": [],
+            },
+        )
 
     async def _event_stream() -> AsyncIterator[bytes]:
         # Premier event : on confirme l'`user_message_id` côté client (utile pour mettre
@@ -497,8 +535,7 @@ async def axelia_chat_stream(
 
         final_text = ""
         final_model: Optional[str] = None
-        final_skills: Optional[List[str]] = None
-        final_pending: Optional[List[dict]] = None
+        sse_buffer = ""
 
         try:
             async for chunk in stream_axelia_chat(
@@ -516,16 +553,11 @@ async def axelia_chat_stream(
                 # pour persister la réponse côté DB.
                 yield chunk
                 try:
-                    s = chunk.decode("utf-8", errors="ignore")
-                    if "event: done" in s and "\ndata: " in s:
-                        idx = s.index("\ndata: ")
-                        end = s.index("\n\n", idx)
-                        payload = _json.loads(s[idx + 7 : end])
-                        if isinstance(payload, dict):
-                            final_text = str(payload.get("text") or "")
-                            final_model = payload.get("model")
-                            final_skills = payload.get("skills_used")
-                            final_pending = payload.get("pending_tool_calls")
+                    sse_buffer += chunk.decode("utf-8", errors="ignore")
+                    sse_buffer, payload = _consume_sse_done_from_buffer(sse_buffer)
+                    if isinstance(payload, dict):
+                        final_text = str(payload.get("text") or "")
+                        final_model = payload.get("model")
                 except Exception:
                     logger.debug(
                         "axelia stream: post-parse done failed", exc_info=True

@@ -31,6 +31,13 @@ def test_owner_filter_blocks_other_user():
     progress_clear(key)
 
 
+def test_owner_filter_rejects_entries_without_user_id():
+    key = "key-owner-missing-user-id"
+    progress_set(key, {"phase": "tool"})
+    assert progress_get(key, owner_user_id="alice") is None
+    progress_clear(key)
+
+
 def test_clear_removes_entry():
     key = "key-clear"
     progress_set(key, {"phase": "received"})

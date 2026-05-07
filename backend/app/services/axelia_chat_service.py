@@ -19,6 +19,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncIterator,
+    Callable,
     Dict,
     Iterable,
     List,
@@ -171,6 +172,7 @@ _AXELIA_TOOLS_READ_TIMEOUT_S = 120.0
 _MAX_SKILL_ROUNDS_HARD = 8
 _MAX_SKILL_TOKENS_BUDGET = 60_000  # tokens cumulés (input + output) avant de stopper la boucle
 _MAX_SKILL_ROUNDS_NO_PROGRESS = 2  # rounds consécutifs sans nouveau skill exécuté
+_MAX_PARALLEL_AXELIA_TOOLS = 5  # max skills en parallèle (queues Meta / quotas)
 
 # Résumé d'historique : au-delà de ce seuil de tours, les plus anciens sont remplacés
 # par un résumé compact (1 appel flash supplémentaire, en best-effort).
@@ -326,8 +328,11 @@ def progress_get(key: str, *, owner_user_id: Optional[str] = None) -> Optional[D
         p = _progress_store.get(key)
         if not p:
             return None
-        if owner_user_id is not None and p.get("user_id") and p["user_id"] != owner_user_id:
-            return None
+        if owner_user_id is not None:
+            if not p.get("user_id"):
+                return None
+            if p["user_id"] != owner_user_id:
+                return None
         return dict(p)
 
 
@@ -475,6 +480,17 @@ def _pick_task_indices_for_tools(
     return picked
 
 
+def _copy_progress_broadcast(pl: Dict[str, Any]) -> Dict[str, Any]:
+    """Copie plate JSON-safe pour file SSE sans référencer le registre mutable."""
+    out: Dict[str, Any] = {}
+    for key, val in pl.items():
+        if key == "todos" and isinstance(val, list):
+            out[key] = [dict(x) for x in val if isinstance(x, dict)]
+        else:
+            out[key] = val
+    return out
+
+
 def _apply_task_progress_payload(
     *,
     progress_key: Optional[str],
@@ -484,6 +500,7 @@ def _apply_task_progress_payload(
     rounds_done: int,
     running_skill_names: List[str],
     skills_running: Optional[List[str]] = None,
+    progress_sse_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> None:
     payload: Dict[str, Any] = {
         "phase": phase,
@@ -497,6 +514,11 @@ def _apply_task_progress_payload(
     else:
         payload["todos"] = []
     progress_set(progress_key, payload)
+    if progress_sse_sink:
+        try:
+            progress_sse_sink(_copy_progress_broadcast(payload))
+        except Exception:
+            logger.debug("axelia progress sse sink failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1397,6 +1419,7 @@ async def _run_axelia_with_tools(
     progress_key: Optional[str] = None,
     metrics_out: Optional[Dict[str, Any]] = None,
     attachment: Optional[Dict[str, str]] = None,
+    progress_sse_sink: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Tuple[str, str, List[str], Optional[List[Dict[str, Any]]]]:
     pre_skills: List[str] = []
     msgs_work = [m for m in messages if isinstance(m, dict)]
@@ -1623,6 +1646,7 @@ async def _run_axelia_with_tools(
         rounds_done=0,
         running_skill_names=[],
         skills_running=[],
+        progress_sse_sink=progress_sse_sink,
     )
 
     # Budget dynamique : on tourne tant que (rounds < hard cap) ET (tokens < budget)
@@ -1703,54 +1727,61 @@ async def _run_axelia_with_tools(
         if safe:
             _augment_axelia_task_plan_for_safe_calls(last_todos, safe)
 
-        running_skill_names = [
-            (tc.get("skill") or tc.get("name") or "").strip()
-            for tc in safe
-            if isinstance(tc, dict)
-        ]
-        batch_indices: List[int] = []
-        if last_todos:
-            batch_indices = _pick_task_indices_for_tools(last_todos, safe)
-            for i in batch_indices:
-                if 0 <= i < len(last_todos):
-                    last_todos[i]["status"] = "in_progress"
+        skill_results: List[Dict[str, Any]] = []
+        for chunk_off in range(0, len(safe), _MAX_PARALLEL_AXELIA_TOOLS):
+            chunk = safe[chunk_off : chunk_off + _MAX_PARALLEL_AXELIA_TOOLS]
+            running_skill_names = [
+                (tc.get("skill") or tc.get("name") or "").strip()
+                for tc in chunk
+                if isinstance(tc, dict)
+            ]
+            batch_indices: List[int] = []
+            if last_todos:
+                batch_indices = _pick_task_indices_for_tools(last_todos, chunk)
+                for i in batch_indices:
+                    if 0 <= i < len(last_todos):
+                        last_todos[i]["status"] = "in_progress"
 
-        _apply_task_progress_payload(
-            progress_key=progress_key,
-            todos=last_todos,
-            phase="tool",
-            skills_used=list(skills_used),
-            rounds_done=rounds_done + 1,
-            running_skill_names=running_skill_names,
-            skills_running=running_skill_names,
-        )
+            _apply_task_progress_payload(
+                progress_key=progress_key,
+                todos=last_todos,
+                phase="tool",
+                skills_used=list(skills_used),
+                rounds_done=rounds_done + 1,
+                running_skill_names=running_skill_names,
+                skills_running=running_skill_names,
+                progress_sse_sink=progress_sse_sink,
+            )
 
-        skill_results = await execute_tool_calls(
-            safe, acc_for_skills, axelia_runtime=ax_rt
-        )
+            chunk_results = await execute_tool_calls(
+                chunk, acc_for_skills, axelia_runtime=ax_rt
+            )
+            skill_results.extend(chunk_results)
+            new_skill_names = [r["skill"] for r in chunk_results if r.get("skill")]
+            skills_used.extend(new_skill_names)
+            skill_executions_total_local += len(new_skill_names)
+            if new_skill_names:
+                rounds_no_progress = 0
+            else:
+                rounds_no_progress += 1
+
+            if batch_indices:
+                for i in batch_indices:
+                    if 0 <= i < len(last_todos):
+                        last_todos[i]["status"] = "done"
+
+            _apply_task_progress_payload(
+                progress_key=progress_key,
+                todos=last_todos,
+                phase="thinking",
+                skills_used=list(skills_used),
+                rounds_done=rounds_done + 1,
+                running_skill_names=[],
+                skills_running=[],
+                progress_sse_sink=progress_sse_sink,
+            )
+
         last_skill_results = skill_results
-        new_skill_names = [r["skill"] for r in skill_results if r.get("skill")]
-        skills_used.extend(new_skill_names)
-        skill_executions_total_local += len(new_skill_names)
-        if new_skill_names:
-            rounds_no_progress = 0
-        else:
-            rounds_no_progress += 1
-
-        if batch_indices:
-            for i in batch_indices:
-                if 0 <= i < len(last_todos):
-                    last_todos[i]["status"] = "done"
-
-        _apply_task_progress_payload(
-            progress_key=progress_key,
-            todos=last_todos,
-            phase="thinking",
-            skills_used=list(skills_used),
-            rounds_done=rounds_done + 1,
-            running_skill_names=[],
-            skills_running=[],
-        )
 
         tool_result_text = (
             "Résultats des skills demandés :\n"
@@ -1813,6 +1844,7 @@ async def _run_axelia_with_tools(
             rounds_done=rounds_done,
             running_skill_names=[],
             skills_running=[],
+            progress_sse_sink=progress_sse_sink,
         )
 
     if metrics_out is not None:
@@ -1820,12 +1852,6 @@ async def _run_axelia_with_tools(
         metrics_out["skill_executions"] = skill_executions_total_local
         metrics_out["budget_hit"] = budget_hit
         metrics_out["json_partial"] = partial_json
-        metrics_out["input_tokens"] = (
-            metrics_out.get("input_tokens") or 0
-        ) + cumulative_tokens // 2
-        metrics_out["output_tokens"] = (
-            metrics_out.get("output_tokens") or 0
-        ) + cumulative_tokens // 2
 
     if not isinstance(parsed, dict):
         if metrics_out is not None:
@@ -2260,8 +2286,25 @@ async def stream_axelia_chat(
     try:
         if use_skill_loop:
             try:
-                final_text, final_model, skills_used, pending_tool_calls = (
-                    await _run_axelia_with_tools(
+                progress_sse_q: asyncio.Queue[Dict[str, Any]] = asyncio.Queue(
+                    maxsize=320
+                )
+
+                def progress_sse_sink(pl: Dict[str, Any]) -> None:
+                    try:
+                        progress_sse_q.put_nowait(pl)
+                    except asyncio.QueueFull:
+                        try:
+                            progress_sse_q.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                        try:
+                            progress_sse_q.put_nowait(pl)
+                        except asyncio.QueueFull:
+                            pass
+
+                tools_task = asyncio.create_task(
+                    _run_axelia_with_tools(
                         messages=messages,
                         account=account,
                         sector=sector,
@@ -2274,8 +2317,44 @@ async def stream_axelia_chat(
                         progress_key=progress_key,
                         metrics_out=metrics_collector,
                         attachment=attachment,
+                        progress_sse_sink=progress_sse_sink,
                     )
                 )
+
+                while not tools_task.done():
+                    get_ev = asyncio.create_task(progress_sse_q.get())
+                    done_f, _ = await asyncio.wait(
+                        {tools_task, get_ev},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if get_ev in done_f:
+                        try:
+                            chunk_pl = get_ev.result()
+                            yield _format_sse("progress", chunk_pl)
+                        except Exception:
+                            logger.debug("axelia stream progress read failed", exc_info=True)
+                    if tools_task in done_f:
+                        if not get_ev.done():
+                            get_ev.cancel()
+                            try:
+                                await get_ev
+                            except asyncio.CancelledError:
+                                pass
+                        break
+
+                while True:
+                    try:
+                        chunk_pl = progress_sse_q.get_nowait()
+                        yield _format_sse("progress", chunk_pl)
+                    except asyncio.QueueEmpty:
+                        break
+
+                (
+                    final_text,
+                    final_model,
+                    skills_used,
+                    pending_tool_calls,
+                ) = tools_task.result()
             except ValueError as exc:
                 failed = True
                 yield _format_sse(
