@@ -20,7 +20,6 @@ import {
   FiCopy,
   FiMoreHorizontal,
   FiCheck,
-  FiSliders,
   FiSquare,
   FiSearch,
   FiFileText,
@@ -316,7 +315,6 @@ export default function AxeliaChat({
   useEffect(() => {
     saveAxeliaResponseDepth(responseDepth);
   }, [responseDepth]);
-  const [toolsOpen, setToolsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   /** Affichage immédiat de la bulle utilisateur pendant l’appel au modèle */
   const [optimisticOutgoing, setOptimisticOutgoing] = useState(null);
@@ -342,7 +340,6 @@ export default function AxeliaChat({
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
   const contextMeasureRef = useRef(null);
-  const toolsWrapRef = useRef(null);
   const abortRef = useRef(null);
   const progressKeyRef = useRef(null);
   const progressTimerRef = useRef(null);
@@ -492,30 +489,7 @@ export default function AxeliaChat({
     setSkillsByAssistId({});
     setDepthByAssistId({});
     setPendingCreateByAssistId({});
-    setToolsOpen(false);
   }, [conversationId, loadMessages]);
-
-  useEffect(() => {
-    if (!toolsOpen) return;
-    let removeDoc = () => {};
-    const tid = window.setTimeout(() => {
-      const onDoc = (e) => {
-        const el = toolsWrapRef.current;
-        if (el && !el.contains(e.target)) setToolsOpen(false);
-      };
-      document.addEventListener("mousedown", onDoc);
-      removeDoc = () => document.removeEventListener("mousedown", onDoc);
-    }, 0);
-    const onKey = (e) => {
-      if (e.key === "Escape") setToolsOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      clearTimeout(tid);
-      removeDoc();
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [toolsOpen]);
 
   useEffect(() => {
     if (menuOpenId == null) return;
@@ -821,12 +795,6 @@ export default function AxeliaChat({
       setError("Impossible de changer de périmètre.");
     }
   };
-
-  /** Ouvre/ferme le panneau d’orientation (ne dépend pas d’un compte WABA précis - le panneau l’explique). */
-  const toggleToolsPanel = useCallback(() => {
-    if (!canUseSend || loading) return;
-    setToolsOpen((open) => !open);
-  }, [canUseSend, loading]);
 
   const sendMessage = async () => {
     const text = input.trim();
@@ -1621,21 +1589,25 @@ export default function AxeliaChat({
                     >
                       <FiCopy />
                     </button>
-                    {m.model_used ? (
-                      <span
-                        className="axelia-model-badge"
-                        title={`Modèle : ${m.model_used}`}
-                      >
-                        {toAxeliaModelLabel(m.model_used)}
-                      </span>
-                    ) : null}
-                    {msgDepth ? (
-                      <span
-                        className="axelia-model-badge"
-                        title={`Profondeur utilisée : ${msgDepth}`}
-                      >
-                        {toAxeliaDepthLabel(msgDepth)}
-                      </span>
+                    {m.model_used || msgDepth ? (
+                      <div className="axelia-model-badges">
+                        {m.model_used ? (
+                          <span
+                            className="axelia-model-badge"
+                            title={`Modèle : ${m.model_used}`}
+                          >
+                            {toAxeliaModelLabel(m.model_used)}
+                          </span>
+                        ) : null}
+                        {msgDepth ? (
+                          <span
+                            className="axelia-model-badge"
+                            title={`Profondeur utilisée : ${msgDepth}`}
+                          >
+                            {toAxeliaDepthLabel(msgDepth)}
+                          </span>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
                 </div>
@@ -1686,18 +1658,20 @@ export default function AxeliaChat({
                 </div>
                 {streamingModel ? (
                   <div className="axelia-model-actions axelia-model-actions--streaming">
-                    <span
-                      className="axelia-model-badge"
-                      title={`Modèle : ${streamingModel}`}
-                    >
-                      {toAxeliaModelLabel(streamingModel)}
-                    </span>
-                    <span
-                      className="axelia-model-badge"
-                      title={`Profondeur active : ${responseDepth}`}
-                    >
-                      {toAxeliaDepthLabel(responseDepth)}
-                    </span>
+                    <div className="axelia-model-badges">
+                      <span
+                        className="axelia-model-badge"
+                        title={`Modèle : ${streamingModel}`}
+                      >
+                        {toAxeliaModelLabel(streamingModel)}
+                      </span>
+                      <span
+                        className="axelia-model-badge"
+                        title={`Profondeur active : ${responseDepth}`}
+                      >
+                        {toAxeliaDepthLabel(responseDepth)}
+                      </span>
+                    </div>
                   </div>
                 ) : null}
               </div>
@@ -1809,81 +1783,6 @@ export default function AxeliaChat({
                   >
                     <FiPaperclip aria-hidden size={22} />
                   </button>
-                  <div className="axelia-tools-wrap" ref={toolsWrapRef}>
-                    <button
-                      type="button"
-                      className={`axelia-tools-btn ${
-                        messageFocus !== "general" ? "axelia-tools-btn--active" : ""
-                      }`}
-                      onClick={toggleToolsPanel}
-                      disabled={!canUseSend || loading}
-                      title={
-                        toolsAvailable
-                          ? "Orientation (templates, diffusion…) - comme /skills, sans afficher dans le texte"
-                          : "Ouvre les orientations · pour les outils Meta, choisis un compte dans le menu à droite"
-                      }
-                      aria-expanded={toolsOpen}
-                      aria-haspopup="menu"
-                    >
-                      <FiSliders
-                        aria-hidden
-                        className="axelia-tools-btn__icon"
-                        size={22}
-                        strokeWidth={2}
-                      />
-                      <span className="axelia-tools-btn__label">Outils</span>
-                      {toolsAvailable && messageFocus !== "general" ? (
-                        <span className="axelia-tools-btn__pulse" aria-hidden />
-                      ) : null}
-                    </button>
-                    {toolsOpen ? (
-                      <div
-                        className="axelia-tools-panel"
-                        role="menu"
-                        aria-label="Orientation du message"
-                      >
-                        <p className="axelia-tools-panel__hint">
-                          Appliquée aux messages suivants (invisible dans le champ
-                          texte - affichée en tag sur l’envoi hors « Général »).
-                        </p>
-                        {!toolsAvailable ? (
-                          <p className="axelia-tools-panel__notice">
-                            {accountContextLocked
-                              ? "Les outils Meta sur cette discussion utilisent le compte déjà choisi (non modifiable pendant l’échange)."
-                              : "Pour activer templates Meta et groupes de diffusion dans l’IA, sélectionne un compte WhatsApp dans le menu à droite (hors « Tous les comptes »)."}
-                          </p>
-                        ) : null}
-                        <div className="axelia-tools-panel__list">
-                          {AXELIA_SECTORS.map((s) => (
-                            <button
-                              key={s.id}
-                              type="button"
-                              role="menuitemradio"
-                              aria-checked={messageFocus === s.id}
-                              className={`axelia-tools-option ${
-                                messageFocus === s.id ? "is-active" : ""
-                              }`}
-                              onClick={() => {
-                                setMessageFocus(s.id);
-                                setToolsOpen(false);
-                              }}
-                            >
-                              {s.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="axelia-input-toolbar__right">
-                  <span
-                    ref={contextMeasureRef}
-                    className="axelia-context-measure"
-                    aria-hidden
-                  >
-                    {contextSelectLabel}
-                  </span>
                   {accountContextLocked ? (
                     <span
                       className="axelia-context-select axelia-context-select--readonly"
@@ -1928,6 +1827,15 @@ export default function AxeliaChat({
                       ))}
                     </select>
                   )}
+                </div>
+                <div className="axelia-input-toolbar__right">
+                  <span
+                    ref={contextMeasureRef}
+                    className="axelia-context-measure"
+                    aria-hidden
+                  >
+                    {contextSelectLabel}
+                  </span>
                   <select
                     className="axelia-context-select"
                     aria-label="Profondeur de réponse"

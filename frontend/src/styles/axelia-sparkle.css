@@ -8,8 +8,10 @@
   justify-content: center;
 }
 
-.axelia-sparkle-glyph__star {
+.axelia-sparkle-glyph__logo {
   display: block;
+  width: 22px;
+  height: 22px;
   transform-origin: 50% 50%;
 }
 
@@ -89,10 +91,10 @@
   }
 }
 
-.axelia-sparkle-glyph--animate .axelia-sparkle-glyph__star {
+.axelia-sparkle-glyph--animate .axelia-sparkle-glyph__logo {
   animation: axelia-star-breathe 1.5s ease-in-out infinite;
-  filter: drop-shadow(0 0 6px rgba(138, 180, 248, 0.55))
-    drop-shadow(0 0 14px rgba(66, 133, 244, 0.22));
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.55))
+    drop-shadow(0 0 14px rgba(255, 255, 255, 0.22));
 }
 
 @keyframes axelia-star-breathe {
@@ -128,8 +130,8 @@
     opacity: 0.38;
   }
 
-  .axelia-sparkle-glyph--animate .axelia-sparkle-glyph__star {
+  .axelia-sparkle-glyph--animate .axelia-sparkle-glyph__logo {
     animation: none;
-    filter: drop-shadow(0 0 3px rgba(138, 180, 248, 0.35));
+    filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.35));
   }
 }

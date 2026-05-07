@@ -14,7 +14,7 @@
   --axelia-muted: #9aa0a6;
   --axelia-border: #3c4043;
   /* Aligné sur la largeur ouverte de `.axelia-sidebar--open` (desktop) */
-  --axelia-sidebar-width: min(300px, 44vw);
+  --axelia-sidebar-width: min(340px, 48vw);
 
   flex: 1;
   display: flex;
@@ -638,7 +638,6 @@
   gap: 0;
   padding: 10px 12px;
   flex-shrink: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 /* Bande décorative sous la zone du menu : même fond que le panneau discussions (sans déplacer le bouton) */
@@ -712,6 +711,11 @@
   max-width: min(560px, 72vw);
   display: flex;
   justify-content: center;
+  transition: transform 0.22s ease;
+}
+
+.axelia-topbar--sidebar-open .axelia-topbar__center {
+  transform: translateX(calc(var(--axelia-sidebar-width) / 2));
 }
 
 .axelia-topbar__title {
@@ -845,7 +849,7 @@
   }
 
   .axelia-page {
-    --axelia-sidebar-width: min(300px, 88vw);
+    --axelia-sidebar-width: min(320px, 90vw);
   }
 
   .axelia-shell.axelia-shell--sidebar-open .axelia-sidebar-overlay {
@@ -997,11 +1001,11 @@
 }
 
 .axelia-sidebar-row__title {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  display: block;
+  white-space: nowrap;
   overflow: hidden;
-  word-break: break-word;
+  text-overflow: ellipsis;
+  word-break: normal;
 }
 
 .axelia-sidebar-row__menu-trigger {
@@ -1354,7 +1358,6 @@
 .axelia-model-badge {
   display: inline-flex;
   align-items: center;
-  margin-left: auto;
   padding: 2px 10px;
   border-radius: 999px;
   font-size: 0.68rem;
@@ -1364,6 +1367,14 @@
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
   white-space: nowrap;
+}
+
+.axelia-model-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
 }
 
 /* Bouton Stop (pendant la génération) - variation visuelle du send-btn */
@@ -1529,7 +1540,7 @@
 }
 
 .axelia-composer-plan__item--in_progress .axelia-composer-plan__mark {
-  border-color: rgba(138, 180, 248, 0.75);
+  border-color: rgba(255, 255, 255, 0.8);
   border-top-color: transparent;
   animation: axelia-spin 0.7s linear infinite;
 }
