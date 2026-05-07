@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from app.core.db import supabase, supabase_execute
@@ -23,6 +23,40 @@ _SUPABASE_FALLBACK_MAX_CONVERSATIONS = 500
 # Borne anti-élargissement : évite les requêtes sur 10 ans qui rapatrieraient toute la table
 # côté fallback Supabase. Au-delà, on garde la requête mais on log un warning.
 _DATE_RANGE_MAX_DAYS = 366
+
+_SATISFACTION_POSITIVE_RE = re.compile(
+    r"\b("
+    r"merci(?:\s+beaucoup)?|"
+    r"parfait|super|top|excellent|g[eé]nial|nickel|impeccable|"
+    r"content(?:e|s)?|satisfait(?:e|s)?|ravi(?:e|s)?|"
+    r"bravo|professionnel(?:le)?|rapide|efficace|recommande|"
+    r"au\s+top|tr[eè]s\s+bien|"
+    r"thank\s*you|thanks|great|awesome|perfect"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+_SATISFACTION_NEGATIVE_RE = re.compile(
+    r"\b("
+    r"pas\s+content(?:e|s)?|m[eé]content(?:e|s)?|insatisfait(?:e|s)?|"
+    r"nul|catastroph|d[eé]cev|mauvais|lent|probl[eè]me|bug|"
+    r"col[èe]re|en\s+retard|remboursement|plainte"
+    r")\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _score_satisfaction_text(text: str) -> int:
+    """Score heuristique de satisfaction implicite.
+
+    >0 = signal positif exploitable ; <=0 = neutre / négatif.
+    """
+    t = (text or "").strip()
+    if not t:
+        return 0
+    pos = len(_SATISFACTION_POSITIVE_RE.findall(t))
+    neg = len(_SATISFACTION_NEGATIVE_RE.findall(t))
+    # Les signaux négatifs pèsent plus fort pour éviter les faux positifs.
+    return max(0, pos - (neg * 2))
 
 
 def _sanitize_ilike_fragment(q: str) -> str:
@@ -408,6 +442,231 @@ async def search_messages_all_accessible_accounts(
     if date_filter_meta:
         payload["date_filter"] = date_filter_meta
     return payload
+
+
+async def find_satisfied_contacts_for_account(
+    account_id: str,
+    *,
+    days: int = 30,
+    limit: int = 12,
+) -> Dict[str, Any]:
+    """Détecte les contacts exprimant une satisfaction récente sur une ligne WABA.
+
+    Approche: analyse heuristique des messages `inbound` récents (pas de mot-clé imposé
+    par l'utilisateur), scoring positif/négatif, puis agrégation par contact.
+    """
+    days_i = max(1, min(int(days), 120))
+    lim = max(1, min(int(limit), 30))
+    since_dt = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=days_i)
+
+    rows: List[Dict[str, Any]] = []
+    pool = get_pool()
+    if pool:
+        rows = await fetch_all(
+            """
+            SELECT m.content_text,
+                   m.timestamp,
+                   c.id AS conversation_id,
+                   c.client_number,
+                   co.id AS contact_id,
+                   co.display_name AS contact_display_name
+            FROM messages m
+            INNER JOIN conversations c ON c.id = m.conversation_id
+            LEFT JOIN contacts co ON co.id = c.contact_id
+            WHERE c.account_id = $1::uuid
+              AND m.direction = 'inbound'
+              AND m.message_type = 'text'
+              AND COALESCE(m.content_text, '') <> ''
+              AND m.timestamp >= $2
+            ORDER BY m.timestamp DESC
+            LIMIT 1500
+            """,
+            account_id,
+            _to_naive_utc(since_dt),
+        )
+    else:
+        conv_res = await supabase_execute(
+            supabase.table("conversations")
+            .select("id, client_number, contact_id, contacts(display_name)")
+            .eq("account_id", account_id)
+            .order("updated_at", desc=True)
+            .limit(_SUPABASE_FALLBACK_MAX_CONVERSATIONS)
+        )
+        conv_map: Dict[str, Dict[str, Any]] = {}
+        for c in conv_res.data or []:
+            cid = str(c.get("id") or "")
+            if not cid:
+                continue
+            nested = c.get("contacts") or {}
+            conv_map[cid] = {
+                "client_number": c.get("client_number"),
+                "contact_id": c.get("contact_id"),
+                "contact_display_name": nested.get("display_name"),
+            }
+        conv_ids = list(conv_map.keys())
+        step = 80
+        for i in range(0, len(conv_ids), step):
+            chunk = conv_ids[i : i + step]
+            res = await supabase_execute(
+                supabase.table("messages")
+                .select("content_text, timestamp, conversation_id")
+                .in_("conversation_id", chunk)
+                .eq("direction", "inbound")
+                .eq("message_type", "text")
+                .gte("timestamp", since_dt.isoformat())
+                .order("timestamp", desc=True)
+                .limit(400)
+            )
+            for m in res.data or []:
+                cid = str(m.get("conversation_id") or "")
+                meta = conv_map.get(cid) or {}
+                rows.append(
+                    {
+                        "content_text": m.get("content_text"),
+                        "timestamp": m.get("timestamp"),
+                        "conversation_id": cid,
+                        "client_number": meta.get("client_number"),
+                        "contact_id": meta.get("contact_id"),
+                        "contact_display_name": meta.get("contact_display_name"),
+                    }
+                )
+            if len(rows) >= 1500:
+                break
+
+    by_contact: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        txt = (r.get("content_text") or "").strip()
+        if not txt:
+            continue
+        score = _score_satisfaction_text(txt)
+        if score <= 0:
+            continue
+        cid = str(r.get("contact_id") or "").strip()
+        phone = str(r.get("client_number") or "").strip()
+        key = cid or phone
+        if not key:
+            continue
+        label = (r.get("contact_display_name") or phone or "?").strip()
+        bucket = by_contact.get(key)
+        if not bucket:
+            bucket = {
+                "contact_id": cid or None,
+                "contact_name": label,
+                "client_number": phone or None,
+                "satisfaction_score": 0,
+                "signals_count": 0,
+                "conversation_ids": set(),
+                "evidence_snippets": [],
+                "last_positive_at": None,
+            }
+            by_contact[key] = bucket
+        bucket["satisfaction_score"] += score
+        bucket["signals_count"] += 1
+        conv_id = str(r.get("conversation_id") or "")
+        if conv_id:
+            bucket["conversation_ids"].add(conv_id)
+        snippet = txt[:220]
+        if snippet and len(bucket["evidence_snippets"]) < 3:
+            bucket["evidence_snippets"].append(snippet)
+        ts = r.get("timestamp")
+        ts_iso = ts.isoformat() if isinstance(ts, datetime) else str(ts or "")
+        if ts_iso and (
+            bucket["last_positive_at"] is None or ts_iso > str(bucket["last_positive_at"])
+        ):
+            bucket["last_positive_at"] = ts_iso
+
+    ranked = sorted(
+        by_contact.values(),
+        key=lambda x: (int(x.get("satisfaction_score") or 0), str(x.get("last_positive_at") or "")),
+        reverse=True,
+    )[:lim]
+
+    contacts = [
+        {
+            "contact_id": c.get("contact_id"),
+            "contact_name": c.get("contact_name"),
+            "client_number": c.get("client_number"),
+            "satisfaction_score": c.get("satisfaction_score"),
+            "signals_count": c.get("signals_count"),
+            "conversation_count": len(c.get("conversation_ids") or []),
+            "last_positive_at": c.get("last_positive_at"),
+            "evidence_snippets": c.get("evidence_snippets") or [],
+        }
+        for c in ranked
+    ]
+    return {
+        "days": days_i,
+        "total": len(contacts),
+        "contacts": contacts,
+        "method": "heuristic_sentiment_signals_v1",
+    }
+
+
+async def find_satisfied_contacts_all_accessible_accounts(
+    user: "CurrentUser",
+    *,
+    days: int = 30,
+    limit_per_account: int = 8,
+    max_accounts: Optional[int] = None,
+    per_account_timeout_s: float = _AXELIA_MULTI_SUMMARY_TIMEOUT_S,
+) -> Dict[str, Any]:
+    """Version multi-comptes de `find_satisfied_contacts_for_account`."""
+    cap_acc = max_accounts if max_accounts is not None else _AXELIA_MULTI_MAX_ACCOUNTS
+    lim_pa = max(1, min(int(limit_per_account), 20))
+    rows = await list_accessible_account_rows_for_inbox(user)
+    selected = rows[:cap_acc]
+
+    accounts_out: List[Dict[str, Any]] = []
+    merged: List[Dict[str, Any]] = []
+    for row in selected:
+        aid = str(row.get("id") or "")
+        if not aid or not user.permissions.has(PermissionCodes.CONVERSATIONS_VIEW, aid):
+            continue
+        try:
+            part = await asyncio.wait_for(
+                find_satisfied_contacts_for_account(aid, days=days, limit=lim_pa),
+                timeout=per_account_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            part = {"error": "délai dépassé", "contacts": [], "total": 0, "days": days}
+
+        scoped_contacts = []
+        for c in part.get("contacts") or []:
+            scoped = {
+                **c,
+                "account_id": aid,
+                "account_name": row.get("name") or "-",
+                "account_phone": row.get("phone_number") or "-",
+            }
+            scoped_contacts.append(scoped)
+            merged.append(scoped)
+        accounts_out.append(
+            {
+                "account_id": aid,
+                "account_name": row.get("name") or "-",
+                "account_phone": row.get("phone_number") or "-",
+                "total": len(scoped_contacts),
+                "contacts": scoped_contacts,
+                "error": part.get("error"),
+            }
+        )
+
+    merged_sorted = sorted(
+        merged,
+        key=lambda x: (int(x.get("satisfaction_score") or 0), str(x.get("last_positive_at") or "")),
+        reverse=True,
+    )
+    return {
+        "account_scope": "all_accessible",
+        "days": max(1, min(int(days), 120)),
+        "accounts": accounts_out,
+        "contacts": merged_sorted,
+        "total": len(merged_sorted),
+        "accounts_total_in_scope": len(rows),
+        "accounts_iterated": len(selected),
+        "accounts_capped": len(rows) > cap_acc,
+        "method": "heuristic_sentiment_signals_v1",
+    }
 
 
 async def summarize_contact_inbox_all_accessible_accounts(

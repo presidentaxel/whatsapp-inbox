@@ -402,6 +402,7 @@ _AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
     "search_contacts": ("Recherche contacts", "Je recherche dans le CRM…"),
     "get_contact": ("Fiche contact", "J’ouvre la fiche du contact…"),
     "list_recent_conversations": ("Conversations récentes", "Je liste les derniers fils actifs…"),
+    "find_satisfied_contacts": ("Satisfaction clients", "Je détecte les contacts satisfaits récemment…"),
     "list_broadcast_campaigns": ("Campagnes", "Je charge les campagnes envoyées…"),
     "get_campaign_summary": ("Statistiques campagne", "J’analyse les stats de livraison et de lecture…"),
     "get_whatsapp_business_profile": ("Profil WABA", "Je lis le profil public WhatsApp Business…"),

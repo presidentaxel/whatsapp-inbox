@@ -134,7 +134,14 @@ SKILLS_CATALOG: List[Dict[str, Any]] = [
     {
         "name": "list_templates",
         "description": "Liste les templates Meta du compte (nom, langue, statut, catégorie, résumé des composants).",
-        "parameters": [],
+        "parameters": [
+            {
+                "name": "account_scope",
+                "type": "string",
+                "required": False,
+                "enum": ["primary", "all_accessible"],
+            },
+        ],
         "use_when": "tu dois savoir quels templates existent avant de proposer un sendTemplate.",
     },
     {
@@ -142,6 +149,12 @@ SKILLS_CATALOG: List[Dict[str, Any]] = [
         "description": "Vérifie le statut d'un template spécifique par nom (APPROVED, PENDING, REJECTED).",
         "parameters": [
             {"name": "template_name", "type": "string", "required": True},
+            {
+                "name": "account_scope",
+                "type": "string",
+                "required": False,
+                "enum": ["primary", "all_accessible"],
+            },
         ],
         "use_when": "tu veux vérifier qu'un template est APPROVED avant de l'utiliser dans le graphe.",
     },
@@ -351,6 +364,28 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             },
         ],
         "use_when": "l’utilisateur veut voir les derniers fils sans mot-clé ou choisir un conversation_id.",
+    },
+    {
+        "name": "find_satisfied_contacts",
+        "description": (
+            "Détecte les contacts qui expriment une satisfaction récente (signaux implicites "
+            "dans leurs messages entrants), avec score + extraits de preuve. "
+            "account_scope=all_accessible agrège sur toutes les lignes accessibles."
+        ),
+        "parameters": [
+            {"name": "days", "type": "integer", "required": False},
+            {"name": "limit", "type": "integer", "required": False},
+            {
+                "name": "account_scope",
+                "type": "string",
+                "required": False,
+                "enum": ["primary", "all_accessible"],
+            },
+        ],
+        "use_when": (
+            "l’utilisateur pose une question implicite sur la satisfaction "
+            "(ex. « qui était content récemment ? ») sans mots-clés stricts."
+        ),
     },
     {
         "name": "list_broadcast_campaigns",
@@ -688,62 +723,115 @@ async def _skill_list_templates(
         WhatsAppAPIError,
         list_message_templates,
     )
+    from app.services.account_service import get_account_by_id
+
+    async def _fetch_templates_for_account(acct: Dict[str, Any]) -> Dict[str, Any]:
+        waba_id, token = _resolve_waba_credentials(acct)
+        if not waba_id or not token:
+            account_id = str(acct.get("id") or "")
+            has_waba = bool(acct.get("waba_id"))
+            has_token = bool(acct.get("access_token"))
+            logger.warning(
+                "skill list_templates missing credentials: account_id=%s has_waba_id=%s has_access_token=%s",
+                account_id,
+                has_waba,
+                has_token,
+            )
+            return {
+                "error": "Compte sans waba_id ou access_token configuré.",
+                "diagnostic": {
+                    "account_id": account_id or None,
+                    "has_waba_id": has_waba,
+                    "has_access_token": has_token,
+                },
+                "templates": [],
+            }
+
+        all_tpls: List[Dict[str, Any]] = []
+        cursor_after: Optional[str] = None
+        try:
+            for _ in range(10):
+                batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
+                chunk = batch.get("data") or []
+                if not chunk:
+                    break
+                all_tpls.extend(chunk)
+                cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
+                if not cursor_after:
+                    break
+        except WhatsAppAPIError as exc:
+            logger.warning(
+                "skill list_templates Meta error: account_id=%s waba_id=%s error=%s",
+                str(acct.get("id") or ""),
+                str(waba_id),
+                str(exc),
+            )
+            return {
+                "error": f"Erreur Meta lors du listing templates: {str(exc)[:220]}",
+                "diagnostic": {
+                    "account_id": str(acct.get("id") or "") or None,
+                    "waba_id": str(waba_id),
+                },
+                "templates": [],
+            }
+        return {"templates": [_summarize_template(t) for t in all_tpls]}
+
+    if _skill_args_want_all_accessible(args, account):
+        rt = _axelia_rt()
+        if not rt or not rt.acting_user:
+            return {"error": "Listing templates multi-lignes : contexte utilisateur indisponible."}
+        ids = rt.acting_user.accounts_for(PermissionCodes.MESSAGES_VIEW)
+        candidate_ids = [str(i) for i in (ids or []) if str(i).strip()]
+        if not candidate_ids:
+            return {"total": 0, "templates": [], "accounts": []}
+
+        all_templates: List[Dict[str, Any]] = []
+        bundles: List[Dict[str, Any]] = []
+        for aid in candidate_ids[:50]:
+            full = await get_account_by_id(aid)
+            if not full:
+                continue
+            account_name = str(full.get("name") or "").strip() or None
+            account_phone = str(full.get("phone_number") or "").strip() or None
+            fetched = await _fetch_templates_for_account(full)
+            scoped_templates = [
+                {
+                    **row,
+                    "account_id": aid,
+                    "account_name": account_name,
+                    "account_phone": account_phone,
+                }
+                for row in fetched.get("templates") or []
+            ]
+            all_templates.extend(scoped_templates)
+            bundle: Dict[str, Any] = {
+                "account_id": aid,
+                "account_name": account_name,
+                "account_phone": account_phone,
+                "total": len(fetched.get("templates") or []),
+                "templates": fetched.get("templates") or [],
+            }
+            if fetched.get("error"):
+                bundle["error"] = fetched.get("error")
+                if fetched.get("diagnostic"):
+                    bundle["diagnostic"] = fetched.get("diagnostic")
+            bundles.append(bundle)
+        return {"total": len(all_templates), "templates": all_templates, "accounts": bundles}
 
     account = await _resolve_account_for_template_skills(
         account,
         required_permission=PermissionCodes.MESSAGES_VIEW,
     )
-    waba_id, token = _resolve_waba_credentials(account)
-    if not waba_id or not token:
-        account_id = str(account.get("id") or "")
-        has_waba = bool(account.get("waba_id"))
-        has_token = bool(account.get("access_token"))
-        logger.warning(
-            "skill list_templates missing credentials: account_id=%s has_waba_id=%s has_access_token=%s",
-            account_id,
-            has_waba,
-            has_token,
-        )
+    fetched = await _fetch_templates_for_account(account)
+    if fetched.get("error"):
         return {
-            "error": "Compte sans waba_id ou access_token configuré.",
-            "diagnostic": {
-                "account_id": account_id or None,
-                "has_waba_id": has_waba,
-                "has_access_token": has_token,
-            },
+            "error": fetched.get("error"),
+            "diagnostic": fetched.get("diagnostic"),
         }
-
-    all_tpls: List[Dict[str, Any]] = []
-    cursor_after: Optional[str] = None
-    try:
-        for _ in range(10):
-            batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
-            chunk = batch.get("data") or []
-            if not chunk:
-                break
-            all_tpls.extend(chunk)
-            cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
-            if not cursor_after:
-                break
-    except WhatsAppAPIError as exc:
-        logger.warning(
-            "skill list_templates Meta error: account_id=%s waba_id=%s error=%s",
-            str(account.get("id") or ""),
-            str(waba_id),
-            str(exc),
-        )
-        return {
-            "error": f"Erreur Meta lors du listing templates: {str(exc)[:220]}",
-            "diagnostic": {
-                "account_id": str(account.get("id") or "") or None,
-                "waba_id": str(waba_id),
-            },
-        }
-
-    summaries = [_summarize_template(t) for t in all_tpls]
+    templates = fetched.get("templates") or []
     return {
-        "total": len(summaries),
-        "templates": summaries,
+        "total": len(templates),
+        "templates": templates,
     }
 
 
@@ -755,62 +843,124 @@ async def _skill_get_template_status(
         WhatsAppAPIError,
         list_message_templates,
     )
+    from app.services.account_service import get_account_by_id
 
     template_name = (args.get("template_name") or "").strip()
     if not template_name:
         return {"error": "template_name requis."}
 
+    async def _matches_for_account(acct: Dict[str, Any]) -> Dict[str, Any]:
+        waba_id, token = _resolve_waba_credentials(acct)
+        if not waba_id or not token:
+            return {
+                "error": "Compte sans waba_id ou access_token configuré.",
+                "diagnostic": {
+                    "account_id": str(acct.get("id") or "") or None,
+                    "has_waba_id": bool(acct.get("waba_id")),
+                    "has_access_token": bool(acct.get("access_token")),
+                },
+                "matches": [],
+            }
+
+        all_tpls: List[Dict[str, Any]] = []
+        cursor_after: Optional[str] = None
+        try:
+            for _ in range(10):
+                batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
+                chunk = batch.get("data") or []
+                if not chunk:
+                    break
+                all_tpls.extend(chunk)
+                cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
+                if not cursor_after:
+                    break
+        except WhatsAppAPIError as exc:
+            logger.warning(
+                "skill get_template_status Meta error: account_id=%s template=%s waba_id=%s error=%s",
+                str(acct.get("id") or ""),
+                template_name,
+                str(waba_id),
+                str(exc),
+            )
+            return {
+                "error": f"Erreur Meta lors de la lecture du template: {str(exc)[:220]}",
+                "diagnostic": {
+                    "account_id": str(acct.get("id") or "") or None,
+                    "waba_id": str(waba_id),
+                    "template_name": template_name,
+                },
+                "matches": [],
+            }
+        matches = [t for t in all_tpls if t.get("name") == template_name]
+        return {"matches": [_summarize_template(t) for t in matches]}
+
+    if _skill_args_want_all_accessible(args, account):
+        rt = _axelia_rt()
+        if not rt or not rt.acting_user:
+            return {"error": "Statut template multi-lignes : contexte utilisateur indisponible."}
+        ids = rt.acting_user.accounts_for(PermissionCodes.MESSAGES_VIEW)
+        candidate_ids = [str(i) for i in (ids or []) if str(i).strip()]
+        if not candidate_ids:
+            return {"found": False, "matches": [], "accounts": []}
+
+        scoped_matches: List[Dict[str, Any]] = []
+        accounts_out: List[Dict[str, Any]] = []
+        for aid in candidate_ids[:50]:
+            full = await get_account_by_id(aid)
+            if not full:
+                continue
+            account_name = str(full.get("name") or "").strip() or None
+            account_phone = str(full.get("phone_number") or "").strip() or None
+            res = await _matches_for_account(full)
+            rows = res.get("matches") or []
+            scoped_rows = [
+                {
+                    **row,
+                    "account_id": aid,
+                    "account_name": account_name,
+                    "account_phone": account_phone,
+                }
+                for row in rows
+            ]
+            scoped_matches.extend(scoped_rows)
+            bundle: Dict[str, Any] = {
+                "account_id": aid,
+                "account_name": account_name,
+                "account_phone": account_phone,
+                "found": bool(rows),
+                "matches": rows,
+            }
+            if res.get("error"):
+                bundle["error"] = res.get("error")
+                if res.get("diagnostic"):
+                    bundle["diagnostic"] = res.get("diagnostic")
+            accounts_out.append(bundle)
+        if not scoped_matches:
+            return {
+                "found": False,
+                "message": f"Aucun template nommé '{template_name}' trouvé.",
+                "matches": [],
+                "accounts": accounts_out,
+            }
+        return {"found": True, "matches": scoped_matches, "accounts": accounts_out}
+
     account = await _resolve_account_for_template_skills(
         account,
         required_permission=PermissionCodes.MESSAGES_VIEW,
     )
-    waba_id, token = _resolve_waba_credentials(account)
-    if not waba_id or not token:
+    res = await _matches_for_account(account)
+    if res.get("error"):
         return {
-            "error": "Compte sans waba_id ou access_token configuré.",
-            "diagnostic": {
-                "account_id": str(account.get("id") or "") or None,
-                "has_waba_id": bool(account.get("waba_id")),
-                "has_access_token": bool(account.get("access_token")),
-            },
+            "error": res.get("error"),
+            "diagnostic": res.get("diagnostic"),
         }
-
-    all_tpls: List[Dict[str, Any]] = []
-    cursor_after: Optional[str] = None
-    try:
-        for _ in range(10):
-            batch = await list_message_templates(str(waba_id), token, limit=100, after=cursor_after)
-            chunk = batch.get("data") or []
-            if not chunk:
-                break
-            all_tpls.extend(chunk)
-            cursor_after = (batch.get("paging") or {}).get("cursors", {}).get("after")
-            if not cursor_after:
-                break
-    except WhatsAppAPIError as exc:
-        logger.warning(
-            "skill get_template_status Meta error: account_id=%s template=%s waba_id=%s error=%s",
-            str(account.get("id") or ""),
-            template_name,
-            str(waba_id),
-            str(exc),
-        )
-        return {
-            "error": f"Erreur Meta lors de la lecture du template: {str(exc)[:220]}",
-            "diagnostic": {
-                "account_id": str(account.get("id") or "") or None,
-                "waba_id": str(waba_id),
-                "template_name": template_name,
-            },
-        }
-
-    matches = [t for t in all_tpls if t.get("name") == template_name]
+    matches = res.get("matches") or []
     if not matches:
         return {"found": False, "message": f"Aucun template nommé '{template_name}' trouvé."}
 
     return {
         "found": True,
-        "matches": [_summarize_template(t) for t in matches],
+        "matches": matches,
     }
 
 
@@ -1246,6 +1396,46 @@ async def _skill_list_recent_conversations(
     return await list_recent_conversations_for_account(aid, limit=lim_i)
 
 
+async def _skill_find_satisfied_contacts(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    from app.services.axelia_inbox_tools import (
+        find_satisfied_contacts_all_accessible_accounts,
+        find_satisfied_contacts_for_account,
+    )
+
+    days_raw = args.get("days")
+    limit_raw = args.get("limit")
+    try:
+        days_i = int(days_raw) if days_raw is not None else 30
+    except (TypeError, ValueError):
+        days_i = 30
+    try:
+        lim_i = int(limit_raw) if limit_raw is not None else 12
+    except (TypeError, ValueError):
+        lim_i = 12
+
+    if _skill_args_want_all_accessible(args, account):
+        rt = _axelia_rt()
+        if not rt or not rt.acting_user:
+            return {"error": "Analyse satisfaction multi-lignes : contexte utilisateur indisponible."}
+        return await find_satisfied_contacts_all_accessible_accounts(
+            rt.acting_user,
+            days=days_i,
+            limit_per_account=min(lim_i, 20),
+        )
+
+    aid = str(account.get("id") or "")
+    if not aid:
+        return {"error": "Compte WABA manquant."}
+    return await find_satisfied_contacts_for_account(
+        aid,
+        days=days_i,
+        limit=lim_i,
+    )
+
+
 async def _skill_list_broadcast_campaigns(
     args: Dict[str, Any],
     account: Dict[str, Any],
@@ -1329,6 +1519,7 @@ _SKILL_HANDLERS = {
     "search_contacts": _skill_search_contacts,
     "get_contact": _skill_get_contact,
     "list_recent_conversations": _skill_list_recent_conversations,
+    "find_satisfied_contacts": _skill_find_satisfied_contacts,
     "list_broadcast_campaigns": _skill_list_broadcast_campaigns,
     "get_campaign_summary": _skill_get_campaign_summary,
     "get_whatsapp_business_profile": _skill_get_whatsapp_business_profile,
