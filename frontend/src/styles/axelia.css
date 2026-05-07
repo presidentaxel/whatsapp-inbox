@@ -1457,6 +1457,12 @@
   margin-bottom: 10px;
 }
 
+/* Lisibilité des options du select de partage (évite blanc sur blanc selon OS/browser) */
+.axelia-share-modal__select option {
+  background: #1e1e1e;
+  color: #ffffff;
+}
+
 .axelia-share-modal__actions {
   display: flex;
   justify-content: flex-end;
