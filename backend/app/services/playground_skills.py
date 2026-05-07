@@ -192,8 +192,18 @@ SKILLS_CATALOG: List[Dict[str, Any]] = [
     {
         "name": "list_broadcast_groups",
         "description": "Liste les groupes de diffusion du compte (id, nom, nombre de membres).",
-        "parameters": [],
-        "use_when": "l'utilisateur veut programmer un envoi ou cibler un groupe.",
+        "parameters": [
+            {
+                "name": "account_scope",
+                "type": "string",
+                "required": False,
+                "enum": ["primary", "all_accessible"],
+            },
+        ],
+        "use_when": (
+            "l'utilisateur veut programmer un envoi ou cibler un groupe ; "
+            "avec account_scope=all_accessible, agrège les groupes sur toutes les lignes accessibles."
+        ),
     },
 ]
 
@@ -973,21 +983,61 @@ async def _skill_list_broadcast_groups(
     account: Dict[str, Any],
 ) -> Dict[str, Any]:
     from app.services.broadcast_service import get_broadcast_groups, get_group_recipients
+    from app.services.account_service import get_account_by_id
+
+    async def _summaries_for_account(account_id: str) -> List[Dict[str, Any]]:
+        groups = await get_broadcast_groups(account_id)
+        summaries: List[Dict[str, Any]] = []
+        for g in groups[:20]:
+            gid = str(g.get("id") or "")
+            recipients = await get_group_recipients(gid) if gid else []
+            summaries.append({
+                "id": gid,
+                "name": g.get("name") or "(sans nom)",
+                "member_count": len(recipients),
+            })
+        return summaries
+
+    if _skill_args_want_all_accessible(args, account):
+        rt = _axelia_rt()
+        if not rt or not rt.acting_user:
+            return {"error": "Listing multi-lignes : contexte utilisateur indisponible."}
+        ids = rt.acting_user.accounts_for(PermissionCodes.MESSAGES_VIEW)
+        candidate_ids = [str(i) for i in (ids or []) if str(i).strip()]
+        if not candidate_ids:
+            return {"total": 0, "groups": [], "accounts": []}
+
+        account_bundles: List[Dict[str, Any]] = []
+        merged_groups: List[Dict[str, Any]] = []
+        for aid in candidate_ids[:50]:
+            full = await get_account_by_id(aid)
+            account_name = str((full or {}).get("name") or "").strip() or None
+            account_phone = str((full or {}).get("phone_number") or "").strip() or None
+            summaries = await _summaries_for_account(aid)
+            for row in summaries:
+                merged_groups.append({
+                    **row,
+                    "account_id": aid,
+                    "account_name": account_name,
+                    "account_phone": account_phone,
+                })
+            account_bundles.append({
+                "account_id": aid,
+                "account_name": account_name,
+                "account_phone": account_phone,
+                "total": len(summaries),
+                "groups": summaries,
+            })
+        return {
+            "total": len(merged_groups),
+            "groups": merged_groups,
+            "accounts": account_bundles,
+        }
 
     account_id = str(account.get("id") or "")
     if not account_id:
         return {"error": "account_id manquant."}
-
-    groups = await get_broadcast_groups(account_id)
-    summaries = []
-    for g in groups[:20]:
-        gid = str(g.get("id") or "")
-        recipients = await get_group_recipients(gid) if gid else []
-        summaries.append({
-            "id": gid,
-            "name": g.get("name") or "(sans nom)",
-            "member_count": len(recipients),
-        })
+    summaries = await _summaries_for_account(account_id)
     return {"total": len(summaries), "groups": summaries}
 
 
