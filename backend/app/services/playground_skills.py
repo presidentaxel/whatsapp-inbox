@@ -404,7 +404,7 @@ def get_axelia_skills_prompt_section() -> str:
         "Tu réponds par un **unique** objet JSON ( MIME application/json ) avec les champs :",
         '  {"reply": "<texte visible pour l’utilisateur>", "tool_calls": [], "task_plan": []}',
         'task_plan optionnel ; objets '
-        '{"id","title","thought","status","skill"} — tu peux l’omettre ou le laisser vide : '
+        '{"id","title","thought","status","skill"} - tu peux l’omettre ou le laisser vide : '
         "**le serveur génère alors automatiquement** la liste affichée à partir des tool_calls "
         '(titres UX). Tu peux fournir un task_plan uniquement pour des libellés sur mesure. '
         "Jusqu’à 5 tool_calls du même tour s’exécutent **en parallèle**.",

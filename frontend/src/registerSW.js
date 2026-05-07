@@ -92,7 +92,7 @@ export function isAppInstalled() {
  * Installation PWA (Chrome / Edge).
  *
  * N'appelez pas `beforeinstallprompt.preventDefault()` tant qu'un bouton « Installer »
- * n'appelle pas `showInstallPrompt()` sur clic utilisateur — sinon la console affiche :
+ * n'appelle pas `showInstallPrompt()` sur clic utilisateur - sinon la console affiche :
  * « Banner not shown … must call … prompt() ».
  *
  * Pour un flux custom : au montage du composant qui propose l’installation :

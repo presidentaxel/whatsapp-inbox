@@ -29,6 +29,12 @@ import SparkleGlyph from "./SparkleGlyph";
 import { renderMarkdown } from "./renderMarkdown";
 import "../../styles/axelia.css";
 import {
+  loadAxeliaResponseDepth,
+  saveAxeliaResponseDepth,
+} from "../../utils/axeliaSettings";
+import { toAxeliaModelLabel } from "../../utils/axeliaModelLabel";
+import { toAxeliaDepthLabel } from "../../utils/axeliaDepthLabel";
+import {
   createAxeliaConversation,
   getAxeliaChatProgress,
   getAxeliaConversations,
@@ -48,6 +54,12 @@ export const AXELIA_SECTORS = [
   { id: "broadcast", label: "Diffusion" },
   { id: "writing", label: "Rédaction WA" },
   { id: "flows", label: "Parcours & auto" },
+];
+
+export const AXELIA_RESPONSE_DEPTHS = [
+  { id: "brief", label: "Bref" },
+  { id: "standard", label: "Standard" },
+  { id: "expert", label: "Expert" },
 ];
 
 const SKILL_LABELS = {
@@ -292,9 +304,18 @@ export default function AxeliaChat({
   const [pendingPreviewUrl, setPendingPreviewUrl] = useState(null);
   /** @type {[Record<string, string[]>, Function]} résultats d’outils par id message assistant */
   const [skillsByAssistId, setSkillsByAssistId] = useState({});
+  /** @type {[Record<string, "brief" | "standard" | "expert">, Function]} mode de réponse utilisé par message assistant */
+  const [depthByAssistId, setDepthByAssistId] = useState({});
   /** @type {[Record<string, { calls: unknown[], expiresAt: number }>, Function]} création Meta en attente de confirmation (avec TTL côté UI) */
   const [pendingCreateByAssistId, setPendingCreateByAssistId] = useState({});
   const [messageFocus, setMessageFocus] = useState("general");
+  const [responseDepth, setResponseDepth] = useState(() =>
+    loadAxeliaResponseDepth(),
+  );
+
+  useEffect(() => {
+    saveAxeliaResponseDepth(responseDepth);
+  }, [responseDepth]);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   /** Affichage immédiat de la bulle utilisateur pendant l’appel au modèle */
@@ -469,6 +490,7 @@ export default function AxeliaChat({
   useEffect(() => {
     loadMessages(conversationId);
     setSkillsByAssistId({});
+    setDepthByAssistId({});
     setPendingCreateByAssistId({});
     setToolsOpen(false);
   }, [conversationId, loadMessages]);
@@ -756,6 +778,17 @@ export default function AxeliaChat({
     return cr.data.id;
   };
 
+  const buildAxeliaBasePayload = useCallback(
+    (accountId, progressKey) => ({
+      account_id: accountId,
+      conversation_id: conversationId,
+      progress_key: progressKey,
+      response_depth: responseDepth,
+      ...(uiPerimeterHint ? { ui_perimeter_hint: uiPerimeterHint } : {}),
+    }),
+    [conversationId, responseDepth, uiPerimeterHint],
+  );
+
   const onNewDiscussion = async () => {
     if (!canUseSend) return;
     try {
@@ -859,15 +892,13 @@ export default function AxeliaChat({
     let serverError = null;
     let cancelled = false;
     let tokensReceived = false;
+    const depthForThisRequest = responseDepth;
 
     try {
       await streamAxeliaChat(
         {
-          account_id: accountId,
-          conversation_id: conversationId,
+          ...buildAxeliaBasePayload(accountId, progressKey),
           user_message: text,
-          progress_key: progressKey,
-          ...(uiPerimeterHint ? { ui_perimeter_hint: uiPerimeterHint } : {}),
           ...(toolsAvailable ? { sector: messageFocus } : {}),
           ...(attachment ? { attachment } : {}),
         },
@@ -994,6 +1025,10 @@ export default function AxeliaChat({
             },
           }));
         }
+        setDepthByAssistId((prev) => ({
+          ...prev,
+          [finalAssistantId]: depthForThisRequest,
+        }));
       }
       await loadMessages(conversationId);
       await reloadConversationsSynced();
@@ -1073,15 +1108,13 @@ export default function AxeliaChat({
     let serverError = null;
     let cancelled = false;
     let tokensReceived = false;
+    const depthForThisRequest = responseDepth;
 
     try {
       await streamAxeliaChat(
         {
-          account_id: accountId,
-          conversation_id: conversationId,
+          ...buildAxeliaBasePayload(accountId, progressKey),
           user_message: "",
-          progress_key: progressKey,
-          ...(uiPerimeterHint ? { ui_perimeter_hint: uiPerimeterHint } : {}),
           sector: messageFocus,
           approve_tool_calls: calls,
         },
@@ -1144,6 +1177,12 @@ export default function AxeliaChat({
         setSkillsByAssistId((prev) => ({
           ...prev,
           [finalAssistantId]: finalSkills,
+        }));
+      }
+      if (finalAssistantId) {
+        setDepthByAssistId((prev) => ({
+          ...prev,
+          [finalAssistantId]: depthForThisRequest,
         }));
       }
       setPendingCreateByAssistId((prev) => {
@@ -1478,6 +1517,7 @@ export default function AxeliaChat({
               }
               const text = (m.content_text || "").trim();
               const skillsUsed = skillsByAssistId[m.id];
+              const msgDepth = depthByAssistId[m.id];
               const pendingEntry = pendingCreateByAssistId[m.id];
               const pendingCreates = pendingEntry?.calls || null;
               const pendingDesc = describePendingToolCalls(
@@ -1586,7 +1626,15 @@ export default function AxeliaChat({
                         className="axelia-model-badge"
                         title={`Modèle : ${m.model_used}`}
                       >
-                        {m.model_used}
+                        {toAxeliaModelLabel(m.model_used)}
+                      </span>
+                    ) : null}
+                    {msgDepth ? (
+                      <span
+                        className="axelia-model-badge"
+                        title={`Profondeur utilisée : ${msgDepth}`}
+                      >
+                        {toAxeliaDepthLabel(msgDepth)}
                       </span>
                     ) : null}
                   </div>
@@ -1642,7 +1690,13 @@ export default function AxeliaChat({
                       className="axelia-model-badge"
                       title={`Modèle : ${streamingModel}`}
                     >
-                      {streamingModel}
+                      {toAxeliaModelLabel(streamingModel)}
+                    </span>
+                    <span
+                      className="axelia-model-badge"
+                      title={`Profondeur active : ${responseDepth}`}
+                    >
+                      {toAxeliaDepthLabel(responseDepth)}
                     </span>
                   </div>
                 ) : null}
@@ -1874,6 +1928,20 @@ export default function AxeliaChat({
                       ))}
                     </select>
                   )}
+                  <select
+                    className="axelia-context-select"
+                    aria-label="Profondeur de réponse"
+                    value={responseDepth}
+                    onChange={(e) => setResponseDepth(e.target.value)}
+                    disabled={loading}
+                    title="Niveau de détail de la réponse"
+                  >
+                    {AXELIA_RESPONSE_DEPTHS.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
                   {loading ? (
                     <button
                       type="button"

@@ -22,6 +22,8 @@ class AxeliaChatRequest(BaseModel):
     """Identifiant opaque (UUID v4 côté client) pour récupérer la progression
     `phase / skill courant` via GET /axelia/chat/progress/{progress_key} pendant l'attente."""
     progress_key: Optional[str] = Field(None, max_length=80)
+    """Profondeur attendue pour la réponse Axelia."""
+    response_depth: Literal["brief", "standard", "expert"] = "standard"
 
     @field_validator("user_message")
     @classmethod

@@ -124,9 +124,39 @@ def _today_anchor_prompt(now: Optional[datetime] = None) -> str:
     )
 
 
-def _compose_axelia_system_text(perimeter_extra: str = "") -> str:
+def _depth_instruction(response_depth: str) -> str:
+    d = (response_depth or "standard").strip().lower()
+    if d == "brief":
+        return (
+            "\nMODE DE RÉPONSE = BRIEF : réponse courte et actionnable (3-6 lignes), "
+            "sans sacrifier l'exactitude. Si utile, proposer une option "
+            "« je peux détailler » en une phrase."
+        )
+    if d == "expert":
+        return (
+            "\nMODE DE RÉPONSE = EXPERT : réponse complète et structurée, avec au minimum : "
+            "1) diagnostic/contextualisation, 2) recommandations priorisées, "
+            "3) risques/limites, 4) prochaines actions concrètes. "
+            "Ne reste pas superficiel : explicite les hypothèses et les arbitrages."
+        )
+    return (
+        "\nMODE DE RÉPONSE = STANDARD : équilibre concision / clarté ; "
+        "détailler quand la demande est complexe."
+    )
+
+
+def _compose_axelia_system_text(
+    perimeter_extra: str = "",
+    *,
+    response_depth: str = "standard",
+) -> str:
     """Préfixe systématique pour le prompt système Axelia (base + ancrage date)."""
-    return _AXELIA_SYSTEM_PROMPT + _today_anchor_prompt() + (perimeter_extra or "")
+    return (
+        _AXELIA_SYSTEM_PROMPT
+        + _today_anchor_prompt()
+        + _depth_instruction(response_depth)
+        + (perimeter_extra or "")
+    )
 
 _AXELIA_SECTOR_FOCUS: Dict[str, str] = {
     "general": "",
@@ -173,6 +203,20 @@ _MAX_SKILL_ROUNDS_HARD = 8
 _MAX_SKILL_TOKENS_BUDGET = 60_000  # tokens cumulés (input + output) avant de stopper la boucle
 _MAX_SKILL_ROUNDS_NO_PROGRESS = 2  # rounds consécutifs sans nouveau skill exécuté
 _MAX_PARALLEL_AXELIA_TOOLS = 5  # max skills en parallèle (queues Meta / quotas)
+
+
+def _skill_budget_profile(response_depth: str) -> Tuple[int, int, int]:
+    """Budgets de skill loop selon la profondeur de réponse demandée."""
+    d = (response_depth or "standard").strip().lower()
+    if d == "expert":
+        return (12, 95_000, 3)
+    if d == "brief":
+        return (6, 45_000, 1)
+    return (
+        _MAX_SKILL_ROUNDS_HARD,
+        _MAX_SKILL_TOKENS_BUDGET,
+        _MAX_SKILL_ROUNDS_NO_PROGRESS,
+    )
 
 # Résumé d'historique : au-delà de ce seuil de tours, les plus anciens sont remplacés
 # par un résumé compact (1 appel flash supplémentaire, en best-effort).
@@ -345,7 +389,7 @@ def progress_clear(key: Optional[str]) -> None:
 
 _VALID_AXELIA_TASK_STATUS = frozenset({"pending", "in_progress", "done", "cancelled"})
 
-# Titres courts + phrase UX (alignés sur l’UI Axelia) — utilisés si le modèle n’envoie pas task_plan.
+# Titres courts + phrase UX (alignés sur l’UI Axelia) - utilisés si le modèle n’envoie pas task_plan.
 _AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
     "list_templates": ("Templates Meta", "Je consulte la liste des modèles sur Meta…"),
     "get_template_status": ("Statut template", "Je vérifie le statut du template sur Meta…"),
@@ -1314,6 +1358,7 @@ async def _generate_once(
     contents: List[Dict[str, Any]],
     log_label: str,
     perimeter_extra: str = "",
+    response_depth: str = "standard",
     metrics_out: Optional[Dict[str, Any]] = None,
 ) -> str:
     gen: Dict[str, Any] = {
@@ -1323,7 +1368,10 @@ async def _generate_once(
     if str(model_id).startswith("gemini-2.5-"):
         gen["thinkingConfig"] = {"thinkingBudget": 1024}
 
-    sys_full = _compose_axelia_system_text(perimeter_extra)
+    sys_full = _compose_axelia_system_text(
+        perimeter_extra,
+        response_depth=response_depth,
+    )
 
     cached_name, cache_state = await maybe_get_or_create_context_cache(
         model_id=model_id, system_text=sys_full, log_label=log_label
@@ -1416,6 +1464,7 @@ async def _run_axelia_with_tools(
     acting_user: Optional["CurrentUser"] = None,
     perimeter_context: Optional[Dict[str, Any]] = None,
     perimeter_extra: str = "",
+    response_depth: str = "standard",
     progress_key: Optional[str] = None,
     metrics_out: Optional[Dict[str, Any]] = None,
     attachment: Optional[Dict[str, str]] = None,
@@ -1508,7 +1557,10 @@ async def _run_axelia_with_tools(
         )
 
     system_text = (
-        _compose_axelia_system_text(perimeter_extra)
+        _compose_axelia_system_text(
+            perimeter_extra,
+            response_depth=response_depth,
+        )
         + "\n\n"
         + _AXEL_META_HINT
         + ("\n\n" + sector_line if sector_line else "")
@@ -1659,6 +1711,12 @@ async def _run_axelia_with_tools(
     in_tok_first, out_tok_first = _approx_tokens_in_response(data or {})
     cumulative_tokens += in_tok_first + out_tok_first
 
+    (
+        max_skill_rounds_hard,
+        max_skill_tokens_budget,
+        max_skill_rounds_no_progress,
+    ) = _skill_budget_profile(response_depth)
+
     while True:
         raw_text = _playground_assist_collect_model_text(data or {})
         finish_reason = _playground_assist_finish_reason(data or {})
@@ -1683,18 +1741,18 @@ async def _run_axelia_with_tools(
         if not tool_calls or not isinstance(tool_calls, list) or not tool_calls:
             break
 
-        if rounds_done >= _MAX_SKILL_ROUNDS_HARD:
+        if rounds_done >= max_skill_rounds_hard:
             logger.info(
                 "axelia tools: hard rounds cap (%s) atteint pour %s",
-                _MAX_SKILL_ROUNDS_HARD,
+                max_skill_rounds_hard,
                 log_label,
             )
             budget_hit = True
             break
-        if cumulative_tokens >= _MAX_SKILL_TOKENS_BUDGET:
+        if cumulative_tokens >= max_skill_tokens_budget:
             logger.info(
                 "axelia tools: token budget (%s) dépassé après %d rounds (%s)",
-                _MAX_SKILL_TOKENS_BUDGET,
+                max_skill_tokens_budget,
                 rounds_done,
                 log_label,
             )
@@ -1794,7 +1852,7 @@ async def _run_axelia_with_tools(
         payload_v1["contents"] = [flat_system] + hist
 
         rounds_done += 1
-        if rounds_no_progress >= _MAX_SKILL_ROUNDS_NO_PROGRESS:
+        if rounds_no_progress >= max_skill_rounds_no_progress:
             logger.info(
                 "axelia tools: %d rounds sans nouveau skill exécuté - arrêt boucle",
                 rounds_no_progress,
@@ -1889,6 +1947,7 @@ async def run_axelia_chat(
     log_label: str = "axelia",
     account: Optional[Dict[str, Any]] = None,
     sector: Optional[str] = None,
+    response_depth: str = "standard",
     approve_tool_calls: Optional[List[Dict[str, Any]]] = None,
     acting_user: Optional["CurrentUser"] = None,
     perimeter_context: Optional[Dict[str, Any]] = None,
@@ -1956,8 +2015,14 @@ async def run_axelia_chat(
         {"phase": "classifying", "skills": [], "round": 0},
     )
 
+    depth_mode = (response_depth or "standard").strip().lower()
+    if depth_mode not in ("brief", "standard", "expert"):
+        depth_mode = "standard"
+
     shortcut = (
-        _maybe_difficulty_shortcut(messages) if not approve_tool_calls else None
+        _maybe_difficulty_shortcut(messages)
+        if not approve_tool_calls and depth_mode != "expert"
+        else None
     )
     used_classifier = False
     if shortcut is not None:
@@ -1975,7 +2040,7 @@ async def run_axelia_chat(
             log_label=log_label,
             fast_model=fast,
         )
-    chosen = pro if diff >= thr else fast
+    chosen = pro if (depth_mode == "expert" or diff >= thr) else fast
     logger.info(
         "axelia route: difficulty=%.2f threshold=%.2f -> model=%s tools=%s",
         diff,
@@ -2014,6 +2079,7 @@ async def run_axelia_chat(
                     acting_user=acting_user,
                     perimeter_context=perimeter_context,
                     perimeter_extra=perimeter_text,
+                    response_depth=depth_mode,
                     progress_key=progress_key,
                     metrics_out=metrics_collector,
                     attachment=attachment,
@@ -2032,6 +2098,7 @@ async def run_axelia_chat(
                 contents=contents,
                 log_label=log_label,
                 perimeter_extra=perimeter_text,
+                response_depth=depth_mode,
                 metrics_out=metrics_collector,
             )
         except Exception:
@@ -2081,11 +2148,15 @@ async def _stream_real_text_only(
     model_id: str,
     contents: List[Dict[str, Any]],
     perimeter_extra: str,
+    response_depth: str,
     log_label: str,
     metrics_out: Dict[str, Any],
 ) -> AsyncIterator[str]:
     """Streaming Gemini réel pour le mode texte simple (pas de boucle d'outils)."""
-    sys_full = _compose_axelia_system_text(perimeter_extra)
+    sys_full = _compose_axelia_system_text(
+        perimeter_extra,
+        response_depth=response_depth,
+    )
     cached_name, cache_state = await maybe_get_or_create_context_cache(
         model_id=model_id, system_text=sys_full, log_label=log_label
     )
@@ -2188,6 +2259,7 @@ async def stream_axelia_chat(
     log_label: str = "axelia-stream",
     account: Optional[Dict[str, Any]] = None,
     sector: Optional[str] = None,
+    response_depth: str = "standard",
     approve_tool_calls: Optional[List[Dict[str, Any]]] = None,
     acting_user: Optional["CurrentUser"] = None,
     perimeter_context: Optional[Dict[str, Any]] = None,
@@ -2237,8 +2309,14 @@ async def stream_axelia_chat(
     )
     progress_set(progress_key, {"phase": "classifying", "skills": [], "round": 0})
 
+    depth_mode = (response_depth or "standard").strip().lower()
+    if depth_mode not in ("brief", "standard", "expert"):
+        depth_mode = "standard"
+
     shortcut = (
-        _maybe_difficulty_shortcut(messages) if not approve_tool_calls else None
+        _maybe_difficulty_shortcut(messages)
+        if not approve_tool_calls and depth_mode != "expert"
+        else None
     )
     used_classifier = shortcut is None
     if shortcut is not None:
@@ -2250,7 +2328,7 @@ async def stream_axelia_chat(
             )
         except Exception:
             diff = float(settings.AXELIA_CLASSIFY_FALLBACK_DIFFICULTY)
-    chosen = pro if diff >= thr else fast
+    chosen = pro if (depth_mode == "expert" or diff >= thr) else fast
     yield _format_sse(
         "meta",
         {
@@ -2314,6 +2392,7 @@ async def stream_axelia_chat(
                         acting_user=acting_user,
                         perimeter_context=perimeter_context,
                         perimeter_extra=perimeter_text,
+                        response_depth=depth_mode,
                         progress_key=progress_key,
                         metrics_out=metrics_collector,
                         attachment=attachment,
@@ -2396,6 +2475,7 @@ async def stream_axelia_chat(
                     model_id=chosen,
                     contents=contents,
                     perimeter_extra=perimeter_text,
+                    response_depth=depth_mode,
                     log_label=log_label,
                     metrics_out=metrics_collector,
                 ):

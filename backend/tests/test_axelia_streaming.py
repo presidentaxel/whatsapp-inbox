@@ -330,6 +330,22 @@ def test_compose_axelia_system_text_includes_today_anchor():
     assert full.find("DATE COURANTE") < full.find("PÉRIMÈTRE TEST")
 
 
+def test_compose_axelia_system_text_expert_depth_instruction():
+    full = svc._compose_axelia_system_text(response_depth="expert")
+    assert "MODE DE RÉPONSE = EXPERT" in full
+    assert "recommandations priorisées" in full
+
+
+def test_skill_budget_profile_by_depth():
+    assert svc._skill_budget_profile("brief") == (6, 45_000, 1)
+    assert svc._skill_budget_profile("standard") == (
+        svc._MAX_SKILL_ROUNDS_HARD,
+        svc._MAX_SKILL_TOKENS_BUDGET,
+        svc._MAX_SKILL_ROUNDS_NO_PROGRESS,
+    )
+    assert svc._skill_budget_profile("expert") == (12, 95_000, 3)
+
+
 # ---------------------------------------------------------------------------
 # Parsing classifieur de difficulté (robustesse aux sorties tronquées)
 # ---------------------------------------------------------------------------
@@ -371,3 +387,37 @@ def test_parse_difficulty_json_loose_quoting():
     assert svc._parse_difficulty_json('difficulty: 0.4') == pytest.approx(0.4)
     assert svc._parse_difficulty_json("'difficulty': 0.4") == pytest.approx(0.4)
     assert svc._parse_difficulty_json('Voici la difficulté : "difficulty":0.9') == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_run_axelia_chat_expert_forces_pro_and_skips_shortcut(monkeypatch):
+    monkeypatch.setattr(svc.settings, "GEMINI_API_KEY", "test-key", raising=False)
+    monkeypatch.setattr(svc.settings, "AXELIA_FAST_MODEL", "gemini-2.5-flash", raising=False)
+    monkeypatch.setattr(svc.settings, "AXELIA_PRO_MODEL", "gemini-2.5-pro", raising=False)
+    monkeypatch.setattr(svc.settings, "AXELIA_DIFFICULTY_THRESHOLD", 0.99, raising=False)
+
+    def _should_not_be_called(_messages):
+        raise AssertionError("shortcut must be bypassed in expert mode")
+
+    monkeypatch.setattr(svc, "_maybe_difficulty_shortcut", _should_not_be_called)
+    async def _fake_estimate_difficulty(**kwargs):
+        return 0.1
+
+    monkeypatch.setattr(svc, "estimate_difficulty", _fake_estimate_difficulty)
+
+    async def _fake_generate_once(**kwargs):
+        assert kwargs["model_id"] == "gemini-2.5-pro"
+        assert kwargs["response_depth"] == "expert"
+        return "ok expert"
+
+    monkeypatch.setattr(svc, "_generate_once", _fake_generate_once)
+
+    text, model, skills, pending = await svc.run_axelia_chat(
+        messages=[{"role": "user", "text": "Réponds de façon experte"}],
+        response_depth="expert",
+        log_label="test-expert",
+    )
+    assert text == "ok expert"
+    assert model == "gemini-2.5-pro"
+    assert skills is None
+    assert pending is None

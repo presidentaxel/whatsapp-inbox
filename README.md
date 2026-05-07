@@ -79,6 +79,7 @@ Un **mode bot** par conversation peut suggérer des réponses alignées sur votr
 | **Multi-comptes**    | Plusieurs numéros / WABA dans la même app                                                      |
 | **Équipe**           | Rôles et permissions (visibilité, envoi)                                                       |
 | **API étendue**      | Médias, templates, profil business, webhooks - exposés côté backend pour aller au-delà de l’UI |
+| **Axelia (IA)**      | Profondeur de réponse configurable (`brief` / `standard` / `expert`) selon le niveau de détail attendu |
 | **Observabilité**    | Instrumentation **Prometheus** (FastAPI), stack **Docker** avec **Grafana** en option          |
 
 ---
