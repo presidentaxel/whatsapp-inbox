@@ -82,6 +82,7 @@ const SKILL_LABELS = {
   get_campaign_summary: "Statistiques campagne",
   get_whatsapp_business_profile: "Profil WhatsApp Business",
   meta_block_contact: "Blocage Meta (confirmation)",
+  upsert_agent_studio_config: "Agent Studio (confirmation)",
 };
 
 /** Libellés affichés pendant la génération (skill courant). */
@@ -102,6 +103,7 @@ const SKILL_RUNNING_LABELS = {
   get_campaign_summary: "Analyse de la campagne…",
   get_whatsapp_business_profile: "Lecture du profil WhatsApp Business…",
   meta_block_contact: "Préparation du blocage Meta…",
+  upsert_agent_studio_config: "Preparation de l'agent Studio…",
 };
 
 const PHASE_LABELS = {
@@ -175,10 +177,12 @@ function describePendingToolCalls(calls) {
   const names = calls.map((tc) => tc.skill || tc.name || "");
   const hasTpl = names.some((n) => n === "create_template");
   const hasBlock = names.some((n) => n === "meta_block_contact");
+  const hasStudio = names.some((n) => n === "upsert_agent_studio_config");
   let title = "Action à confirmer";
-  if (hasTpl && hasBlock) title = "Actions à confirmer";
+  if ((hasTpl && hasBlock) || (hasTpl && hasStudio) || (hasBlock && hasStudio)) title = "Actions à confirmer";
   else if (hasTpl) title = "Création de template sur Meta";
   else if (hasBlock) title = "Blocage WhatsApp (Meta)";
+  else if (hasStudio) title = "Modification Agent Studio";
   const lines = calls.map((tc) => {
     const name = tc.skill || tc.name || "outil";
     const args = tc.args || tc.arguments || {};
@@ -191,6 +195,11 @@ function describePendingToolCalls(calls) {
     if (name === "meta_block_contact") {
       const cid = args.contact_id || "?";
       return `Bloquer le contact (id ${cid}) sur la ligne du compte sélectionné`;
+    }
+    if (name === "upsert_agent_studio_config") {
+      const label = args.name || "Agent";
+      const mode = args.config_id ? "Mettre a jour" : "Creer";
+      return `${mode} l agent Studio « ${label} »`;
     }
     return String(name);
   });

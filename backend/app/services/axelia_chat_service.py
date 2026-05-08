@@ -407,6 +407,7 @@ _AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
     "get_campaign_summary": ("Statistiques campagne", "J’analyse les stats de livraison et de lecture…"),
     "get_whatsapp_business_profile": ("Profil WABA", "Je lis le profil public WhatsApp Business…"),
     "meta_block_contact": ("Blocage Meta", "Je prépare l’action sensible côté Meta…"),
+    "upsert_agent_studio_config": ("Agent Studio", "Je prépare la configuration de l’agent pour validation…"),
 }
 
 
@@ -1503,6 +1504,7 @@ async def _run_axelia_with_tools(
     if approve_tool_calls:
         creates: List[Dict[str, Any]] = []
         blocks: List[Dict[str, Any]] = []
+        studio_updates: List[Dict[str, Any]] = []
         for tc in approve_tool_calls[:5]:
             if not isinstance(tc, dict):
                 continue
@@ -1511,6 +1513,8 @@ async def _run_axelia_with_tools(
                 creates.append(tc)
             elif sn == "meta_block_contact":
                 blocks.append(tc)
+            elif sn == "upsert_agent_studio_config":
+                studio_updates.append(tc)
             else:
                 raise ValueError("invalid_approve_tool_calls")
         if blocks and not acting_user:
@@ -1530,6 +1534,10 @@ async def _run_axelia_with_tools(
                     user=acting_user,  # type: ignore[arg-type]
                 )
                 approve_results.append({"skill": "meta_block_contact", "result": res})
+        if studio_updates:
+            approve_results.extend(
+                await execute_tool_calls(studio_updates, acc_for_skills, axelia_runtime=ax_rt)
+            )
         pre_skills = [r["skill"] for r in approve_results if r.get("skill")]
         msgs_work.append(
             {

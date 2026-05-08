@@ -439,6 +439,27 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             "(doit correspondre au périmètre sélectionné dans l’UI)."
         ),
     },
+    {
+        "name": "upsert_agent_studio_config",
+        "description": (
+            "Crée ou met à jour une configuration Agent Studio pour la ligne sélectionnée. "
+            "Action sensible : exécution uniquement après validation humaine dans l'UI."
+        ),
+        "parameters": [
+            {"name": "config_id", "type": "string", "required": False},
+            {"name": "name", "type": "string", "required": True},
+            {"name": "primary_goal", "type": "string", "required": True},
+            {"name": "kpi", "type": "array", "required": False},
+            {"name": "audience", "type": "string", "required": False},
+            {"name": "allowed_tools", "type": "array", "required": False},
+            {"name": "require_approval_for", "type": "array", "required": False},
+            {"name": "make_default", "type": "boolean", "required": False},
+        ],
+        "use_when": (
+            "l’utilisateur demande de créer ou modifier un agent Studio ; proposer les changements "
+            "puis demander confirmation via la carte d’approbation."
+        ),
+    },
 ]
 
 
@@ -456,7 +477,7 @@ def get_axelia_skills_prompt_section() -> str:
         'Chaque entrée de tool_calls : {"skill": "nom_du_skill", "args": { ... } }',
         "Le backend exécute les skills et te renvoie les résultats dans un message suivant.",
         "Ne devine pas les noms de templates, groupes ou UUID : appelle les skills.",
-        "Pour create_template et meta_block_contact : confirmation utilisateur obligatoire dans l’UI "
+        "Pour create_template, meta_block_contact et upsert_agent_studio_config : confirmation utilisateur obligatoire dans l’UI "
         "(tu inclus tool_calls avec les args ; tu n’exécutes pas toi‑même l’action sensible).",
         "Tu agis dans le périmètre décrit dans le bloc « CONTEXTE PÉRIMÈTRE CRM » du prompt système. "
         "Si une **ligne unique** est sélectionnée, les outils inbox utilisent ce compte. "
@@ -526,6 +547,7 @@ def get_axelia_skills_prompt_section() -> str:
         "- Résumés : get_conversation_digest une fois conversation_id connu ; "
         "summarize_contact_inbox (all_accessible pour toutes les lignes permises).",
         "- Blocage Meta : meta_block_contact seulement avec contact_id réel ; jamais sans confirmation UI.",
+        "- Agent Studio : upsert_agent_studio_config crée/met à jour l'agent, mais reste en attente de confirmation humaine.",
         "- Réponse reply : française, concise, utile ; pas de bloc Markdown avec dièses en titres.",
     ])
     return "\n".join(lines)
@@ -1494,6 +1516,98 @@ async def _skill_get_whatsapp_business_profile(
     return await get_whatsapp_business_profile_skill(full)
 
 
+async def _skill_upsert_agent_studio_config(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    from app.services.agent_studio_service import (
+        create_agent_config,
+        default_agent_config,
+        get_agent_config,
+        normalize_agent_config,
+        set_agent_default,
+        update_agent_config,
+        validate_agent_config,
+    )
+
+    rt = _axelia_rt()
+    user = rt.acting_user if rt else None
+    if not user:
+        return {"error": "Contexte utilisateur indisponible."}
+
+    aid = str(account.get("id") or "").strip()
+    if not aid:
+        return {"error": "Selectionne une ligne WABA pour modifier Agent Studio."}
+    user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
+
+    cfg_id = str(args.get("config_id") or "").strip()
+    name = str(args.get("name") or "").strip()
+    primary_goal = str(args.get("primary_goal") or "").strip()
+    if not name or not primary_goal:
+        return {"error": "Parametres requis: name et primary_goal."}
+
+    kpi = args.get("kpi")
+    if not isinstance(kpi, list):
+        kpi = []
+    kpi = [str(x).strip() for x in kpi if str(x).strip()]
+
+    audience = str(args.get("audience") or "").strip()
+    allowed_tools = args.get("allowed_tools")
+    require_approval_for = args.get("require_approval_for")
+
+    base_cfg = default_agent_config()
+    row = None
+    if cfg_id:
+        row = await get_agent_config(cfg_id)
+        if not row:
+            return {"error": "config_id introuvable."}
+        if str(row.get("account_id") or "") != aid:
+            return {"error": "config_id n appartient pas au compte actif."}
+        base_cfg = normalize_agent_config(row.get("config") or {})
+
+    base_cfg["name"] = name
+    objective = dict(base_cfg.get("objective") or {})
+    objective["primary_goal"] = primary_goal
+    objective["kpi"] = kpi
+    objective["audience"] = audience
+    base_cfg["objective"] = objective
+
+    caps = dict(base_cfg.get("capabilities") or {})
+    if isinstance(allowed_tools, list):
+        caps["allowed_tools"] = [str(x).strip() for x in allowed_tools if str(x).strip()]
+    if isinstance(require_approval_for, list):
+        caps["require_approval_for"] = [
+            str(x).strip() for x in require_approval_for if str(x).strip()
+        ]
+    base_cfg["capabilities"] = caps
+
+    normalized = normalize_agent_config(base_cfg)
+    issues = validate_agent_config(normalized)
+    blocking = [i for i in issues if i.get("severity") == "error"]
+    if blocking:
+        return {"error": "Validation Agent Studio en erreur.", "issues": blocking}
+
+    if row:
+        saved = await update_agent_config(cfg_id, normalized, user.id)
+    else:
+        saved = await create_agent_config(aid, normalized, user.id)
+    if not saved:
+        return {"error": "Impossible de sauvegarder la configuration Agent Studio."}
+
+    if bool(args.get("make_default")):
+        await set_agent_default(str(saved.get("id") or ""), aid)
+        saved = await get_agent_config(str(saved.get("id") or "")) or saved
+
+    return {
+        "ok": True,
+        "config_id": saved.get("id"),
+        "account_id": saved.get("account_id"),
+        "name": (saved.get("config") or {}).get("name") if isinstance(saved.get("config"), dict) else name,
+        "is_default": bool(saved.get("is_default")),
+        "issues": issues,
+    }
+
+
 async def _skill_meta_block_contact_stub(
     args: Dict[str, Any],
     account: Dict[str, Any],
@@ -1523,6 +1637,7 @@ _SKILL_HANDLERS = {
     "list_broadcast_campaigns": _skill_list_broadcast_campaigns,
     "get_campaign_summary": _skill_get_campaign_summary,
     "get_whatsapp_business_profile": _skill_get_whatsapp_business_profile,
+    "upsert_agent_studio_config": _skill_upsert_agent_studio_config,
     "meta_block_contact": _skill_meta_block_contact_stub,
 }
 

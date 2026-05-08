@@ -4,6 +4,22 @@
 
 export function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname === "[::1]";
+
+    // En développement Vite, le SW de prod peut casser le routage SPA.
+    // On nettoie les anciens workers pour éviter les erreurs FetchEvent.
+    if (isLocalhost) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => {
+          reg.unregister().catch(() => {});
+        });
+      });
+      return;
+    }
+
     // Sur macOS, il est crucial que le Service Worker soit enregistré et actif
     // avant toute tentative de notification
     const registerSW = () => {

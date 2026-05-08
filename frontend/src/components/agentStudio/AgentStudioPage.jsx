@@ -49,6 +49,8 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
   const [simulateInput, setSimulateInput] = useState("");
   const [simulateResult, setSimulateResult] = useState(null);
   const [runtimeGraph, setRuntimeGraph] = useState(null);
+  const [tourStep, setTourStep] = useState(-1);
+  const [tourPosition, setTourPosition] = useState(null);
 
   const localIssues = useMemo(() => validateAgentStudioConfig(config), [config]);
 
@@ -175,6 +177,71 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
   }, []);
 
   const canWrite = !disabled && Boolean(accountId);
+  const isTourOpen = tourStep >= 0;
+  const tourSteps = useMemo(
+    () => [
+      {
+        selector: ".agent-studio__header",
+        title: "En-tete",
+        body: "Choisis le compte, cree un nouvel agent et enregistre les brouillons ici.",
+      },
+      {
+        selector: ".agent-studio__sidebar",
+        title: "Liste des agents",
+        body: "Retrouve les agents du compte et charge leur configuration existante.",
+      },
+      {
+        selector: ".agent-studio__tabs",
+        title: "Onglets de configuration",
+        body: "Objectif, regles, capacites, tests, deploiement et vue avancee.",
+      },
+      {
+        selector: ".agent-studio__footer",
+        title: "Validation rapide",
+        body: "Les erreurs locales s affichent ici avant de lancer la validation backend.",
+      },
+    ],
+    []
+  );
+
+  useEffect(() => {
+    if (!isTourOpen) {
+      setTourPosition(null);
+      return;
+    }
+    const step = tourSteps[tourStep];
+    if (!step) {
+      setTourPosition(null);
+      return;
+    }
+
+    let currentTarget = null;
+    const updateTourPosition = () => {
+      const el = document.querySelector(step.selector);
+      if (!el) return;
+      if (currentTarget && currentTarget !== el) {
+        currentTarget.classList.remove("agent-studio__tour-target");
+      }
+      currentTarget = el;
+      currentTarget.classList.add("agent-studio__tour-target");
+      const rect = el.getBoundingClientRect();
+      setTourPosition({
+        top: Math.min(rect.bottom + 12, window.innerHeight - 180),
+        left: Math.max(12, Math.min(rect.left, window.innerWidth - 360)),
+      });
+    };
+
+    updateTourPosition();
+    window.addEventListener("resize", updateTourPosition);
+    window.addEventListener("scroll", updateTourPosition, true);
+    return () => {
+      if (currentTarget) {
+        currentTarget.classList.remove("agent-studio__tour-target");
+      }
+      window.removeEventListener("resize", updateTourPosition);
+      window.removeEventListener("scroll", updateTourPosition, true);
+    };
+  }, [isTourOpen, tourStep, tourSteps]);
 
   return (
     <div className="agent-studio">
@@ -198,6 +265,14 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
           </button>
           <button type="button" onClick={() => void saveCurrent()} disabled={!canWrite || saving}>
             {saving ? "Enregistrement..." : "Enregistrer"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTourStep(0);
+            }}
+          >
+            Parcours
           </button>
         </div>
       </header>
@@ -329,6 +404,42 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
           </footer>
         </main>
       </section>
+      {isTourOpen ? (
+        <>
+          <div className="agent-studio__tour-backdrop" />
+          <div
+            className="agent-studio__tour-popover"
+            style={{
+              top: `${tourPosition?.top ?? 24}px`,
+              left: `${tourPosition?.left ?? 24}px`,
+            }}
+          >
+            <p className="agent-studio__tour-kicker">
+              Etape {tourStep + 1}/{tourSteps.length}
+            </p>
+            <h4>{tourSteps[tourStep]?.title}</h4>
+            <p>{tourSteps[tourStep]?.body}</p>
+            <div className="agent-studio__tour-actions">
+              <button
+                type="button"
+                onClick={() => setTourStep((prev) => Math.max(0, prev - 1))}
+                disabled={tourStep <= 0}
+              >
+                Precedent
+              </button>
+              {tourStep < tourSteps.length - 1 ? (
+                <button type="button" onClick={() => setTourStep((prev) => prev + 1)}>
+                  Suivant
+                </button>
+              ) : (
+                <button type="button" onClick={() => setTourStep(-1)}>
+                  Terminer
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // Service Worker pour PWA avec notifications en arrière-plan
 // IMPORTANT: Incrémenter cette version à chaque déploiement pour forcer la mise à jour
 // Cette version est aussi utilisée pour forcer la mise à jour des icônes PWA
-const SW_VERSION = 'v2.0.3';
+const SW_VERSION = 'v2.0.4';
 const CACHE_NAME = `lmdcvtc-whatsapp-${SW_VERSION}`;
 
 // URLs des icônes (sans version pour compatibilité développement Vite)
@@ -105,7 +105,12 @@ self.addEventListener('fetch', (event) => {
 
   if (shouldSkipCache) {
     // Pour les fichiers statiques, toujours aller chercher sur le réseau sans cache
-    event.respondWith(fetch(event.request));
+    event.respondWith(
+      fetch(event.request).catch(() => caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return new Response("Offline", { status: 503, statusText: "Offline" });
+      }))
+    );
     return;
   }
 
@@ -126,7 +131,19 @@ self.addEventListener('fetch', (event) => {
       })
       .catch(() => {
         // Si le réseau échoue, essayer le cache
-        return caches.match(event.request);
+        return caches.match(event.request).then((cached) => {
+          if (cached) {
+            return cached;
+          }
+          // Navigation SPA: fallback sur index.html pour éviter les erreurs de type Response.
+          if (event.request.mode === "navigate") {
+            return caches.match("/index.html").then((shell) => {
+              if (shell) return shell;
+              return new Response("Offline", { status: 503, statusText: "Offline" });
+            });
+          }
+          return new Response("Offline", { status: 503, statusText: "Offline" });
+        });
       })
   );
 });

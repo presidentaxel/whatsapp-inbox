@@ -1,8 +1,25 @@
 .agent-studio {
+  --studio-surface: var(--bg-hover);
+  --studio-surface-soft: rgba(255, 255, 255, 0.04);
+  --studio-border: var(--border-light);
+  --studio-text: var(--text-primary);
+  --studio-muted: var(--text-secondary);
+  --studio-chip-active-bg: rgba(138, 180, 248, 0.14);
+  --studio-chip-active-border: rgba(138, 180, 248, 0.42);
+  --studio-chip-active-text: #b6cbf7;
+
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding: 16px;
+  color: var(--studio-text);
+}
+
+[data-theme="light"] .agent-studio {
+  --studio-surface-soft: rgba(0, 0, 0, 0.035);
+  --studio-chip-active-bg: rgba(26, 115, 232, 0.1);
+  --studio-chip-active-border: rgba(26, 115, 232, 0.35);
+  --studio-chip-active-text: #174ea6;
 }
 
 .agent-studio__header {
@@ -18,7 +35,7 @@
 
 .agent-studio__header p {
   margin: 0;
-  color: #666;
+  color: var(--studio-muted);
 }
 
 .agent-studio__header-actions {
@@ -34,10 +51,11 @@
 }
 
 .agent-studio__sidebar {
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--studio-border);
   border-radius: 10px;
   padding: 12px;
-  background: #fff;
+  background: var(--studio-surface);
+  color: var(--studio-text);
 }
 
 .agent-studio__sidebar ul {
@@ -53,18 +71,24 @@
   width: 100%;
   text-align: left;
   padding: 8px 10px;
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
 }
 
 .agent-studio__sidebar button.is-active {
-  background: #eef5ff;
-  border-color: #b8d4ff;
+  background: var(--studio-chip-active-bg);
+  border-color: var(--studio-chip-active-border);
+  color: var(--studio-chip-active-text);
 }
 
 .agent-studio__main {
-  border: 1px solid #e5e5e5;
+  border: 1px solid var(--studio-border);
   border-radius: 10px;
   padding: 12px;
-  background: #fff;
+  background: var(--studio-surface);
+  color: var(--studio-text);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -77,8 +101,17 @@
 }
 
 .agent-studio__tabs button.is-active {
-  background: #222;
-  color: #fff;
+  background: var(--studio-chip-active-bg);
+  border-color: var(--studio-chip-active-border);
+  color: var(--studio-chip-active-text);
+}
+
+.agent-studio__tabs button {
+  border: 1px solid var(--studio-border);
+  border-radius: 6px;
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
+  padding: 6px 10px;
 }
 
 .agent-studio__panel {
@@ -92,7 +125,36 @@
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
-  color: #333;
+  color: var(--studio-muted);
+}
+
+.agent-studio__panel input,
+.agent-studio__panel textarea,
+.agent-studio__panel select,
+.agent-studio__header-actions select {
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
+  padding: 8px 10px;
+}
+
+.agent-studio__header-actions button,
+.agent-studio__actions-row button,
+.agent-studio__testbox button,
+.agent-studio__tour-actions button {
+  border: 1px solid var(--studio-border);
+  border-radius: 8px;
+  background: var(--studio-surface-soft);
+  color: var(--studio-text);
+  padding: 8px 10px;
+}
+
+.agent-studio__header-actions button:hover,
+.agent-studio__actions-row button:hover,
+.agent-studio__testbox button:hover,
+.agent-studio__tabs button:hover {
+  background: var(--bg-hover);
 }
 
 .agent-studio__actions-row {
@@ -116,7 +178,7 @@
 }
 
 .agent-studio__footer {
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--studio-border);
   padding-top: 10px;
   display: flex;
   justify-content: space-between;
@@ -129,11 +191,70 @@
   padding-left: 18px;
 }
 
+.agent-studio__tour-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.5);
+  z-index: 50;
+}
+
+.agent-studio__tour-popover {
+  position: fixed;
+  z-index: 61;
+  width: min(340px, calc(100vw - 24px));
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.agent-studio__tour-popover h4 {
+  margin: 0 0 6px;
+}
+
+.agent-studio__tour-popover p {
+  margin: 0 0 8px;
+  color: var(--studio-muted);
+}
+
+.agent-studio__tour-kicker {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.agent-studio__tour-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.agent-studio__tour-target {
+  position: relative;
+  z-index: 55;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.45);
+  border-radius: 10px;
+}
+
+[data-theme="light"] .agent-studio__tour-popover {
+  background: #ffffff;
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.2);
+}
+
+@media (max-width: 900px) {
+  .agent-studio__layout {
+    grid-template-columns: 1fr;
+    min-height: unset;
+  }
+}
+
 .issue-error {
-  color: #a11818;
+  color: #f28b82;
 }
 
 .issue-warning {
-  color: #8f5b00;
+  color: #fdd663;
 }
 

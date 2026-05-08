@@ -1693,13 +1693,15 @@ _TEMPLATE_STATUS_ALLOWED = frozenset(
 )
 
 
-_PENDING_USER_CONFIRM_SKILLS = frozenset({"create_template", "meta_block_contact"})
+_PENDING_USER_CONFIRM_SKILLS = frozenset(
+    {"create_template", "meta_block_contact", "upsert_agent_studio_config"}
+)
 
 
 def _partition_playground_tool_calls(
     tool_calls: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """Sépare les appels create_template / meta_block_contact (confirmation utilisateur requise) des autres skills."""
+    """Sépare les appels sensibles (confirmation utilisateur requise) des autres skills."""
     safe: List[Dict[str, Any]] = []
     pending_create: List[Dict[str, Any]] = []
     for tc in tool_calls:
@@ -1785,7 +1787,7 @@ async def generate_playground_assist_reply(
     """
     Assistant éditeur Playground avec skills (tool_calls) et todo-list.
     Boucle multi-tour : Gemini peut demander des skills, le backend les exécute et relance.
-    Les appels create_template sont différés jusqu'à confirmation (approve_tool_calls).
+    Les appels sensibles sont différés jusqu'à confirmation (approve_tool_calls).
     """
     if not settings.GEMINI_API_KEY:
         return {
@@ -1820,11 +1822,11 @@ async def generate_playground_assist_reply(
             if not isinstance(tc, dict):
                 continue
             sn = (tc.get("skill") or tc.get("name") or "").strip()
-            if sn != "create_template":
+            if sn not in _PENDING_USER_CONFIRM_SKILLS:
                 return {
                     "reply": (
-                        "Seule la création de template Meta (create_template) peut être confirmée "
-                        "via ce flux. Utilise l’assistant normalement pour les autres actions."
+                        "Seules les actions sensibles prévues (create_template, meta_block_contact, "
+                        "upsert_agent_studio_config) peuvent être confirmées via ce flux."
                     ),
                     "graph": None,
                     "todo": None,
