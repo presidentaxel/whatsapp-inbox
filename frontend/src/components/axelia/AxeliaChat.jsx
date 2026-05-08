@@ -170,10 +170,38 @@ const SUGGESTIONS = [
   },
 ];
 
+/** Récupère un éventuel `account_id` cible dans les args d'un tool_call sensible. */
+function pickToolCallAccountId(tc) {
+  if (!tc || typeof tc !== "object") return null;
+  const args = tc.args || tc.arguments || {};
+  const raw = args.account_id;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === AXELIA_CONTEXT_ALL) return null;
+  return trimmed;
+}
+
+/**
+ * Identifie une ligne WABA cible commune à tous les tool_calls (via `args.account_id`).
+ * Renvoie l'id si toutes les entrées qui en spécifient une convergent vers le même compte
+ * (et qu'au moins une entrée en spécifie un), sinon `null`.
+ */
+function pickCommonTargetAccountId(calls) {
+  if (!Array.isArray(calls) || !calls.length) return null;
+  let target = null;
+  for (const tc of calls) {
+    const aid = pickToolCallAccountId(tc);
+    if (!aid) continue;
+    if (target && target !== aid) return null;
+    target = aid;
+  }
+  return target;
+}
+
 /** Résumé UI pour les tool_calls en attente (template Meta, blocage contact…). */
-function describePendingToolCalls(calls) {
+function describePendingToolCalls(calls, accountsById = {}) {
   if (!Array.isArray(calls) || !calls.length)
-    return { title: "Action à confirmer", lines: [] };
+    return { title: "Action à confirmer", lines: [], note: null };
   const names = calls.map((tc) => tc.skill || tc.name || "");
   const hasTpl = names.some((n) => n === "create_template");
   const hasBlock = names.some((n) => n === "meta_block_contact");
@@ -198,12 +226,24 @@ function describePendingToolCalls(calls) {
     }
     if (name === "upsert_agent_studio_config") {
       const label = args.name || "Agent";
-      const mode = args.config_id ? "Mettre a jour" : "Creer";
-      return `${mode} l agent Studio « ${label} »`;
+      const mode = args.config_id ? "Mettre à jour" : "Créer";
+      const aid = pickToolCallAccountId(tc);
+      const acc = aid ? accountsById?.[aid] : null;
+      const accountLabel = acc
+        ? (acc.name?.trim() || acc.phone_number?.trim() || aid)
+        : null;
+      const target = accountLabel ? ` pour « ${accountLabel} »` : "";
+      return `${mode} l'agent Studio « ${label} »${target} (mode brouillon)`;
     }
     return String(name);
   });
-  return { title, lines };
+  let note = null;
+  if (hasStudio) {
+    note =
+      "L'agent sera enregistré en brouillon (draft). Aucun déploiement automatique : "
+      + "vous pourrez l'activer ensuite depuis Agent Studio.";
+  }
+  return { title, lines, note };
 }
 
 function AxeliaComposerPlan({ todos }) {
@@ -259,6 +299,14 @@ export default function AxeliaChat({
       ),
     [accounts, hasPermission],
   );
+  /** Index `id -> compte` pour résoudre rapidement les libellés (ex. cartes d'approbation). */
+  const accessibleAccountsById = useMemo(() => {
+    const map = {};
+    for (const a of accessibleAccounts) {
+      if (a?.id) map[a.id] = a;
+    }
+    return map;
+  }, [accessibleAccounts]);
 
   const [selectedContext, setSelectedContext] = useState(AXELIA_CONTEXT_ALL);
   const contextSeededRef = useRef(false);
@@ -1069,8 +1117,21 @@ export default function AxeliaChat({
 
   const confirmPendingCreates = async (assistMessageId, calls) => {
     if (!conversationId || !calls?.length || loading) return;
-    const accountId =
+    let accountId =
       activeConversation?.account_context || selectedContext || AXELIA_CONTEXT_ALL;
+
+    // En mode « Tous les comptes », l'IA peut viser une ligne précise via
+    // `args.account_id` (typiquement pour upsert_agent_studio_config). On utilise alors
+    // ce compte directement, sans forcer l'utilisateur à recréer un fil.
+    if (accountId === AXELIA_CONTEXT_ALL) {
+      const target = pickCommonTargetAccountId(calls);
+      const targetAccessible =
+        target && accessibleAccounts.some((a) => a.id === target);
+      if (targetAccessible) {
+        accountId = target;
+      }
+    }
+
     if (accountId === AXELIA_CONTEXT_ALL) {
       const skillNames = calls.map(
         (c) => (c?.skill || c?.name || "").trim(),
@@ -1078,9 +1139,14 @@ export default function AxeliaChat({
       const onlyBlocks =
         skillNames.length > 0 &&
         skillNames.every((n) => n === "meta_block_contact");
+      const onlyStudio =
+        skillNames.length > 0 &&
+        skillNames.every((n) => n === "upsert_agent_studio_config");
       setError(
         onlyBlocks
           ? "Choisis un compte WABA pour confirmer le blocage Meta."
+          : onlyStudio
+          ? "Choisis un compte WABA pour enregistrer l'agent Studio."
           : "Choisis un compte WABA pour confirmer la création sur Meta.",
       );
       return;
@@ -1604,7 +1670,18 @@ export default function AxeliaChat({
               const pendingCreates = pendingEntry?.calls || null;
               const pendingDesc = describePendingToolCalls(
                 Array.isArray(pendingCreates) ? pendingCreates : [],
+                accessibleAccountsById,
               );
+              // Cible explicite portée par les args (ex. upsert_agent_studio_config) :
+              // on accepte la confirmation même quand l'UI est en « Tous les comptes ».
+              const pendingTargetAccountId = Array.isArray(pendingCreates)
+                ? pickCommonTargetAccountId(pendingCreates)
+                : null;
+              const pendingTargetAccessible =
+                !!pendingTargetAccountId &&
+                accessibleAccounts.some((a) => a.id === pendingTargetAccountId);
+              const canConfirmPending =
+                toolsAvailable || pendingTargetAccessible;
               return (
                 <div key={m.id} className="axelia-model-block">
                   <div className="axelia-model-line">
@@ -1634,6 +1711,11 @@ export default function AxeliaChat({
                       <p className="axelia-pending-tools__desc">
                         {pendingDesc.lines.join(" · ")}
                       </p>
+                      {pendingDesc.note ? (
+                        <p className="axelia-pending-tools__note">
+                          {pendingDesc.note}
+                        </p>
+                      ) : null}
                       <div className="axelia-pending-tools__actions">
                         <button
                           type="button"
@@ -1642,7 +1724,7 @@ export default function AxeliaChat({
                             confirmPendingCreates(m.id, pendingCreates)
                           }
                           disabled={
-                            loading || !toolsAvailable || !conversationId || isReadOnlyConversation
+                            loading || !canConfirmPending || !conversationId || isReadOnlyConversation
                           }
                         >
                           <FiCheck aria-hidden /> Confirmer

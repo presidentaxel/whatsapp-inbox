@@ -1274,6 +1274,17 @@
   line-height: 1.4;
 }
 
+.axelia-pending-tools__note {
+  margin: -6px 0 12px;
+  padding: 8px 10px;
+  font-size: 0.78rem;
+  color: #c8d4f0;
+  background: rgba(138, 180, 248, 0.08);
+  border-left: 2px solid rgba(138, 180, 248, 0.55);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+
 .axelia-pending-tools__actions {
   display: flex;
   flex-wrap: wrap;

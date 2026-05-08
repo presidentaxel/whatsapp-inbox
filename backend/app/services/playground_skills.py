@@ -442,7 +442,9 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
     {
         "name": "upsert_agent_studio_config",
         "description": (
-            "Crée ou met à jour une configuration Agent Studio pour la ligne sélectionnée. "
+            "Crée ou met à jour une configuration Agent Studio pour une ligne WABA précise. "
+            "La configuration est sauvegardée en mode **brouillon (draft)** : elle n'est jamais "
+            "déployée sans une activation manuelle dans Agent Studio (statut deployment.status='draft'). "
             "Action sensible : exécution uniquement après validation humaine dans l'UI."
         ),
         "parameters": [
@@ -454,10 +456,21 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             {"name": "allowed_tools", "type": "array", "required": False},
             {"name": "require_approval_for", "type": "array", "required": False},
             {"name": "make_default", "type": "boolean", "required": False},
+            {
+                "name": "account_id",
+                "type": "string",
+                "required": False,
+            },
         ],
         "use_when": (
-            "l’utilisateur demande de créer ou modifier un agent Studio ; proposer les changements "
-            "puis demander confirmation via la carte d’approbation."
+            "l'utilisateur demande de créer ou modifier un agent Studio ; proposer les changements "
+            "puis demander confirmation via la carte d'approbation. "
+            "Si le périmètre courant est « tous les comptes » mais qu'une ligne WABA précise a été "
+            "identifiée pendant la conversation (nom, téléphone, UUID dans le bloc périmètre), "
+            "**inclus l'`account_id` de cette ligne dans les args** : la carte de validation utilisera "
+            "directement ce compte sans demander à l'utilisateur de changer de périmètre. "
+            "Précise toujours dans la `reply` que la configuration sera enregistrée en **brouillon** "
+            "et qu'elle reste à activer manuellement dans Agent Studio."
         ),
     },
 ]
@@ -486,7 +499,10 @@ def get_axelia_skills_prompt_section() -> str:
         "`account_scope: \"all_accessible\"` sur `search_inbox_messages` et `summarize_contact_inbox` "
         "(agrégation et timeouts côté serveur - ne refuse pas sous prétexte « une ligne à la fois »). "
         "Pour les actions Meta (templates, blocage) ou pour un résumé volontairement limité à une ligne, "
-        "reste sur le compte courant ou demande la précision si l’UI ne l’a pas encore fixée.",
+        "reste sur le compte courant ou demande la précision si l’UI ne l’a pas encore fixée. "
+        "Pour upsert_agent_studio_config en mode « Tous les comptes » : ne demande pas à l'utilisateur "
+        "de changer le sélecteur en haut de l'écran ; passe simplement l'`account_id` cible dans les "
+        "args du tool_call et précise dans la reply que l'agent sera créé en **brouillon**.",
         "",
     ]
     for sk in [*SKILLS_CATALOG, *AXELIA_ONLY_SKILLS]:
@@ -547,7 +563,13 @@ def get_axelia_skills_prompt_section() -> str:
         "- Résumés : get_conversation_digest une fois conversation_id connu ; "
         "summarize_contact_inbox (all_accessible pour toutes les lignes permises).",
         "- Blocage Meta : meta_block_contact seulement avec contact_id réel ; jamais sans confirmation UI.",
-        "- Agent Studio : upsert_agent_studio_config crée/met à jour l'agent, mais reste en attente de confirmation humaine.",
+        "- Agent Studio : upsert_agent_studio_config crée/met à jour l'agent en **mode brouillon (draft)** "
+        "uniquement (deployment.status='draft' par défaut côté serveur) - aucun déploiement automatique. "
+        "En mode « Tous les comptes », si une ligne WABA précise est identifiable (nom, UUID dans le bloc périmètre), "
+        "passe son `account_id` dans les args : ne demande PAS à l'utilisateur de changer le sélecteur en haut "
+        "de l'écran avant de valider, la carte d'approbation utilisera ce `account_id` directement. "
+        "Indique clairement dans la `reply` : « configuration enregistrée en brouillon, à activer ensuite "
+        "depuis Agent Studio » pour rassurer l'utilisateur.",
         "- Réponse reply : française, concise, utile ; pas de bloc Markdown avec dièses en titres.",
     ])
     return "\n".join(lines)

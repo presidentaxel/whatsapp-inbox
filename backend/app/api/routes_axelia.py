@@ -453,12 +453,24 @@ async def axelia_chat(
     if conv.get("read_only"):
         raise HTTPException(status_code=403, detail="conversation_read_only")
 
-    if conv.get("account_context") != body.account_id:
-        raise HTTPException(status_code=400, detail="account_context_mismatch")
-
     txt = (body.user_message or "").strip()
     has_att = bool(body.attachment and (body.attachment.data_base64 or "").strip())
     approve_only = bool(body.approve_tool_calls) and not txt and not has_att
+
+    # Une discussion lancée en « Tous les comptes » peut viser une ligne précise au moment
+    # de la confirmation d'une action sensible (ex. upsert_agent_studio_config) sans qu'on
+    # force l'utilisateur à recréer un fil : on accepte l'override si le contexte stocké
+    # est `__all__` et que l'utilisateur a accès à la ligne demandée (déjà vérifié plus haut).
+    conv_ctx = conv.get("account_context") or _AXELIA_CONTEXT_ALL
+    if conv_ctx != body.account_id:
+        allow_override = (
+            approve_only
+            and conv_ctx == _AXELIA_CONTEXT_ALL
+            and body.account_id != _AXELIA_CONTEXT_ALL
+        )
+        if not allow_override:
+            raise HTTPException(status_code=400, detail="account_context_mismatch")
+
     if approve_only and body.account_id == _AXELIA_CONTEXT_ALL:
         raise HTTPException(
             status_code=400,
@@ -627,12 +639,24 @@ async def axelia_chat_stream(
         raise HTTPException(status_code=404, detail="conversation_not_found")
     if conv.get("read_only"):
         raise HTTPException(status_code=403, detail="conversation_read_only")
-    if conv.get("account_context") != body.account_id:
-        raise HTTPException(status_code=400, detail="account_context_mismatch")
 
     txt = (body.user_message or "").strip()
     has_att = bool(body.attachment and (body.attachment.data_base64 or "").strip())
     approve_only = bool(body.approve_tool_calls) and not txt and not has_att
+
+    # Voir `axelia_chat` : on autorise un override de ligne au moment de la confirmation
+    # quand la discussion est en « Tous les comptes » (sinon l'utilisateur reste bloqué
+    # sans pouvoir changer le périmètre dans un fil déjà entamé).
+    conv_ctx = conv.get("account_context") or _AXELIA_CONTEXT_ALL
+    if conv_ctx != body.account_id:
+        allow_override = (
+            approve_only
+            and conv_ctx == _AXELIA_CONTEXT_ALL
+            and body.account_id != _AXELIA_CONTEXT_ALL
+        )
+        if not allow_override:
+            raise HTTPException(status_code=400, detail="account_context_mismatch")
+
     if approve_only and body.account_id == _AXELIA_CONTEXT_ALL:
         raise HTTPException(status_code=400, detail="account_required_for_tools")
     if not txt and not has_att and not approve_only:
