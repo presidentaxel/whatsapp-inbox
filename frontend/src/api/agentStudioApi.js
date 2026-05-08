@@ -12,6 +12,9 @@ export const createAgentStudioConfig = (payload) =>
 export const updateAgentStudioConfig = (configId, payload) =>
   api.put(`/agent-studio/configs/${configId}`, payload);
 
+export const deleteAgentStudioConfig = (configId) =>
+  api.delete(`/agent-studio/configs/${configId}`);
+
 export const validateAgentStudioConfig = (configId) =>
   api.post(`/agent-studio/configs/${configId}/validate`);
 

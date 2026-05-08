@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   activateAgentStudio,
   createAgentStudioConfig,
+  deleteAgentStudioConfig,
   deployAgentStudioCanary,
   getAgentStudioRuntimeGraph,
   listAgentStudioConfigs,
@@ -38,6 +39,42 @@ function stringifyLines(values) {
   return Array.isArray(values) ? values.join("\n") : "";
 }
 
+/** Libellé liste latérale : supporte le JSON snake_case renvoyé par l’API / Axelia. */
+function agentSidebarLabel(rawConfig) {
+  if (!rawConfig || typeof rawConfig !== "object") return "Sans titre";
+  const name = String(rawConfig.name || "").trim();
+  if (name) return name;
+  const obj = rawConfig.objective || {};
+  const goal = String(obj.primary_goal || obj.primaryGoal || "").trim();
+  if (goal) return goal.length > 52 ? `${goal.slice(0, 52)}…` : goal;
+  return "Brouillon vide";
+}
+
+/** Clé sessionStorage scoping par compte (évite de pointer un agent d'un autre WABA). */
+const ACTIVE_ID_STORAGE_PREFIX = "agentStudio:activeId:";
+
+function readPersistedActiveId(accountId) {
+  if (!accountId || typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage.getItem(ACTIVE_ID_STORAGE_PREFIX + accountId);
+  } catch {
+    return null;
+  }
+}
+
+function writePersistedActiveId(accountId, id) {
+  if (!accountId || typeof window === "undefined") return;
+  try {
+    if (id) {
+      window.sessionStorage.setItem(ACTIVE_ID_STORAGE_PREFIX + accountId, String(id));
+    } else {
+      window.sessionStorage.removeItem(ACTIVE_ID_STORAGE_PREFIX + accountId);
+    }
+  } catch {
+    /* silent: storage indisponible (mode privé strict) */
+  }
+}
+
 const ERROR_DETAIL_FR = {
   permission_denied: "Acces refuse.",
   invalid_release_mode: "Mode de deploiement invalide.",
@@ -45,6 +82,7 @@ const ERROR_DETAIL_FR = {
   account_required_for_approve: "Compte requis pour valider cette action.",
   user_required_for_approve_block: "Validation utilisateur requise pour cette action sensible.",
   primary_goal_required: "Objectif principal requis.",
+  delete_failed: "Suppression impossible.",
   confidence_threshold_invalid: "Le seuil de confiance doit etre entre 0 et 1.",
   unknown_allowed_tools: "Certains outils autorises sont inconnus.",
   unknown_require_approval_tools: "Certains outils a approbation obligatoire sont inconnus.",
@@ -109,12 +147,21 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
       const res = await listAgentStudioConfigs(accountId);
       const list = Array.isArray(res.data?.items) ? res.data.items : [];
       setItems(list);
-      const picked = list.find((x) => x.is_default) || list[0] || null;
+      // Restore : on tente d'abord la sélection persistée (sessionStorage), sinon
+      // on retombe sur le défaut puis le premier de la liste. Ça évite que le
+      // formulaire « saute » sur un autre agent à chaque retour sur la page.
+      const persistedId = readPersistedActiveId(accountId);
+      const persisted = persistedId
+        ? list.find((x) => String(x.id) === String(persistedId))
+        : null;
+      const picked = persisted || list.find((x) => x.is_default) || list[0] || null;
       if (picked) {
         setActiveId(picked.id);
+        writePersistedActiveId(accountId, picked.id);
         setConfig(normalizeAgentStudioConfig(picked.config));
       } else {
         setActiveId(null);
+        writePersistedActiveId(accountId, null);
         setConfig(createDefaultAgentStudioConfig());
       }
     } catch (e) {
@@ -138,11 +185,13 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
         const res = await updateAgentStudioConfig(activeId, payload);
         const row = res.data;
         setItems((prev) => prev.map((x) => (x.id === row.id ? row : x)));
+        writePersistedActiveId(accountId, row?.id || activeId);
       } else {
         const res = await createAgentStudioConfig(payload);
         const row = res.data;
         setItems((prev) => [row, ...prev]);
         setActiveId(row.id);
+        writePersistedActiveId(accountId, row.id);
       }
       setStatus("Brouillon enregistré.");
     } catch (e) {
@@ -151,6 +200,34 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
       setSaving(false);
     }
   }, [accountId, activeId, config]);
+
+  const deleteAgent = useCallback(
+    async (item) => {
+      if (!item?.id || !accountId) return;
+      const label = agentSidebarLabel(item.config);
+      // Confirmation utilisateur : suppression définitive (cascade SQL côté backend).
+      if (typeof window !== "undefined" && typeof window.confirm === "function") {
+        const ok = window.confirm(
+          `Supprimer définitivement l'agent « ${label} » ? Cette action est irréversible.`
+        );
+        if (!ok) return;
+      }
+      setStatus("");
+      try {
+        await deleteAgentStudioConfig(item.id);
+        setItems((prev) => prev.filter((x) => String(x.id) !== String(item.id)));
+        if (String(activeId) === String(item.id)) {
+          setActiveId(null);
+          writePersistedActiveId(accountId, null);
+          setConfig(createDefaultAgentStudioConfig());
+        }
+        setStatus(`Agent « ${label} » supprimé.`);
+      } catch (e) {
+        setStatus(toFrenchErrorMessage(e, "Suppression impossible."));
+      }
+    },
+    [accountId, activeId]
+  );
 
   const runServerValidation = useCallback(async () => {
     if (!activeId) return;
@@ -314,7 +391,18 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
               ))}
             </select>
           ) : null}
-          <button type="button" onClick={() => setConfig(createDefaultAgentStudioConfig())} disabled={!canWrite}>
+          <button
+            type="button"
+            onClick={() => {
+              // Important : sans réinitialiser activeId, « Enregistrer » écraserait l’agent
+              // sélectionné avec ce brouillon vide au lieu de créer une nouvelle ligne.
+              setActiveId(null);
+              writePersistedActiveId(accountId, null);
+              setConfig(createDefaultAgentStudioConfig());
+              setStatus("Nouveau brouillon local — Enregistrer créera un nouvel agent.");
+            }}
+            disabled={!canWrite}
+          >
             Nouveau
           </button>
           <button type="button" onClick={() => void saveCurrent()} disabled={!canWrite || saving}>
@@ -337,16 +425,27 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
           {loading ? <p>Chargement...</p> : null}
           <ul>
             {items.map((it) => (
-              <li key={it.id}>
+              <li key={it.id} className="agent-studio__sidebar-row">
                 <button
                   type="button"
                   className={String(activeId) === String(it.id) ? "is-active" : ""}
                   onClick={() => {
                     setActiveId(it.id);
+                    writePersistedActiveId(accountId, it.id);
                     setConfig(normalizeAgentStudioConfig(it.config));
                   }}
                 >
-                  {it.config?.name || "Agent"} {it.is_default ? "(défaut)" : ""}
+                  {agentSidebarLabel(it.config)} {it.is_default ? "(défaut)" : ""}
+                </button>
+                <button
+                  type="button"
+                  className="agent-studio__sidebar-delete"
+                  aria-label={`Supprimer ${agentSidebarLabel(it.config)}`}
+                  title="Supprimer cet agent"
+                  onClick={() => void deleteAgent(it)}
+                  disabled={!canWrite || saving || loading}
+                >
+                  ×
                 </button>
               </li>
             ))}

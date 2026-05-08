@@ -14,6 +14,7 @@ from app.services.agent_studio_service import (
     can_deploy_agent_config,
     create_agent_config,
     create_release,
+    delete_agent_config,
     get_agent_config,
     list_agent_configs,
     map_config_to_runtime_graph,
@@ -103,6 +104,24 @@ async def put_config(
     if not out:
         raise HTTPException(status_code=500, detail="update_failed")
     return out
+
+
+@router.delete("/configs/{config_id}")
+async def delete_config(
+    config_id: str, current_user: CurrentUser = Depends(get_current_user)
+):
+    """Supprime définitivement une config Agent Studio (et ses releases en cascade)."""
+    row = await get_agent_config(config_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="config_not_found")
+    aid = str(row["account_id"])
+    current_user.require(PermissionCodes.CONVERSATIONS_VIEW, aid)
+    current_user.require(PermissionCodes.MESSAGES_SEND, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
+    ok = await delete_agent_config(config_id, aid)
+    if not ok:
+        raise HTTPException(status_code=500, detail="delete_failed")
+    return {"status": "ok", "deleted_id": config_id}
 
 
 @router.post("/configs/{config_id}/set-default")

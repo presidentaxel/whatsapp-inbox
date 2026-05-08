@@ -418,6 +418,32 @@ async def update_agent_config(
     return await get_agent_config(config_id)
 
 
+async def delete_agent_config(config_id: str, account_id: str) -> bool:
+    """Supprime un agent (et ses releases via cascade SQL).
+
+    Renvoie ``True`` si une ligne a été supprimée, ``False`` si l'id n'existe
+    pas (ou n'appartient pas au compte). On ne bloque pas la suppression d'un
+    agent par défaut : le client doit confirmer côté UI ; un nouveau défaut
+    pourra être promu manuellement.
+    """
+    if get_pool():
+        await execute(
+            "DELETE FROM agent_studio_configs WHERE id = $1::uuid AND account_id = $2::uuid",
+            config_id,
+            account_id,
+        )
+        # On vérifie via une seconde requête plutôt que d'utiliser RETURNING (plus
+        # portable sur les drivers/ORMs présents) : `get_agent_config` est NULL → succès.
+        return await get_agent_config(config_id) is None
+    res = await supabase_execute(
+        supabase.table("agent_studio_configs")
+        .delete()
+        .eq("id", config_id)
+        .eq("account_id", account_id)
+    )
+    return bool(res.data)
+
+
 async def set_agent_default(config_id: str, account_id: str) -> bool:
     if get_pool():
         await execute(
