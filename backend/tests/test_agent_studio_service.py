@@ -1,6 +1,8 @@
 from app.services.agent_studio_service import (
     can_deploy_agent_config,
     map_config_to_runtime_graph,
+    metrics_reset_for_tests,
+    metrics_snapshot,
     normalize_agent_config,
     simulate_agent_route,
     validate_agent_config,
@@ -137,4 +139,32 @@ def test_can_deploy_agent_config_blocks_on_errors():
     )
     assert ok is False
     assert any(i["message"] == "primary_goal_required" for i in issues)
+
+
+def test_agent_studio_metrics_validate_and_simulate():
+    metrics_reset_for_tests()
+    _ = validate_agent_config(
+        {
+            "objective": {"primary_goal": ""},
+            "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
+            "capabilities": {"allowed_tools": [], "require_approval_for": []},
+        }
+    )
+    _ = simulate_agent_route(
+        {
+            "objective": {"primary_goal": "ok"},
+            "routing": {
+                "fallback": "human",
+                "confidence_threshold": 0.8,
+                "intents": [{"key": "support", "handler": "SupportAgent"}],
+            },
+        },
+        "bonjour",
+    )
+    snap = metrics_snapshot()
+    counters = snap["counters"]
+    assert counters["validate_calls"] >= 1
+    assert counters["validate_errors"] >= 1
+    assert counters["simulate_calls"] >= 1
+    assert counters["simulate_fallbacks"] >= 1
 

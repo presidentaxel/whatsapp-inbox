@@ -3,6 +3,7 @@ import { FiCpu, FiZap } from "react-icons/fi";
 import {
   getUsersWithAccess,
   updateUserAxeliaAccess,
+  updateUserAgentStudioAccess,
   updateUserPlaygroundAccess,
 } from "../../api/adminApi";
 
@@ -88,6 +89,27 @@ export default function AxeliaAccessTable({
     }
   };
 
+  const handleToggleAgentStudio = async (userId, nextAllowed) => {
+    if (!canEdit) return;
+    const prev = users;
+    setUsers((us) =>
+      us.map((u) =>
+        u.user_id === userId ? { ...u, agent_studio_access_effective: nextAllowed } : u,
+      ),
+    );
+    try {
+      await updateUserAgentStudioAccess(userId, nextAllowed);
+      await refreshUsersQuiet();
+      if (currentUserId && userId === currentUserId && refreshProfile) {
+        await refreshProfile();
+      }
+    } catch (e) {
+      console.error(e);
+      setUsers(prev);
+      alert("Erreur lors de la mise à jour de l'accès Agent Studio.");
+    }
+  };
+
   const visibleUsers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return users;
@@ -118,9 +140,10 @@ export default function AxeliaAccessTable({
     <div className="permissions-table-container">
       <div className="permissions-table-header">
         <p className="permissions-table-description">
-          Contrôle qui voit les entrées <strong>Axelia</strong> et <strong>Playground</strong> dans
-          l&apos;application (<code>/axelia</code>, <code>/playground</code>). Sans autorisation
-          explicite, l&apos;entrée du menu n&apos;apparaît pas.
+          Contrôle qui voit les entrées <strong>Axelia</strong>, <strong>Playground</strong> et
+          <strong> Agent Studio</strong> dans l&apos;application (
+          <code>/axelia</code>, <code>/playground</code>, <code>/agent-studio</code>). Sans
+          autorisation explicite, l&apos;entrée du menu n&apos;apparaît pas.
         </p>
         <p className="permissions-table-hint">
           Par défaut, les rôles concernés ont ces accès via les permissions de rôle ; les autres
@@ -144,6 +167,8 @@ export default function AxeliaAccessTable({
           const fromRoleAx = Boolean(user.axelia_access_role_default);
           const effectivePg = Boolean(user.playground_access_effective);
           const fromRolePg = Boolean(user.playground_access_role_default);
+          const effectiveStudio = Boolean(user.agent_studio_access_effective);
+          const fromRoleStudio = Boolean(user.agent_studio_access_role_default);
 
           return (
             <article key={user.user_id} className="permissions-user-card">
@@ -207,6 +232,34 @@ export default function AxeliaAccessTable({
                   ) : (
                     <div className="permissions-table-access-badge" style={{ backgroundColor: "#1e293b", color: "#fff" }}>
                       {effectivePg ? "Oui" : "Non"}
+                    </div>
+                  )}
+                </div>
+
+                <div className="permissions-user-card__account-row">
+                  <div className="permissions-user-card__account-info">
+                    <strong style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                      <FiCpu aria-hidden /> Accès Agent Studio
+                    </strong>
+                    {fromRoleStudio && effectiveStudio ? (
+                      <small>Inclus par défaut depuis le rôle</small>
+                    ) : (
+                      <small>Accès individuel</small>
+                    )}
+                  </div>
+                  {canEdit ? (
+                    <label style={{ cursor: "pointer", userSelect: "none" }}>
+                      <input
+                        type="checkbox"
+                        checked={effectiveStudio}
+                        onChange={(e) => handleToggleAgentStudio(user.user_id, e.target.checked)}
+                        style={{ marginRight: 8 }}
+                      />
+                      {effectiveStudio ? "Autorisé" : "Non autorisé"}
+                    </label>
+                  ) : (
+                    <div className="permissions-table-access-badge" style={{ backgroundColor: "#1e293b", color: "#fff" }}>
+                      {effectiveStudio ? "Oui" : "Non"}
                     </div>
                   )}
                 </div>

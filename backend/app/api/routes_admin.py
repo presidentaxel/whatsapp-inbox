@@ -224,6 +224,20 @@ async def update_user_playground_access(
     return {"status": "ok", "user_id": user_id}
 
 
+@router.put("/users/{user_id}/agent-studio-access")
+async def update_user_agent_studio_access(
+    user_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Autoriser ou révoquer l'accès à Agent Studio (/agent-studio) pour un utilisateur."""
+    current_user.require(PermissionCodes.PERMISSIONS_MANAGE)
+    if "allowed" not in payload:
+        raise HTTPException(status_code=400, detail="allowed_required")
+    await admin_service.set_user_agent_studio_access(user_id, bool(payload["allowed"]))
+    return {"status": "ok", "user_id": user_id}
+
+
 # === Observabilité de la file durable webhook_events ========================
 #
 # Pourquoi : la table `webhook_events` est notre filet de sécurité contre la

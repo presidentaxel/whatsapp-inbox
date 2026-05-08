@@ -26,6 +26,11 @@ git commit -m "****"
 git push
 ```
 
+## Supabase push
+```bash
+
+```
+
 ## .env variables changes
 ```bash
 ssh ubuntu@217.182.65.32

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -29,6 +31,52 @@ ALLOWED_AGENT_TOOLS = frozenset(
 )
 
 SENSITIVE_AGENT_TOOLS = frozenset({"create_template", "meta_block_contact"})
+
+_metrics_lock = threading.Lock()
+_metrics_counters: Dict[str, int] = {
+    "validate_calls": 0,
+    "validate_errors": 0,
+    "simulate_calls": 0,
+    "simulate_fallbacks": 0,
+    "deploy_canary_calls": 0,
+    "deploy_activate_calls": 0,
+    "deploy_pause_calls": 0,
+    "rollback_calls": 0,
+    "rollback_failed": 0,
+}
+
+
+def metrics_record(event: str, *, value: int = 1) -> None:
+    with _metrics_lock:
+        if event not in _metrics_counters:
+            _metrics_counters[event] = 0
+        _metrics_counters[event] += int(value)
+
+
+def metrics_snapshot() -> Dict[str, Any]:
+    with _metrics_lock:
+        counters = dict(_metrics_counters)
+    return {
+        "counters": counters,
+        "ratios": {
+            "validate_error_rate": round(
+                counters["validate_errors"] / max(1, counters["validate_calls"]), 4
+            ),
+            "simulate_fallback_rate": round(
+                counters["simulate_fallbacks"] / max(1, counters["simulate_calls"]), 4
+            ),
+            "rollback_failure_rate": round(
+                counters["rollback_failed"] / max(1, counters["rollback_calls"]), 4
+            ),
+        },
+        "ts": time.time(),
+    }
+
+
+def metrics_reset_for_tests() -> None:
+    with _metrics_lock:
+        for k in _metrics_counters:
+            _metrics_counters[k] = 0
 
 
 def default_agent_config() -> Dict[str, Any]:
@@ -72,6 +120,7 @@ def normalize_agent_config(raw: Any) -> Dict[str, Any]:
 
 
 def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
+    metrics_record("validate_calls")
     issues: List[Dict[str, str]] = []
     cfg = normalize_agent_config(config)
     routing = cfg.get("routing") or {}
@@ -175,6 +224,8 @@ def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
         if not str(tc.get("expected_behavior") or "").strip():
             issues.append({"severity": "error", "message": f"test_{i}_missing_expected_behavior"})
 
+    if any(str(i.get("severity")) == "error" for i in issues):
+        metrics_record("validate_errors")
     return issues
 
 
@@ -243,6 +294,7 @@ def map_config_to_runtime_graph(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def simulate_agent_route(config: Dict[str, Any], input_text: str) -> Dict[str, Any]:
+    metrics_record("simulate_calls")
     cfg = normalize_agent_config(config)
     text = str(input_text or "").strip().lower()
     intents = cfg.get("routing", {}).get("intents") or []
@@ -259,6 +311,7 @@ def simulate_agent_route(config: Dict[str, Any], input_text: str) -> Dict[str, A
                 "handler": intent.get("handler"),
                 "confidence": max(0.72, float(intent.get("min_confidence") or 0.72)),
             }
+    metrics_record("simulate_fallbacks")
     return {
         "route": "fallback",
         "handler": cfg.get("routing", {}).get("fallback") or "human",
@@ -408,6 +461,12 @@ async def create_release(
     if mode in {"canary", "activate"} and not can_deploy:
         details = ",".join(str(i.get("message")) for i in blocking)
         raise ValueError(f"config_not_deployable:{details}")
+    if mode == "canary":
+        metrics_record("deploy_canary_calls")
+    elif mode == "activate":
+        metrics_record("deploy_activate_calls")
+    elif mode == "pause":
+        metrics_record("deploy_pause_calls")
     deployment = cfg.get("deployment") or {}
     if mode == "canary":
         deployment["status"] = "canary"
@@ -448,8 +507,10 @@ async def create_release(
 
 
 async def rollback_release(config_id: str, release_id: str, actor_user_id: str) -> Tuple[bool, str]:
+    metrics_record("rollback_calls")
     cfg_row = await get_agent_config(config_id)
     if not cfg_row:
+        metrics_record("rollback_failed")
         return False, "config_not_found"
     account_id = str(cfg_row["account_id"])
     if get_pool():
@@ -465,6 +526,7 @@ async def rollback_release(config_id: str, release_id: str, actor_user_id: str) 
             account_id,
         )
         if not release:
+            metrics_record("rollback_failed")
             return False, "release_not_found"
         snapshot = release.get("config_snapshot")
     else:
@@ -477,12 +539,14 @@ async def rollback_release(config_id: str, release_id: str, actor_user_id: str) 
             .limit(1)
         )
         if not res.data:
+            metrics_record("rollback_failed")
             return False, "release_not_found"
         snapshot = res.data[0].get("config_snapshot")
 
     cfg = normalize_agent_config(snapshot if isinstance(snapshot, dict) else {})
     updated = await update_agent_config(config_id, cfg, actor_user_id)
     if not updated:
+        metrics_record("rollback_failed")
         return False, "update_failed"
     return True, "ok"
 

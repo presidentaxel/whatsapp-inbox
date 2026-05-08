@@ -28,3 +28,6 @@ export const updateUserAxeliaAccess = (userId, allowed) =>
 export const updateUserPlaygroundAccess = (userId, allowed) =>
   api.put(`/admin/users/${userId}/playground-access`, { allowed });
 
+export const updateUserAgentStudioAccess = (userId, allowed) =>
+  api.put(`/admin/users/${userId}/agent-studio-access`, { allowed });
+

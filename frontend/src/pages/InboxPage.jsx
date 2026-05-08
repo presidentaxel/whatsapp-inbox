@@ -887,6 +887,7 @@ export default function InboxPage() {
   const canManagePermissions = hasPermission?.("permissions.manage"); // Admin peut gérer les permissions
   const canAccessAxelia = hasPermission?.("axelia.access");
   const canAccessPlayground = hasPermission?.("playground.access");
+  const canAccessAgentStudio = hasPermission?.("agent_studio.access");
 
   const allowedNavItems = useMemo(() => {
     const items = ["chat"];
@@ -896,7 +897,7 @@ export default function InboxPage() {
     if (canAccessAxelia) {
       items.push("axelia");
     }
-    if (canAccessPlayground) {
+    if (canAccessAgentStudio) {
       items.push("agentStudio");
     }
     if (canAccessPlayground) {
@@ -905,7 +906,7 @@ export default function InboxPage() {
     items.push("whatsapp");
     items.push("settings");
     return items;
-  }, [canViewContacts, canAccessPlayground, canAccessAxelia]);
+  }, [canViewContacts, canAccessPlayground, canAccessAxelia, canAccessAgentStudio]);
 
   useEffect(() => {
     const modeFromUrl = inboxPathToMode(location.pathname);
@@ -1036,13 +1037,13 @@ export default function InboxPage() {
             </div>
           )
         ) : navMode === "agentStudio" ? (
-          canAccessPlayground ? (
+          canAccessAgentStudio ? (
             <div className="workspace-main settings-mode">
               <AgentStudioPage
                 accountId={activeAccount}
                 accounts={accounts}
                 onAccountChange={setActiveAccount}
-                disabled={!canAccessPlayground}
+                disabled={!canAccessAgentStudio}
               />
             </div>
           ) : (

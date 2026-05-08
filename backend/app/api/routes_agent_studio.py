@@ -17,6 +17,7 @@ from app.services.agent_studio_service import (
     get_agent_config,
     list_agent_configs,
     map_config_to_runtime_graph,
+    metrics_snapshot,
     rollback_release,
     set_agent_default,
     simulate_agent_route,
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/agent-studio", tags=["Agent Studio"])
 
 
 def require_agent_studio_access(current_user: CurrentUser = Depends(get_current_user)) -> None:
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS)
 
 
 @router.get("/configs")
@@ -37,7 +38,7 @@ async def get_configs(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, account_id)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, account_id)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, account_id)
     account = await get_account_by_id(account_id)
     if not account:
         raise HTTPException(status_code=404, detail="account_not_found")
@@ -54,7 +55,7 @@ async def get_config(
         raise HTTPException(status_code=404, detail="config_not_found")
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     return row
 
 
@@ -68,7 +69,7 @@ async def post_config(
         raise HTTPException(status_code=404, detail="account_not_found")
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, body.account_id)
     current_user.require(PermissionCodes.MESSAGES_SEND, body.account_id)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, body.account_id)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, body.account_id)
     row = await create_agent_config(
         account_id=body.account_id,
         config=body.config.model_dump(mode="json"),
@@ -93,7 +94,7 @@ async def put_config(
         raise HTTPException(status_code=400, detail="account_id_mismatch")
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, aid)
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     out = await update_agent_config(
         config_id=config_id,
         config=body.config.model_dump(mode="json"),
@@ -114,7 +115,7 @@ async def post_set_default(
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, aid)
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     ok = await set_agent_default(config_id, aid)
     if not ok:
         raise HTTPException(status_code=500, detail="set_default_failed")
@@ -130,7 +131,7 @@ async def post_validate(
         raise HTTPException(status_code=404, detail="config_not_found")
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     issues = validate_agent_config(row.get("config") or {})
     has_error = any(str(i.get("severity")) == "error" for i in issues)
     return AgentStudioValidateResult(ok=not has_error, issues=issues)
@@ -149,7 +150,7 @@ async def post_simulate(
     if aid != str(body.account_id):
         raise HTTPException(status_code=400, detail="account_id_mismatch")
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     simulation = simulate_agent_route(row.get("config") or {}, body.input_text)
     return {"status": "ok", "simulation": simulation}
 
@@ -163,7 +164,7 @@ async def get_runtime_graph(
         raise HTTPException(status_code=404, detail="config_not_found")
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.CONVERSATIONS_VIEW, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     graph = map_config_to_runtime_graph(row.get("config") or {})
     return {"graph": graph}
 
@@ -179,7 +180,7 @@ async def post_deploy_canary(
         raise HTTPException(status_code=404, detail="config_not_found")
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     cfg = row.get("config") or {}
     dep = dict((cfg.get("deployment") or {}))
     dep["status"] = "canary"
@@ -205,7 +206,7 @@ async def post_deploy_activate(
         raise HTTPException(status_code=404, detail="config_not_found")
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     deployable, issues = can_deploy_agent_config(row.get("config") or {})
     if not deployable:
         raise HTTPException(status_code=400, detail={"code": "config_not_deployable", "issues": issues})
@@ -250,4 +251,10 @@ async def post_deploy_rollback(
         st = 404 if code in ("config_not_found", "release_not_found") else 400
         raise HTTPException(status_code=st, detail=code)
     return {"status": "ok"}
+
+
+@router.get("/metrics")
+async def get_agent_studio_metrics(current_user: CurrentUser = Depends(get_current_user)):
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS)
+    return {"metrics": metrics_snapshot()}
 

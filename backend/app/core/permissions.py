@@ -28,6 +28,7 @@ class PermissionCodes:
     PERMISSIONS_MANAGE = "permissions.manage"
     AXELIA_ACCESS = "axelia.access"
     PLAYGROUND_ACCESS = "playground.access"
+    AGENT_STUDIO_ACCESS = "agent_studio.access"
 
 
 ALL_PERMISSION_CODES = {
@@ -45,6 +46,7 @@ ALL_PERMISSION_CODES = {
     PermissionCodes.PERMISSIONS_MANAGE,
     PermissionCodes.AXELIA_ACCESS,
     PermissionCodes.PLAYGROUND_ACCESS,
+    PermissionCodes.AGENT_STUDIO_ACCESS,
 }
 
 

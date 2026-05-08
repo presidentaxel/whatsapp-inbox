@@ -456,6 +456,7 @@ async def _list_users_with_access_impl(use_pg: bool) -> Sequence[Dict[str, Any]]
 
     ax_def, ax_ov = await _collect_global_perm(PermissionCodes.AXELIA_ACCESS)
     pg_def, pg_ov = await _collect_global_perm(PermissionCodes.PLAYGROUND_ACCESS)
+    studio_def, studio_ov = await _collect_global_perm(PermissionCodes.AGENT_STUDIO_ACCESS)
 
     for user in users:
         uid = user["user_id"]
@@ -468,6 +469,9 @@ async def _list_users_with_access_impl(use_pg: bool) -> Sequence[Dict[str, Any]]
         pg_role_def, pg_eff = _merge_role_overrides(uid, pg_def, pg_ov)
         user["playground_access_role_default"] = pg_role_def
         user["playground_access_effective"] = pg_eff
+        studio_role_def, studio_eff = _merge_role_overrides(uid, studio_def, studio_ov)
+        user["agent_studio_access_role_default"] = studio_role_def
+        user["agent_studio_access_effective"] = studio_eff
 
     return users
 
@@ -570,6 +574,13 @@ async def set_user_axelia_access(user_id: str, allowed: bool) -> None:
 async def set_user_playground_access(user_id: str, allowed: bool) -> None:
     """Accès Playground (/playground) : même modèle qu’Axelia."""
     await set_user_global_permission_override(user_id, PermissionCodes.PLAYGROUND_ACCESS, allowed)
+
+
+async def set_user_agent_studio_access(user_id: str, allowed: bool) -> None:
+    """Accès Agent Studio (/agent-studio) : même modèle qu’Axelia."""
+    await set_user_global_permission_override(
+        user_id, PermissionCodes.AGENT_STUDIO_ACCESS, allowed
+    )
 
 
 async def set_user_account_access(user_id: str, account_id: str, access_level: str):
