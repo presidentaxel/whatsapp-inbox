@@ -28,7 +28,10 @@ git push
 
 ## Supabase push
 ```bash
-
+#npx supabase login
+#npx supabase link --project-ref TON_PROJECT_REF
+npx supabase migration list
+npx supabase db push
 ```
 
 ## .env variables changes
