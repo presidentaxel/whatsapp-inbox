@@ -139,6 +139,48 @@
   padding: 8px 10px;
 }
 
+.agent-studio__panel select,
+.agent-studio__header-actions select {
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--studio-muted) 50%),
+    linear-gradient(135deg, var(--studio-muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) calc(50% - 2px),
+    calc(100% - 10px) calc(50% - 2px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 30px;
+}
+
+[data-theme="dark"] .agent-studio__panel select,
+[data-theme="dark"] .agent-studio__header-actions select {
+  color-scheme: dark;
+}
+
+.agent-studio__panel select option,
+.agent-studio__header-actions select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+[data-theme="light"] .agent-studio__panel select option,
+[data-theme="light"] .agent-studio__header-actions select option {
+  background: #ffffff;
+  color: #111827;
+}
+
+.agent-studio__panel input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.agent-studio__panel input[type="number"]::-webkit-outer-spin-button,
+.agent-studio__panel input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .agent-studio__header-actions button,
 .agent-studio__actions-row button,
 .agent-studio__testbox button,

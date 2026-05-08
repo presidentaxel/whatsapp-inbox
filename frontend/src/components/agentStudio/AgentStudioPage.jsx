@@ -38,6 +38,48 @@ function stringifyLines(values) {
   return Array.isArray(values) ? values.join("\n") : "";
 }
 
+const ERROR_DETAIL_FR = {
+  permission_denied: "Acces refuse.",
+  invalid_release_mode: "Mode de deploiement invalide.",
+  config_not_found: "Configuration introuvable.",
+  account_required_for_approve: "Compte requis pour valider cette action.",
+  user_required_for_approve_block: "Validation utilisateur requise pour cette action sensible.",
+  primary_goal_required: "Objectif principal requis.",
+  confidence_threshold_invalid: "Le seuil de confiance doit etre entre 0 et 1.",
+  unknown_allowed_tools: "Certains outils autorises sont inconnus.",
+  unknown_require_approval_tools: "Certains outils a approbation obligatoire sont inconnus.",
+  require_approval_not_in_allowed_tools: "Les outils a approuver doivent aussi etre dans la liste des outils autorises.",
+  sensitive_tools_must_require_approval: "Les outils sensibles doivent obligatoirement demander une validation humaine.",
+  canary_percent_required: "Le pourcentage Canary est requis pour un deploiement Canary.",
+  no_tests_defined_for_active_agent: "Aucun test defini pour un agent actif.",
+};
+
+function toFrenchErrorMessage(error, fallbackMessage) {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return ERROR_DETAIL_FR[detail] || detail.replaceAll("_", " ");
+  }
+  if (Array.isArray(detail) && detail.length > 0) {
+    return "Erreur de validation des donnees envoyees.";
+  }
+  const msg = String(error?.message || "").trim().toLowerCase();
+  if (msg.includes("network")) return "Erreur reseau. Verifie la connexion.";
+  if (msg.includes("timeout")) return "Le serveur met trop de temps a repondre.";
+  return fallbackMessage;
+}
+
+function translateIssueMessage(issue) {
+  const code = String(issue?.message || "").trim();
+  if (!code) return "Erreur de validation.";
+  if (ERROR_DETAIL_FR[code]) {
+    const details = String(issue?.details || "").trim();
+    return details ? `${ERROR_DETAIL_FR[code]} (${details})` : ERROR_DETAIL_FR[code];
+  }
+  if (code.startsWith("intent_")) return "Une regle d intention est invalide ou incomplete.";
+  if (code.startsWith("test_")) return "Un cas de test est invalide ou incomplet.";
+  return code.replaceAll("_", " ");
+}
+
 export default function AgentStudioPage({ accountId, accounts, onAccountChange, disabled }) {
   const [items, setItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
@@ -76,7 +118,7 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
         setConfig(createDefaultAgentStudioConfig());
       }
     } catch (e) {
-      setStatus(e?.response?.data?.detail || e?.message || "Chargement impossible.");
+      setStatus(toFrenchErrorMessage(e, "Chargement impossible."));
     } finally {
       setLoading(false);
     }
@@ -104,7 +146,7 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
       }
       setStatus("Brouillon enregistré.");
     } catch (e) {
-      setStatus(e?.response?.data?.detail || e?.message || "Échec de sauvegarde.");
+      setStatus(toFrenchErrorMessage(e, "Echec de sauvegarde."));
     } finally {
       setSaving(false);
     }
@@ -118,11 +160,11 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
       if (res.data?.ok) {
         setStatus("Validation backend OK.");
       } else {
-        const messages = (res.data?.issues || []).map((i) => i.message).join(" | ");
-        setStatus(`Validation backend: ${messages || "issues"}`);
+        const messages = (res.data?.issues || []).map((i) => translateIssueMessage(i)).join(" | ");
+        setStatus(`Validation backend: ${messages || "Aucune information supplementaire."}`);
       }
     } catch (e) {
-      setStatus(e?.response?.data?.detail || e?.message || "Validation impossible.");
+      setStatus(toFrenchErrorMessage(e, "Validation impossible."));
     }
   }, [activeId]);
 
@@ -135,7 +177,7 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
       });
       setSimulateResult(res.data?.simulation || null);
     } catch (e) {
-      setStatus(e?.response?.data?.detail || e?.message || "Simulation impossible.");
+      setStatus(toFrenchErrorMessage(e, "Simulation impossible."));
     }
   }, [activeId, simulateInput, accountId]);
 
@@ -145,31 +187,43 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
       const res = await getAgentStudioRuntimeGraph(activeId);
       setRuntimeGraph(res.data?.graph || null);
     } catch (e) {
-      setStatus(e?.response?.data?.detail || e?.message || "Preview runtime indisponible.");
+      setStatus(toFrenchErrorMessage(e, "Preview runtime indisponible."));
     }
   }, [activeId]);
 
   const deployCanary = useCallback(async () => {
     if (!activeId) return;
     const canary = Number(config.deployment.canaryPercent || 10);
-    await deployAgentStudioCanary(activeId, canary);
-    setStatus("Canary activé.");
-    await loadConfigs();
+    try {
+      await deployAgentStudioCanary(activeId, canary);
+      setStatus("Canary active.");
+      await loadConfigs();
+    } catch (e) {
+      setStatus(toFrenchErrorMessage(e, "Impossible de deployer le canary."));
+    }
   }, [activeId, config.deployment.canaryPercent, loadConfigs]);
 
   const activate = useCallback(async () => {
     if (!activeId) return;
-    await activateAgentStudio(activeId);
-    await setAgentStudioDefault(activeId);
-    setStatus("Agent activé et défini par défaut.");
-    await loadConfigs();
+    try {
+      await activateAgentStudio(activeId);
+      await setAgentStudioDefault(activeId);
+      setStatus("Agent active et defini par defaut.");
+      await loadConfigs();
+    } catch (e) {
+      setStatus(toFrenchErrorMessage(e, "Impossible d activer cet agent."));
+    }
   }, [activeId, loadConfigs]);
 
   const pause = useCallback(async () => {
     if (!activeId) return;
-    await pauseAgentStudio(activeId);
-    setStatus("Agent mis en pause.");
-    await loadConfigs();
+    try {
+      await pauseAgentStudio(activeId);
+      setStatus("Agent mis en pause.");
+      await loadConfigs();
+    } catch (e) {
+      setStatus(toFrenchErrorMessage(e, "Impossible de mettre cet agent en pause."));
+    }
   }, [activeId, loadConfigs]);
 
   const patchConfig = useCallback((partial) => {
