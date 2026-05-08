@@ -1,0 +1,139 @@
+.agent-studio {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.agent-studio__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.agent-studio__header h2 {
+  margin: 0 0 4px;
+}
+
+.agent-studio__header p {
+  margin: 0;
+  color: #666;
+}
+
+.agent-studio__header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-studio__layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 12px;
+  min-height: 70vh;
+}
+
+.agent-studio__sidebar {
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+}
+
+.agent-studio__sidebar ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agent-studio__sidebar button {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.agent-studio__sidebar button.is-active {
+  background: #eef5ff;
+  border-color: #b8d4ff;
+}
+
+.agent-studio__main {
+  border: 1px solid #e5e5e5;
+  border-radius: 10px;
+  padding: 12px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-studio__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-studio__tabs button.is-active {
+  background: #222;
+  color: #fff;
+}
+
+.agent-studio__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-studio__panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #333;
+}
+
+.agent-studio__actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-studio__testbox {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-studio__pre {
+  max-height: 360px;
+  overflow: auto;
+  background: #0e1117;
+  color: #d8e0ea;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.agent-studio__footer {
+  border-top: 1px solid #eee;
+  padding-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.agent-studio__footer ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.issue-error {
+  color: #a11818;
+}
+
+.issue-warning {
+  color: #8f5b00;
+}
+

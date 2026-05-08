@@ -30,6 +30,7 @@ from app.api.routes_diagnostics import router as diagnostics_router
 from app.api.routes_google_drive import router as google_drive_router
 from app.api.routes_broadcast import router as broadcast_router
 from app.api.routes_axelia import router as axelia_router
+from app.api.routes_agent_studio import router as agent_studio_router
 
 # Nouvelles routes WhatsApp API complète
 from app.api.routes_whatsapp_messages import router as whatsapp_messages_router
@@ -191,6 +192,7 @@ app.include_router(invitations_router, prefix="/invitations")
 app.include_router(users_router, prefix="/admin/users")
 app.include_router(broadcast_router, prefix="/broadcast")
 app.include_router(axelia_router)
+app.include_router(agent_studio_router)
 
 # Nouvelles routes WhatsApp API complète
 # Note: Pas de préfixe /api ici car Caddy le retire déjà avec uri strip_prefix /api

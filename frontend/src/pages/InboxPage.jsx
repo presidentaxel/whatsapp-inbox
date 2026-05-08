@@ -68,6 +68,7 @@ const SettingsPanel = lazy(() => import("../components/settings/SettingsPanel"))
 const AssistantPanel = lazy(() => import("../components/assistant/AssistantPanel"));
 const WhatsAppBusinessPanel = lazy(() => import("../components/whatsapp/WhatsAppBusinessPanel"));
 const AxeliaChat = lazy(() => import("../components/axelia/AxeliaChat"));
+const AgentStudioPage = lazy(() => import("../components/agentStudio/AgentStudioPage"));
 const BroadcastGroupsList = lazy(() => import("../components/broadcast/BroadcastGroupsList"));
 const BroadcastGroupEditor = lazy(() => import("../components/broadcast/BroadcastGroupEditor"));
 const BroadcastGroupChat = lazy(() => import("../components/broadcast/BroadcastGroupChat"));
@@ -896,6 +897,9 @@ export default function InboxPage() {
       items.push("axelia");
     }
     if (canAccessPlayground) {
+      items.push("agentStudio");
+    }
+    if (canAccessPlayground) {
       items.push("assistant");
     }
     items.push("whatsapp");
@@ -1029,6 +1033,22 @@ export default function InboxPage() {
             <div className="workspace-main settings-mode">
               <p className="panel-title">Axelia</p>
               <p>Vous n&apos;avez pas accès à Axelia.</p>
+            </div>
+          )
+        ) : navMode === "agentStudio" ? (
+          canAccessPlayground ? (
+            <div className="workspace-main settings-mode">
+              <AgentStudioPage
+                accountId={activeAccount}
+                accounts={accounts}
+                onAccountChange={setActiveAccount}
+                disabled={!canAccessPlayground}
+              />
+            </div>
+          ) : (
+            <div className="workspace-main settings-mode">
+              <p className="panel-title">Agent Studio</p>
+              <p>Vous n&apos;avez pas accès à Agent Studio.</p>
             </div>
           )
         ) : navMode === "settings" ? (

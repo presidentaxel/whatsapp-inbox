@@ -4,6 +4,7 @@ export const INBOX_PATH_BY_MODE = {
   chat: "/discussions",
   contacts: "/contacts",
   axelia: "/axelia",
+  agentStudio: "/agent-studio",
   whatsapp: "/whatsapp-business",
   assistant: "/playground",
   settings: "/parametres",

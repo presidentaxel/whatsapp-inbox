@@ -1,10 +1,11 @@
-import { FiCpu, FiMessageSquare, FiUsers, FiSettings, FiLogOut, FiZap } from "react-icons/fi";
+import { FiCpu, FiMessageSquare, FiUsers, FiSettings, FiLogOut, FiZap, FiLayers } from "react-icons/fi";
 import { FaWhatsapp } from "react-icons/fa";
 
 const NAV_ITEMS = [
   { id: "chat", icon: <FiMessageSquare /> },
   { id: "contacts", icon: <FiUsers /> },
   { id: "axelia", icon: <FiZap /> },
+  { id: "agentStudio", icon: <FiLayers /> },
   { id: "assistant", icon: <FiCpu /> },
   { id: "whatsapp", icon: <FaWhatsapp /> },
   { id: "settings", icon: <FiSettings /> },
