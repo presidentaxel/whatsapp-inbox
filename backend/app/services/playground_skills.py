@@ -18,6 +18,10 @@ import httpx
 
 from app.core.config import settings
 from app.core.permissions import PermissionCodes
+from app.services.agent_studio_service import (
+    ALLOWED_AGENT_TOOLS as _AGENT_STUDIO_TOOL_SLUGS,
+    SENSITIVE_AGENT_TOOLS as _AGENT_STUDIO_SENSITIVE_SLUGS,
+)
 
 logger = logging.getLogger("uvicorn.error").getChild("playground_skills")
 
@@ -445,7 +449,12 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             "Crée ou met à jour une configuration Agent Studio pour une ligne WABA précise. "
             "La configuration est sauvegardée en mode **brouillon (draft)** : elle n'est jamais "
             "déployée sans une activation manuelle dans Agent Studio (statut deployment.status='draft'). "
-            "Action sensible : exécution uniquement après validation humaine dans l'UI."
+            "Action sensible : exécution uniquement après validation humaine dans l'UI. "
+            "ATTENTION : `allowed_tools` et `require_approval_for` n'acceptent QUE des slugs "
+            "techniques d'outils (voir liste ci-dessous), jamais des libellés métier en français "
+            "(p. ex. « Ajustements de facturation », « Litiges graves » sont invalides). "
+            "Pour une politique d'escalade humaine sur des thèmes métier, décris-la dans `primary_goal` "
+            "ou `audience` (texte libre) - pas dans ces deux champs."
         ),
         "parameters": [
             {"name": "config_id", "type": "string", "required": False},
@@ -470,7 +479,10 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             "**inclus l'`account_id` de cette ligne dans les args** : la carte de validation utilisera "
             "directement ce compte sans demander à l'utilisateur de changer de périmètre. "
             "Précise toujours dans la `reply` que la configuration sera enregistrée en **brouillon** "
-            "et qu'elle reste à activer manuellement dans Agent Studio."
+            "et qu'elle reste à activer manuellement dans Agent Studio. "
+            "Si l'utilisateur évoque des cas métier d'escalade (« approbation pour facturation », "
+            "« litiges graves » …), ne les place PAS dans `require_approval_for` : intègre-les "
+            "à `primary_goal` (ex. « ... escalade vers un humain pour facturation, litiges graves »)."
         ),
     },
 ]
@@ -569,7 +581,13 @@ def get_axelia_skills_prompt_section() -> str:
         "passe son `account_id` dans les args : ne demande PAS à l'utilisateur de changer le sélecteur en haut "
         "de l'écran avant de valider, la carte d'approbation utilisera ce `account_id` directement. "
         "Indique clairement dans la `reply` : « configuration enregistrée en brouillon, à activer ensuite "
-        "depuis Agent Studio » pour rassurer l'utilisateur.",
+        "depuis Agent Studio » pour rassurer l'utilisateur. "
+        "`allowed_tools` et `require_approval_for` n'acceptent QUE les slugs techniques suivants : "
+        + ", ".join(sorted(_AGENT_STUDIO_TOOL_SLUGS))
+        + " (outils sensibles obligatoires dans `require_approval_for` s'ils sont dans `allowed_tools` : "
+        + ", ".join(sorted(_AGENT_STUDIO_SENSITIVE_SLUGS))
+        + "). Tout libellé métier en français (« Ajustements de facturation », « Litiges graves »...) y "
+        "est INVALIDE et fera échouer la validation : place ces consignes dans `primary_goal` à la place.",
         "- Réponse reply : française, concise, utile ; pas de bloc Markdown avec dièses en titres.",
     ])
     return "\n".join(lines)
@@ -1607,7 +1625,48 @@ async def _skill_upsert_agent_studio_config(
     issues = validate_agent_config(normalized)
     blocking = [i for i in issues if i.get("severity") == "error"]
     if blocking:
-        return {"error": "Validation Agent Studio en erreur.", "issues": blocking}
+        # On enrichit l'erreur d'un `hint` actionnable pour que l'IA puisse se corriger
+        # toute seule au tour suivant (au lieu de poser la question à l'utilisateur, comme
+        # avec un `require_approval_for` rempli de libellés métier français).
+        hints: List[str] = []
+        for issue in blocking:
+            msg = str(issue.get("message") or "")
+            details = str(issue.get("details") or "").strip()
+            if msg == "unknown_allowed_tools":
+                hints.append(
+                    "`allowed_tools` contient des entrées non reconnues "
+                    f"({details}). N'utilise QUE les slugs techniques suivants : "
+                    + ", ".join(sorted(_AGENT_STUDIO_TOOL_SLUGS))
+                    + ". Pour exprimer des cas métier (facturation, litiges...), "
+                    "ajoute-les en texte libre dans `primary_goal`."
+                )
+            elif msg == "unknown_require_approval_tools":
+                hints.append(
+                    "`require_approval_for` contient des entrées non reconnues "
+                    f"({details}). Ce champ n'accepte que des slugs d'outils techniques "
+                    "(p. ex. " + ", ".join(sorted(_AGENT_STUDIO_SENSITIVE_SLUGS)) + ") "
+                    "et chaque entrée DOIT aussi figurer dans `allowed_tools`. "
+                    "Les politiques métier (« approbation pour facturation », etc.) "
+                    "se décrivent en texte libre dans `primary_goal`."
+                )
+            elif msg == "require_approval_not_in_allowed_tools":
+                hints.append(
+                    f"`require_approval_for` ({details}) doit être un sous-ensemble de "
+                    "`allowed_tools` : ajoute ces slugs à `allowed_tools` ou retire-les "
+                    "de `require_approval_for`."
+                )
+            elif msg == "sensitive_tools_must_require_approval":
+                hints.append(
+                    f"Les outils sensibles ({details}) doivent obligatoirement figurer "
+                    "dans `require_approval_for` quand ils sont dans `allowed_tools`."
+                )
+        result: Dict[str, Any] = {
+            "error": "Validation Agent Studio en erreur.",
+            "issues": blocking,
+        }
+        if hints:
+            result["hint"] = " ".join(hints)
+        return result
 
     if row:
         saved = await update_agent_config(cfg_id, normalized, user.id)
