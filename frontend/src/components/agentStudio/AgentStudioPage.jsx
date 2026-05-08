@@ -16,6 +16,14 @@ import {
   normalizeAgentStudioConfig,
   validateAgentStudioConfig,
 } from "./agentStudioModel";
+import {
+  AdvancedSection,
+  CapabilitiesSection,
+  DeploySection,
+  ObjectiveSection,
+  PolicySection,
+  TestsSection,
+} from "./AgentStudioSections";
 
 import "./agentStudio.css";
 
@@ -238,243 +246,68 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
           </nav>
 
           {tab === "objective" ? (
-            <section className="agent-studio__panel">
-              <label>
-                Nom agent
-                <input
-                  value={config.name}
-                  onChange={(e) => patchConfig({ name: e.target.value })}
-                  disabled={!canWrite}
-                />
-              </label>
-              <label>
-                Objectif principal
-                <textarea
-                  rows={3}
-                  value={config.objective.primaryGoal}
-                  onChange={(e) =>
-                    patchConfig({
-                      objective: { ...config.objective, primaryGoal: e.target.value },
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-              <label>
-                KPI (1 ligne = 1 KPI)
-                <textarea
-                  rows={4}
-                  value={stringifyLines(config.objective.kpi)}
-                  onChange={(e) =>
-                    patchConfig({
-                      objective: { ...config.objective, kpi: parseLines(e.target.value) },
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-            </section>
+            <ObjectiveSection
+              config={config}
+              patchConfig={patchConfig}
+              canWrite={canWrite}
+              parseLines={parseLines}
+              stringifyLines={stringifyLines}
+            />
           ) : null}
 
           {tab === "policy" ? (
-            <section className="agent-studio__panel">
-              <label>
-                Fallback
-                <select
-                  value={config.routing.fallback}
-                  onChange={(e) =>
-                    patchConfig({ routing: { ...config.routing, fallback: e.target.value } })
-                  }
-                  disabled={!canWrite}
-                >
-                  <option value="human">Escalade humain</option>
-                  <option value="safe_reply">Réponse sûre</option>
-                  <option value="ask_clarification">Demande de clarification</option>
-                </select>
-              </label>
-              <label>
-                Seuil de confiance
-                <input
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={config.routing.confidenceThreshold}
-                  onChange={(e) =>
-                    patchConfig({
-                      routing: {
-                        ...config.routing,
-                        confidenceThreshold: Number(e.target.value),
-                      },
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-              <label>
-                Actions interdites (1 ligne = 1 action)
-                <textarea
-                  rows={4}
-                  value={stringifyLines(config.policies.forbiddenActions)}
-                  onChange={(e) =>
-                    patchConfig({
-                      policies: {
-                        ...config.policies,
-                        forbiddenActions: parseLines(e.target.value),
-                      },
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-            </section>
+            <PolicySection
+              config={config}
+              patchConfig={patchConfig}
+              canWrite={canWrite}
+              parseLines={parseLines}
+              stringifyLines={stringifyLines}
+            />
           ) : null}
 
           {tab === "capabilities" ? (
-            <section className="agent-studio__panel">
-              <label>
-                Tools autorisés (1 ligne = 1 tool)
-                <textarea
-                  rows={6}
-                  value={stringifyLines(config.capabilities.allowedTools)}
-                  onChange={(e) =>
-                    patchConfig({
-                      capabilities: {
-                        ...config.capabilities,
-                        allowedTools: parseLines(e.target.value),
-                      },
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-              <label>
-                Tools avec approbation obligatoire
-                <textarea
-                  rows={6}
-                  value={stringifyLines(config.capabilities.requireApprovalFor)}
-                  onChange={(e) =>
-                    patchConfig({
-                      capabilities: {
-                        ...config.capabilities,
-                        requireApprovalFor: parseLines(e.target.value),
-                      },
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-            </section>
+            <CapabilitiesSection
+              config={config}
+              patchConfig={patchConfig}
+              canWrite={canWrite}
+              parseLines={parseLines}
+              stringifyLines={stringifyLines}
+            />
           ) : null}
 
           {tab === "tests" ? (
-            <section className="agent-studio__panel">
-              <label>
-                Cas de tests (format: input => expected_behavior)
-                <textarea
-                  rows={8}
-                  value={(config.tests || [])
-                    .map((t) => `${t.input || ""} => ${t.expectedBehavior || ""}`)
-                    .join("\n")}
-                  onChange={(e) =>
-                    patchConfig({
-                      tests: parseLines(e.target.value).map((line, idx) => {
-                        const [left, right] = line.split("=>");
-                        return {
-                          id: `t${idx + 1}`,
-                          input: String(left || "").trim(),
-                          expectedBehavior: String(right || "").trim(),
-                          expectedRoute: null,
-                        };
-                      }),
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-              <div className="agent-studio__testbox">
-                <input
-                  value={simulateInput}
-                  placeholder="Message client à simuler"
-                  onChange={(e) => setSimulateInput(e.target.value)}
-                />
-                <button type="button" onClick={() => void runSimulation()} disabled={!activeId}>
-                  Simuler
-                </button>
-              </div>
-              {simulateResult ? (
-                <pre className="agent-studio__pre">{JSON.stringify(simulateResult, null, 2)}</pre>
-              ) : null}
-            </section>
+            <TestsSection
+              config={config}
+              patchConfig={patchConfig}
+              canWrite={canWrite}
+              parseLines={parseLines}
+              simulateInput={simulateInput}
+              setSimulateInput={setSimulateInput}
+              runSimulation={runSimulation}
+              simulateResult={simulateResult}
+              activeId={activeId}
+            />
           ) : null}
 
           {tab === "deploy" ? (
-            <section className="agent-studio__panel">
-              <label>
-                Statut
-                <select
-                  value={config.deployment.status}
-                  onChange={(e) =>
-                    patchConfig({
-                      deployment: { ...config.deployment, status: e.target.value },
-                    })
-                  }
-                  disabled={!canWrite}
-                >
-                  <option value="draft">Draft</option>
-                  <option value="canary">Canary</option>
-                  <option value="active">Active</option>
-                  <option value="paused">Paused</option>
-                </select>
-              </label>
-              <label>
-                Canary %
-                <input
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={config.deployment.canaryPercent || ""}
-                  onChange={(e) =>
-                    patchConfig({
-                      deployment: {
-                        ...config.deployment,
-                        canaryPercent: e.target.value ? Number(e.target.value) : null,
-                      },
-                    })
-                  }
-                  disabled={!canWrite}
-                />
-              </label>
-              <div className="agent-studio__actions-row">
-                <button type="button" onClick={() => void runServerValidation()} disabled={!activeId}>
-                  Valider (backend)
-                </button>
-                <button type="button" onClick={() => void deployCanary()} disabled={!activeId || !canWrite}>
-                  Déployer canary
-                </button>
-                <button type="button" onClick={() => void activate()} disabled={!activeId || !canWrite}>
-                  Activer
-                </button>
-                <button type="button" onClick={() => void pause()} disabled={!activeId || !canWrite}>
-                  Pause
-                </button>
-              </div>
-            </section>
+            <DeploySection
+              config={config}
+              patchConfig={patchConfig}
+              canWrite={canWrite}
+              runServerValidation={runServerValidation}
+              deployCanary={deployCanary}
+              activate={activate}
+              pause={pause}
+              activeId={activeId}
+            />
           ) : null}
 
           {tab === "advanced" ? (
-            <section className="agent-studio__panel">
-              <div className="agent-studio__actions-row">
-                <button type="button" onClick={() => void loadRuntime()} disabled={!activeId}>
-                  Générer preview runtime
-                </button>
-              </div>
-              {runtimeGraph ? (
-                <pre className="agent-studio__pre">{JSON.stringify(runtimeGraph, null, 2)}</pre>
-              ) : (
-                <p>Aucune preview chargée.</p>
-              )}
-            </section>
+            <AdvancedSection
+              activeId={activeId}
+              loadRuntime={loadRuntime}
+              runtimeGraph={runtimeGraph}
+            />
           ) : null}
 
           <footer className="agent-studio__footer">
