@@ -11,6 +11,7 @@ from app.schemas.agent_studio import (
 )
 from app.services.account_service import get_account_by_id
 from app.services.agent_studio_service import (
+    can_deploy_agent_config,
     create_agent_config,
     create_release,
     get_agent_config,
@@ -184,8 +185,14 @@ async def post_deploy_canary(
     dep["status"] = "canary"
     dep["canary_percent"] = int(canary_percent)
     cfg["deployment"] = dep
+    deployable, issues = can_deploy_agent_config(cfg)
+    if not deployable:
+        raise HTTPException(status_code=400, detail={"code": "config_not_deployable", "issues": issues})
     await update_agent_config(config_id, cfg, current_user.id)
-    release = await create_release(config_id, aid, "canary", current_user.id)
+    try:
+        release = await create_release(config_id, aid, "canary", current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "release": release}
 
 
@@ -199,7 +206,13 @@ async def post_deploy_activate(
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
     current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
-    release = await create_release(config_id, aid, "activate", current_user.id)
+    deployable, issues = can_deploy_agent_config(row.get("config") or {})
+    if not deployable:
+        raise HTTPException(status_code=400, detail={"code": "config_not_deployable", "issues": issues})
+    try:
+        release = await create_release(config_id, aid, "activate", current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "release": release}
 
 
@@ -213,7 +226,10 @@ async def post_deploy_pause(
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
     current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
-    release = await create_release(config_id, aid, "pause", current_user.id)
+    try:
+        release = await create_release(config_id, aid, "pause", current_user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "ok", "release": release}
 
 

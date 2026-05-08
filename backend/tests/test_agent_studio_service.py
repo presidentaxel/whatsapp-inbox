@@ -1,4 +1,5 @@
 from app.services.agent_studio_service import (
+    can_deploy_agent_config,
     map_config_to_runtime_graph,
     normalize_agent_config,
     simulate_agent_route,
@@ -79,4 +80,61 @@ def test_simulate_agent_route_fallback_when_no_match():
     )
     assert out["route"] == "fallback"
     assert out["handler"] == "ask_clarification"
+
+
+def test_validate_agent_config_rejects_unknown_tools():
+    issues = validate_agent_config(
+        {
+            "objective": {"primary_goal": "Répondre clients"},
+            "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
+            "capabilities": {
+                "allowed_tools": ["search_contacts", "unknown_tool_x"],
+                "require_approval_for": [],
+            },
+        }
+    )
+    assert any(i["message"] == "unknown_allowed_tools" for i in issues)
+
+
+def test_validate_agent_config_rejects_approval_outside_allowlist():
+    issues = validate_agent_config(
+        {
+            "objective": {"primary_goal": "Répondre clients"},
+            "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
+            "capabilities": {
+                "allowed_tools": ["search_contacts"],
+                "require_approval_for": ["meta_block_contact"],
+            },
+        }
+    )
+    assert any(i["message"] == "require_approval_not_in_allowed_tools" for i in issues)
+
+
+def test_validate_agent_config_requires_approval_for_sensitive_tools():
+    issues = validate_agent_config(
+        {
+            "objective": {"primary_goal": "Répondre clients"},
+            "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
+            "capabilities": {
+                "allowed_tools": ["create_template"],
+                "require_approval_for": [],
+            },
+        }
+    )
+    assert any(i["message"] == "sensitive_tools_must_require_approval" for i in issues)
+
+
+def test_can_deploy_agent_config_blocks_on_errors():
+    ok, issues = can_deploy_agent_config(
+        {
+            "objective": {"primary_goal": ""},
+            "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
+            "capabilities": {
+                "allowed_tools": ["search_contacts"],
+                "require_approval_for": [],
+            },
+        }
+    )
+    assert ok is False
+    assert any(i["message"] == "primary_goal_required" for i in issues)
 

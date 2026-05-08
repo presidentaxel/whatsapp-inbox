@@ -7,6 +7,29 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.db import supabase, supabase_execute
 from app.core.pg import execute, fetch_all, fetch_one, get_pool
 
+ALLOWED_AGENT_TOOLS = frozenset(
+    {
+        "list_templates",
+        "get_template_status",
+        "create_template",
+        "prepare_template_image_header",
+        "list_broadcast_groups",
+        "search_inbox_messages",
+        "get_conversation_digest",
+        "summarize_contact_inbox",
+        "search_contacts",
+        "get_contact",
+        "list_recent_conversations",
+        "find_satisfied_contacts",
+        "list_broadcast_campaigns",
+        "get_campaign_summary",
+        "get_whatsapp_business_profile",
+        "meta_block_contact",
+    }
+)
+
+SENSITIVE_AGENT_TOOLS = frozenset({"create_template", "meta_block_contact"})
+
 
 def default_agent_config() -> Dict[str, Any]:
     return {
@@ -92,6 +115,50 @@ def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
     if forbidden & approvals:
         issues.append({"severity": "warning", "message": "forbidden_actions_overlap_require_approval"})
 
+    allowed_tools = {
+        str(x).strip()
+        for x in (capabilities.get("allowed_tools") or [])
+        if str(x).strip()
+    }
+    unknown_allowed = sorted(x for x in allowed_tools if x not in ALLOWED_AGENT_TOOLS)
+    if unknown_allowed:
+        issues.append(
+            {
+                "severity": "error",
+                "message": "unknown_allowed_tools",
+                "details": ",".join(unknown_allowed),
+            }
+        )
+    unknown_approvals = sorted(x for x in approvals if x not in ALLOWED_AGENT_TOOLS)
+    if unknown_approvals:
+        issues.append(
+            {
+                "severity": "error",
+                "message": "unknown_require_approval_tools",
+                "details": ",".join(unknown_approvals),
+            }
+        )
+    missing_allowlist_for_approval = sorted(x for x in approvals if x not in allowed_tools)
+    if missing_allowlist_for_approval:
+        issues.append(
+            {
+                "severity": "error",
+                "message": "require_approval_not_in_allowed_tools",
+                "details": ",".join(missing_allowlist_for_approval),
+            }
+        )
+    sensitive_without_approval = sorted(
+        x for x in allowed_tools if x in SENSITIVE_AGENT_TOOLS and x not in approvals
+    )
+    if sensitive_without_approval:
+        issues.append(
+            {
+                "severity": "error",
+                "message": "sensitive_tools_must_require_approval",
+                "details": ",".join(sensitive_without_approval),
+            }
+        )
+
     status = str(deployment.get("status") or "draft").strip().lower()
     canary_percent = deployment.get("canary_percent")
     if status == "canary" and (canary_percent is None or int(canary_percent) <= 0):
@@ -109,6 +176,12 @@ def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
             issues.append({"severity": "error", "message": f"test_{i}_missing_expected_behavior"})
 
     return issues
+
+
+def can_deploy_agent_config(config: Dict[str, Any]) -> Tuple[bool, List[Dict[str, str]]]:
+    issues = validate_agent_config(config)
+    blocking = [i for i in issues if str(i.get("severity")) == "error"]
+    return len(blocking) == 0, blocking
 
 
 def map_config_to_runtime_graph(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -325,10 +398,16 @@ async def create_release(
     actor_user_id: str,
     notes: Optional[str] = None,
 ):
+    if mode not in {"canary", "activate", "pause"}:
+        raise ValueError("invalid_release_mode")
     row = await get_agent_config(config_id)
     if not row:
         return None
     cfg = normalize_agent_config(row.get("config") or {})
+    can_deploy, blocking = can_deploy_agent_config(cfg)
+    if mode in {"canary", "activate"} and not can_deploy:
+        details = ",".join(str(i.get("message")) for i in blocking)
+        raise ValueError(f"config_not_deployable:{details}")
     deployment = cfg.get("deployment") or {}
     if mode == "canary":
         deployment["status"] = "canary"
