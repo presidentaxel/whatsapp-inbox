@@ -296,6 +296,7 @@ _TOOL_HINT_TOKENS = (
     "envoyer", "envoy", "meta", "ligne", "compte", "blocage", "bloque",
     "broadcast", "inbox", "client", "facture", "automation", "parcours",
     "json", "schema", "regex", "formule", "script", "code",
+    "agent", "agents", "studio", "brouillon",
 )
 
 
@@ -407,6 +408,8 @@ _AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
     "get_campaign_summary": ("Statistiques campagne", "J’analyse les stats de livraison et de lecture…"),
     "get_whatsapp_business_profile": ("Profil WABA", "Je lis le profil public WhatsApp Business…"),
     "meta_block_contact": ("Blocage Meta", "Je prépare l’action sensible côté Meta…"),
+    "list_agent_studio_configs": ("Agent Studio", "Je liste les agents configurés sur la ligne…"),
+    "get_agent_studio_config": ("Agent Studio", "Je charge la configuration détaillée de l’agent…"),
     "upsert_agent_studio_config": ("Agent Studio", "Je prépare la configuration de l’agent pour validation…"),
 }
 
@@ -1108,6 +1111,9 @@ def format_perimeter_context_prompt(
             f"- Téléphone affiché (ligne) : {phone}\n"
             f"- Identifiant technique du compte (UUID) : {aid}\n"
             "Tu travailles **exclusivement** sur cette ligne pour les données inbox (messages, contacts, templates Meta de ce compte).\n"
+            "Pour **Agent Studio** sur cette ligne : tu peux **lister et lire** les configurations avec "
+            "`list_agent_studio_configs` et `get_agent_studio_config` (accès agent_studio + conversations requis) ; "
+            "**ne dis pas** que tu ne peux pas consulter les agents tant que ces permissions sont en place.\n"
             "Pour toute question sur l’historique, les résumés ou « qui a dit quoi », tu DOIS utiliser les outils "
             "`search_inbox_messages`, `get_conversation_digest` et `summarize_contact_inbox` - "
             "**ne dis pas** que tu n’as pas accès au CRM lorsque ce bloc est présent.\n"
@@ -1127,7 +1133,11 @@ def format_perimeter_context_prompt(
             "(le serveur itère compte par compte, avec limites et timeouts). "
             "Ne refuse pas une synthèse multi-lignes sous prétexte qu’une ligne ne peut être lue qu’isolément.\n",
             "Pour les actions **Meta par compte** (templates, groupes, blocage), une ligne WABA explicite reste "
-            "nécessaire : utilise le sélecteur ou demande quelle ligne si l’action est par nature mono-compte.\n",
+            "nécessaire : utilise le sélecteur ou demande quelle ligne si l’action est par nature mono-compte.\n"
+            "Pour **Agent Studio** en lecture : utilise `list_agent_studio_configs` avec "
+            "`account_scope: \"all_accessible\"` ou un `account_id` du tableau ci‑dessous, puis "
+            "`get_agent_studio_config` avec le UUID `config_id` ; **ne dis pas** que tu ne peux pas "
+            "lister ou ouvrir les fiches agents si l’utilisateur a l’accès Studio sur ces lignes.\n",
         ]
         preview = perimeter_context.get("all_accounts_preview") or []
         if preview:

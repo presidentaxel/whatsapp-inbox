@@ -84,6 +84,48 @@ def _skill_args_want_all_accessible(
     return False
 
 
+def _slim_agent_studio_config_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Résumé compact pour list_agent_studio_configs (économie de tokens)."""
+    cfg = row.get("config") or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    objective = cfg.get("objective") or {}
+    if not isinstance(objective, dict):
+        objective = {}
+    pg = str(objective.get("primary_goal") or "").strip()
+    routing = cfg.get("routing") or {}
+    intents = routing.get("intents") if isinstance(routing, dict) else None
+    intents_n = len(intents) if isinstance(intents, list) else 0
+    deployment = cfg.get("deployment") or {}
+    dep_st = deployment.get("status") if isinstance(deployment, dict) else None
+    preview_len = 400
+    if len(pg) > preview_len:
+        pg_prev = pg[:preview_len] + "…"
+    else:
+        pg_prev = pg
+    return {
+        "id": str(row.get("id") or ""),
+        "account_id": str(row.get("account_id") or ""),
+        "name": cfg.get("name"),
+        "is_default": bool(row.get("is_default")),
+        "version": row.get("version"),
+        "deployment_status": dep_st,
+        "updated_at": row.get("updated_at"),
+        "intents_count": intents_n,
+        "primary_goal_preview": pg_prev,
+    }
+
+
+def _user_may_read_agent_studio(user: Any, account_id: str) -> bool:
+    aid = str(account_id or "").strip()
+    if not aid:
+        return False
+    return bool(
+        user.permissions.has(PermissionCodes.CONVERSATIONS_VIEW, aid)
+        and user.permissions.has(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
+    )
+
+
 def _resolve_waba_credentials(account: Dict[str, Any]) -> tuple:
     """Resolve waba_id and access_token with env fallbacks."""
     waba_id = account.get("waba_id") or settings.WHATSAPP_BUSINESS_ACCOUNT_ID
@@ -444,6 +486,48 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
         ),
     },
     {
+        "name": "list_agent_studio_configs",
+        "description": (
+            "Liste les configurations Agent Studio du ou des comptes WABA autorisés "
+            "(lecture seule, sans confirmation UI). Retourne pour chaque agent : id, nom, "
+            "statut de déploiement (ex. draft), indicateur agent par défaut, extrait d’objectif. "
+            "Avec account_scope=all_accessible, parcourt les lignes où l’utilisateur a à la fois "
+            "conversations.view et agent_studio.access."
+        ),
+        "parameters": [
+            {
+                "name": "account_scope",
+                "type": "string",
+                "required": False,
+                "enum": ["primary", "all_accessible"],
+            },
+            {
+                "name": "account_id",
+                "type": "string",
+                "required": False,
+            },
+        ],
+        "use_when": (
+            "l’utilisateur veut voir quels agents existent, un inventaire, comparer les lignes, "
+            "ou avant une modification ; en mode « tous les comptes », utilise account_scope=all_accessible "
+            "ou un account_id du bloc périmètre."
+        ),
+    },
+    {
+        "name": "get_agent_studio_config",
+        "description": (
+            "Charge la configuration Agent Studio complète (JSON normalisé) pour un config_id UUID, "
+            "plus les anomalies de validation connues du schéma Studio. Lecture seule, sans confirmation UI."
+        ),
+        "parameters": [
+            {"name": "config_id", "type": "string", "required": True},
+        ],
+        "use_when": (
+            "après list_agent_studio_configs ou lorsque l’utilisateur fournit un UUID de configuration ; "
+            "pour expliquer en détail objectifs, intents, politiques, outils autorisés."
+        ),
+    },
+    {
         "name": "upsert_agent_studio_config",
         "description": (
             "Crée ou met à jour une configuration Agent Studio pour une ligne WABA précise. "
@@ -575,7 +659,11 @@ def get_axelia_skills_prompt_section() -> str:
         "- Résumés : get_conversation_digest une fois conversation_id connu ; "
         "summarize_contact_inbox (all_accessible pour toutes les lignes permises).",
         "- Blocage Meta : meta_block_contact seulement avec contact_id réel ; jamais sans confirmation UI.",
-        "- Agent Studio : upsert_agent_studio_config crée/met à jour l'agent en **mode brouillon (draft)** "
+        "- Agent Studio (lecture, sans carte de confirmation) : `list_agent_studio_configs` pour inventorier "
+        "les agents (résumé par ligne ; account_scope=all_accessible ou account_id explicite en mode multi-comptes) ; "
+        "`get_agent_studio_config` pour la fiche complète + anomalies de validation quand tu as un config_id UUID. "
+        "**Ne dis pas** que tu ne peux pas lister ou lire les configurations si l'utilisateur a l'accès Studio.",
+        "- Agent Studio (écriture) : upsert_agent_studio_config crée/met à jour l'agent en **mode brouillon (draft)** "
         "uniquement (deployment.status='draft' par défaut côté serveur) - aucun déploiement automatique. "
         "En mode « Tous les comptes », si une ligne WABA précise est identifiable (nom, UUID dans le bloc périmètre), "
         "passe son `account_id` dans les args : ne demande PAS à l'utilisateur de changer le sélecteur en haut "
@@ -1556,6 +1644,122 @@ async def _skill_get_whatsapp_business_profile(
     return await get_whatsapp_business_profile_skill(full)
 
 
+async def _skill_list_agent_studio_configs(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    from app.services.agent_studio_service import list_agent_configs
+    from app.services.account_service import get_account_by_id
+    from app.services.axelia_inbox_tools import (
+        _AXELIA_MULTI_MAX_ACCOUNTS,
+        list_accessible_account_rows_for_inbox,
+    )
+
+    rt = _axelia_rt()
+    user = rt.acting_user if rt else None
+    if not user:
+        return {"error": "Contexte utilisateur indisponible."}
+
+    async def _list_for_account(aid: str, display_name: str) -> Dict[str, Any]:
+        rows = await list_agent_configs(aid)
+        return {
+            "account_id": aid,
+            "account_name": display_name,
+            "agents": [_slim_agent_studio_config_row(r) for r in rows],
+            "total": len(rows),
+        }
+
+    explicit_aid = str(args.get("account_id") or "").strip()
+    if explicit_aid:
+        if not _user_may_read_agent_studio(user, explicit_aid):
+            return {"error": "Accès refusé : conversations ou Agent Studio non autorisés sur ce compte."}
+        acc_row = await get_account_by_id(explicit_aid)
+        nm = (acc_row.get("name") or "-").strip() if acc_row else "-"
+        part = await _list_for_account(explicit_aid, nm)
+        return {"account_scope": "explicit_account_id", **part}
+
+    if _skill_args_want_all_accessible(args, account):
+        rows = await list_accessible_account_rows_for_inbox(user)
+        selected = rows[:_AXELIA_MULTI_MAX_ACCOUNTS]
+        accounts_out: List[Dict[str, Any]] = []
+        for row in selected:
+            aid = str(row.get("id") or "")
+            if not aid or not _user_may_read_agent_studio(user, aid):
+                continue
+            nm = (row.get("name") or "-").strip()
+            accounts_out.append(await _list_for_account(aid, nm))
+        out: Dict[str, Any] = {
+            "account_scope": "all_accessible",
+            "accounts": accounts_out,
+            "accounts_total_in_scope": len(rows),
+            "accounts_iterated": len(selected),
+            "accounts_capped": len(rows) > _AXELIA_MULTI_MAX_ACCOUNTS,
+        }
+        if not accounts_out:
+            out["hint"] = (
+                "Aucune ligne avec à la fois conversations.view et agent_studio.access dans le périmètre, "
+                "ou aucun agent enregistré sur ces lignes."
+            )
+        return out
+
+    aid = str(account.get("id") or "").strip()
+    if not aid:
+        return {
+            "error": (
+                "Compte WABA non résolu : sélectionne une ligne, passe account_id (UUID), "
+                "ou account_scope=all_accessible."
+            )
+        }
+    if not _user_may_read_agent_studio(user, aid):
+        return {"error": "Tu n’as pas accès Agent Studio sur ce compte."}
+    nm = (account.get("name") or "-").strip()
+    part = await _list_for_account(aid, nm)
+    return {"account_scope": "primary", **part}
+
+
+async def _skill_get_agent_studio_config(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    from app.services.agent_studio_service import (
+        get_agent_config,
+        normalize_agent_config,
+        validate_agent_config,
+    )
+
+    _ = account
+    rt = _axelia_rt()
+    user = rt.acting_user if rt else None
+    if not user:
+        return {"error": "Contexte utilisateur indisponible."}
+
+    cid = str(args.get("config_id") or "").strip()
+    if not cid:
+        return {"error": "Paramètre config_id requis (UUID de la configuration Agent Studio)."}
+
+    row = await get_agent_config(cid)
+    if not row:
+        return {"error": "Configuration introuvable pour ce config_id."}
+
+    aid = str(row.get("account_id") or "")
+    if not _user_may_read_agent_studio(user, aid):
+        return {"error": "Accès refusé : tu ne peux pas lire cet agent (compte ou permissions Studio)."}
+
+    cfg = normalize_agent_config(row.get("config") or {})
+    issues = validate_agent_config(cfg)
+    return {
+        "ok": True,
+        "id": str(row.get("id") or ""),
+        "account_id": aid,
+        "is_default": bool(row.get("is_default")),
+        "version": row.get("version"),
+        "updated_at": row.get("updated_at"),
+        "created_at": row.get("created_at"),
+        "config": cfg,
+        "validation_issues": issues,
+    }
+
+
 async def _skill_upsert_agent_studio_config(
     args: Dict[str, Any],
     account: Dict[str, Any],
@@ -1575,9 +1779,13 @@ async def _skill_upsert_agent_studio_config(
     if not user:
         return {"error": "Contexte utilisateur indisponible."}
 
-    aid = str(account.get("id") or "").strip()
+    aid = str(args.get("account_id") or "").strip() or str(account.get("id") or "").strip()
     if not aid:
-        return {"error": "Selectionne une ligne WABA pour modifier Agent Studio."}
+        return {
+            "error": (
+                "Sélectionne une ligne WABA pour modifier Agent Studio, ou passe `account_id` (UUID) dans les args."
+            )
+        }
     user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
 
     cfg_id = str(args.get("config_id") or "").strip()
@@ -1718,6 +1926,8 @@ _SKILL_HANDLERS = {
     "list_broadcast_campaigns": _skill_list_broadcast_campaigns,
     "get_campaign_summary": _skill_get_campaign_summary,
     "get_whatsapp_business_profile": _skill_get_whatsapp_business_profile,
+    "list_agent_studio_configs": _skill_list_agent_studio_configs,
+    "get_agent_studio_config": _skill_get_agent_studio_config,
     "upsert_agent_studio_config": _skill_upsert_agent_studio_config,
     "meta_block_contact": _skill_meta_block_contact_stub,
 }
