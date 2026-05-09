@@ -598,6 +598,14 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
         "use_when": (
             "l'utilisateur demande de créer ou modifier un agent Studio ; proposer les changements "
             "puis demander confirmation via la carte d'approbation. "
+            "Pour un **profil brouillon complet** (comportement par défaut attendu) : dans la même "
+            "session, après validation utilisateur, enchaîne avec `upsert_agent_studio_routing` "
+            "(intents représentatifs des scénarios clients, fallback, seuil de confiance, "
+            "forbidden_actions si pertinent) — soit dans le tour suivant après création, soit "
+            "plusieurs tool_calls si le modèle peut tout préparer d'un coup (chaque écriture sensible "
+            "reste soumise à carte de confirmation). "
+            "Renseigne aussi `kpi` et une `audience` claire quand tu as le contexte ; choisis "
+            "`allowed_tools` minimal mais suffisant (slugs techniques uniquement). "
             "Si le périmètre courant est « tous les comptes » mais qu'une ligne WABA précise a été "
             "identifiée pendant la conversation (nom, téléphone, UUID dans le bloc périmètre), "
             "**inclus l'`account_id` de cette ligne dans les args** : la carte de validation utilisera "
@@ -700,6 +708,10 @@ def get_axelia_skills_prompt_section() -> str:
         "- Résumés : get_conversation_digest une fois conversation_id connu ; "
         "summarize_contact_inbox (all_accessible pour toutes les lignes permises).",
         "- Blocage Meta : meta_block_contact seulement avec contact_id réel ; jamais sans confirmation UI.",
+        "- Profil agent Axelia (comportement par défaut) : pour une création ou refonte, viser un **brouillon "
+        "complet** — objectif + audience + outils dans `upsert_agent_studio_config`, puis règles de routage "
+        "(intents, fallback, seuil, actions interdites si utile) via `upsert_agent_studio_routing` ; "
+        "rappelle l’onglet **Tests** dans Agent Studio avant activation / canary en prod. "
         "- Agent Studio (lecture, sans carte de confirmation) : `list_agent_studio_configs` pour inventorier "
         "les agents (résumé par ligne ; account_scope=all_accessible ou account_id explicite en mode multi-comptes) ; "
         "`get_agent_studio_config` pour la fiche complète + anomalies de validation quand tu as un config_id UUID. "

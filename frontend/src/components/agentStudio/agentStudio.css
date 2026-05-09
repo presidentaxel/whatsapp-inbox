@@ -342,3 +342,15 @@
   color: #fdd663;
 }
 
+.agent-studio__help-text {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--studio-muted);
+}
+
+.agent-studio__help-text strong {
+  color: var(--studio-text);
+  font-weight: 600;
+}
+

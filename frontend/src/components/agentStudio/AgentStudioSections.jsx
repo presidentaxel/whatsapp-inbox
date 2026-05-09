@@ -288,6 +288,12 @@ export function DeploySection({
           disabled={!canWrite}
         />
       </label>
+      <p className="agent-studio__help-text">
+        <strong>Canary %</strong> : pourcentage cible pour une mise en production progressive (« canary »).
+        Très utilisé en ingénierie pour router une <strong>fraction du trafic</strong> vers une nouvelle
+        version avant généralisation. Ici la valeur est stockée dans la config et utilisée lors du déploiement
+        canary ; le routage réel côté WhatsApp peut encore dépendre de l'intégration runtime du compte.
+      </p>
       <div className="agent-studio__actions-row">
         <button type="button" onClick={() => void runServerValidation()} disabled={!activeId}>
           Valider (backend)
@@ -302,6 +308,12 @@ export function DeploySection({
           Pause
         </button>
       </div>
+      <p className="agent-studio__help-text">
+        <strong>Valider (backend)</strong> : vérifie la config sur le serveur (schéma / cohérence) sans la
+        déployer. <strong>Déployer canary</strong> : enregistre une release « canary » avec le % ci-dessus si
+        la config est déployable. <strong>Activer</strong> : passage en production (release activate, agent
+        défaut). <strong>Pause</strong> : met l'agent en pause (release pause).
+      </p>
     </section>
   );
 }
