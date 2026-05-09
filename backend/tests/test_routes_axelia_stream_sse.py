@@ -1,4 +1,24 @@
+import codecs
+
 from app.api.routes_axelia import _consume_sse_done_from_buffer
+
+
+def test_utf8_incremental_decode_split_multibyte_char():
+    """Même scénario que le handler SSE : chunks bytes arbitraires ne doivent pas casser le JSON."""
+    dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    buf = ""
+    inner = 'event: done\ndata: {"text": "Prise en charge café", "model": "m"}\n\n'
+    raw = inner.encode("utf-8")
+    # Coupure volontaire au milieu de « é » (U+00E9 = 0xC3 0xA9)
+    cut = raw.index(b"caf") + 3
+    c1, c2 = raw[:cut], raw[cut:]
+    buf += dec.decode(c1)
+    buf += dec.decode(c2)
+    buf += dec.decode(b"", final=True)
+    _rest, payload = _consume_sse_done_from_buffer(buf)
+    assert payload is not None
+    assert payload["text"] == "Prise en charge café"
+    assert payload["model"] == "m"
 
 
 def test_consume_sse_done_from_fragmented_frames():

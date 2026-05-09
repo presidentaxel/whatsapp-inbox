@@ -1,3 +1,4 @@
+import codecs
 import json as _json
 import logging
 from types import SimpleNamespace
@@ -730,7 +731,12 @@ async def axelia_chat_stream(
 
         final_text = ""
         final_model: Optional[str] = None
+        parsed_done: Optional[dict[str, Any]] = None
         sse_buffer = ""
+        # Décodage UTF-8 incrémental : ``chunk.decode(..., errors="ignore")`` sur des frontières
+        # arbitraires peut tronquer des séquences multi-octets et casser le JSON du frame ``done``
+        # → ``final_text`` reste vide et aucune réponse assistant n'est persistée (symptôme « rien ne se sauvegarde »).
+        sse_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
         try:
             async for chunk in stream_axelia_chat(
@@ -749,15 +755,23 @@ async def axelia_chat_stream(
                 # pour persister la réponse côté DB.
                 yield chunk
                 try:
-                    sse_buffer += chunk.decode("utf-8", errors="ignore")
+                    sse_buffer += sse_decoder.decode(chunk)
                     sse_buffer, payload = _consume_sse_done_from_buffer(sse_buffer)
                     if isinstance(payload, dict):
+                        parsed_done = payload
                         final_text = str(payload.get("text") or "")
                         final_model = payload.get("model")
                 except Exception:
                     logger.debug(
                         "axelia stream: post-parse done failed", exc_info=True
                     )
+            # Vide le tampon UTF-8 et traite un éventuel frame ``done`` encore dans le buffer.
+            sse_buffer += sse_decoder.decode(b"", final=True)
+            sse_buffer, payload_tail = _consume_sse_done_from_buffer(sse_buffer)
+            if isinstance(payload_tail, dict):
+                parsed_done = payload_tail
+                final_text = str(payload_tail.get("text") or "")
+                final_model = payload_tail.get("model")
         except Exception as exc:
             logger.exception("axelia stream pipe crashed: %s", exc)
             err = (
@@ -767,12 +781,13 @@ async def axelia_chat_stream(
             yield err.encode("utf-8")
             return
 
-        if final_text:
+        if parsed_done is not None:
+            text_to_store = (final_text or "").strip() or "Réponse vide."
             try:
                 am = await message_insert(
                     body.conversation_id,
                     role="model",
-                    content_text=final_text,
+                    content_text=text_to_store,
                     model_used=final_model,
                 )
                 await conv_update(current_user.id, body.conversation_id)
@@ -788,6 +803,11 @@ async def axelia_chat_stream(
                     + f"data: {_json.dumps({'code': 'persist_failed', 'message': 'Sauvegarde échouée.'})}\n\n"
                 )
                 yield err.encode("utf-8")
+        else:
+            logger.warning(
+                "axelia stream: flux terminé sans frame `done` exploitable (conv=%s…)",
+                body.conversation_id[:8],
+            )
 
     headers = {
         "Cache-Control": "no-cache, no-transform",
