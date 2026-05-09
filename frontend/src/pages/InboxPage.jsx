@@ -1199,6 +1199,16 @@ export default function InboxPage() {
                 isWindowActive={isWindowActive && navMode === "chat"}
                 canSend={canSendMessage}
                 conversationInternallyBlocked={conversationInternallyBlocked}
+                canUsePlayground={
+                  selectedConversation?.account_id
+                    ? !!hasPermission?.("playground.access", selectedConversation.account_id)
+                    : false
+                }
+                canUseAgentStudio={
+                  selectedConversation?.account_id
+                    ? !!hasPermission?.("agent_studio.access", selectedConversation.account_id)
+                    : false
+                }
               />
             )}
             {filter === "groups" && (

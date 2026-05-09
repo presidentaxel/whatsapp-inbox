@@ -342,12 +342,12 @@ async def set_conversation_bot_mode(
     reply_mode: Optional[str] = None,
 ) -> Optional[dict]:
     """
-    Active/désactive le bot et optionnellement fixe bot_reply_mode ('gemini' | 'playground').
+    Active/désactive le bot et optionnellement fixe bot_reply_mode ('gemini' | 'agent' | 'playground').
     """
     rm = None
     if reply_mode is not None:
         rm = str(reply_mode).strip().lower()
-        if rm not in ("gemini", "playground"):
+        if rm not in ("gemini", "agent", "playground"):
             rm = None
 
     if get_pool():

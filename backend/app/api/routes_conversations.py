@@ -112,8 +112,13 @@ async def toggle_bot(
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
     enabled = bool(payload.get("enabled"))
     reply_mode = payload.get("reply_mode")
-    if reply_mode is not None and reply_mode not in ("gemini", "playground"):
+    if reply_mode is not None and reply_mode not in ("gemini", "agent", "playground"):
         raise HTTPException(status_code=400, detail="invalid_reply_mode")
+    aid = conversation["account_id"]
+    if reply_mode in ("gemini", "playground"):
+        current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    elif reply_mode == "agent":
+        current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     updated = await set_conversation_bot_mode(conversation_id, enabled, reply_mode)
     if not updated:
         raise HTTPException(status_code=500, detail="bot_toggle_failed")
@@ -130,6 +135,7 @@ async def set_conversation_playground_flow_route(
     if not conversation:
         raise HTTPException(status_code=404, detail="conversation_not_found")
     current_user.require(PermissionCodes.MESSAGES_SEND, conversation["account_id"])
+    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, conversation["account_id"])
     raw_id = payload.get("playground_flow_id")
     if raw_id:
         flow = await get_flow_by_id(str(raw_id))

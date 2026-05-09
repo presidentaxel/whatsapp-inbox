@@ -1811,6 +1811,11 @@ body {
   color: #c4b5fd;
 }
 
+.bot-pill--agent {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}
+
 .conversation-name {
   font-weight: 600;
   margin-bottom: 4px;

@@ -17,6 +17,8 @@ export default function MobileChatWindow({
   onShowContact,
   onBotSettingsUpdated,
   conversationInternallyBlocked = false,
+  canUsePlayground = false,
+  canUseAgentStudio = false,
 }) {
   const [messages, setMessages] = useState([]);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
@@ -563,56 +565,89 @@ export default function MobileChatWindow({
             >
               <FiCpu /> Mode humain (pas de bot)
             </button>
-            <button
-              type="button"
-              disabled={isTogglingBot}
-              onClick={async () => {
-                setShowMenu(false);
-                if (!conversation?.id || isTogglingBot) return;
-                setIsTogglingBot(true);
-                try {
-                  const res = await toggleConversationBotMode(conversation.id, {
-                    enabled: true,
-                    reply_mode: "gemini",
-                  });
-                  const updated = res.data?.conversation;
-                  if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
-                  onRefresh?.();
-                } catch (error) {
-                  console.error("Erreur mode Gemini:", error);
-                  await platformAlert("Erreur lors du changement de mode");
-                } finally {
-                  setIsTogglingBot(false);
-                }
-              }}
-            >
-              <FiCpu /> Bot Gemini (playbook)
-            </button>
-            <button
-              type="button"
-              disabled={isTogglingBot}
-              onClick={async () => {
-                setShowMenu(false);
-                if (!conversation?.id || isTogglingBot) return;
-                setIsTogglingBot(true);
-                try {
-                  const res = await toggleConversationBotMode(conversation.id, {
-                    enabled: true,
-                    reply_mode: "playground",
-                  });
-                  const updated = res.data?.conversation;
-                  if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
-                  onRefresh?.();
-                } catch (error) {
-                  console.error("Erreur mode Playground:", error);
-                  await platformAlert("Erreur lors du changement de mode");
-                } finally {
-                  setIsTogglingBot(false);
-                }
-              }}
-            >
-              <FiCpu /> Bot Playground (flux)
-            </button>
+            {(canUsePlayground ||
+              conversation?.bot_reply_mode === "gemini" ||
+              conversation?.bot_reply_mode === "playground") && (
+              <>
+                <button
+                  type="button"
+                  disabled={isTogglingBot}
+                  onClick={async () => {
+                    setShowMenu(false);
+                    if (!conversation?.id || isTogglingBot) return;
+                    setIsTogglingBot(true);
+                    try {
+                      const res = await toggleConversationBotMode(conversation.id, {
+                        enabled: true,
+                        reply_mode: "gemini",
+                      });
+                      const updated = res.data?.conversation;
+                      if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
+                      onRefresh?.();
+                    } catch (error) {
+                      console.error("Erreur mode Gemini:", error);
+                      await platformAlert("Erreur lors du changement de mode");
+                    } finally {
+                      setIsTogglingBot(false);
+                    }
+                  }}
+                >
+                  <FiCpu /> Bot Gemini (playbook)
+                </button>
+                <button
+                  type="button"
+                  disabled={isTogglingBot}
+                  onClick={async () => {
+                    setShowMenu(false);
+                    if (!conversation?.id || isTogglingBot) return;
+                    setIsTogglingBot(true);
+                    try {
+                      const res = await toggleConversationBotMode(conversation.id, {
+                        enabled: true,
+                        reply_mode: "playground",
+                      });
+                      const updated = res.data?.conversation;
+                      if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
+                      onRefresh?.();
+                    } catch (error) {
+                      console.error("Erreur mode Playground:", error);
+                      await platformAlert("Erreur lors du changement de mode");
+                    } finally {
+                      setIsTogglingBot(false);
+                    }
+                  }}
+                >
+                  <FiCpu /> Bot Playground (flux)
+                </button>
+              </>
+            )}
+            {(canUseAgentStudio || conversation?.bot_reply_mode === "agent") && (
+              <button
+                type="button"
+                disabled={isTogglingBot}
+                onClick={async () => {
+                  setShowMenu(false);
+                  if (!conversation?.id || isTogglingBot) return;
+                  setIsTogglingBot(true);
+                  try {
+                    const res = await toggleConversationBotMode(conversation.id, {
+                      enabled: true,
+                      reply_mode: "agent",
+                    });
+                    const updated = res.data?.conversation;
+                    if (updated && onBotSettingsUpdated) onBotSettingsUpdated(updated);
+                    onRefresh?.();
+                  } catch (error) {
+                    console.error("Erreur mode Agent Studio:", error);
+                    await platformAlert("Erreur lors du changement de mode");
+                  } finally {
+                    setIsTogglingBot(false);
+                  }
+                }}
+              >
+                <FiCpu /> Agent Studio (fiche défaut)
+              </button>
+            )}
             </div>
           )}
         </div>

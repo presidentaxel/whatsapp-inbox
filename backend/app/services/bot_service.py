@@ -599,6 +599,304 @@ async def generate_bot_reply_with_confidence(
     }
 
 
+def _format_agent_studio_inbox_playbook(cfg: Dict[str, Any], route_hint: Dict[str, Any]) -> str:
+    """Bloc texte Agent Studio pour prompt + scoring de confiance (inbox, séparé du playbook bot_profiles)."""
+    name = str(cfg.get("name") or "Agent").strip()
+    obj = cfg.get("objective") or {}
+    primary = str(obj.get("primary_goal") or "").strip()
+    audience = obj.get("audience")
+    aud_txt = ""
+    if isinstance(audience, str):
+        aud_txt = audience.strip()
+    elif isinstance(audience, dict):
+        aud_txt = str(audience.get("description") or audience.get("label") or "").strip()
+
+    routing = cfg.get("routing") or {}
+    intents = routing.get("intents") or []
+    intent_lines: List[str] = []
+    for it in intents[:24]:
+        if not isinstance(it, dict):
+            continue
+        k = str(it.get("key") or "").strip()
+        d = str(it.get("description") or "").strip()
+        h = str(it.get("handler") or "").strip()
+        if k:
+            intent_lines.append(f"- {k}: {d} (handler: {h})")
+
+    policies = cfg.get("policies") or {}
+    tone = str(policies.get("tone") or "").strip()
+    forbidden = policies.get("forbidden_actions") or []
+    forb_lines = [f"- {x}" for x in forbidden if str(x).strip()][:20]
+
+    caps = cfg.get("capabilities") or {}
+    tools = caps.get("allowed_tools") or []
+    tool_lines = [f"- {x}" for x in tools if str(x).strip()][:30]
+
+    parts: List[str] = [
+        f"## AGENT STUDIO — {name}",
+        "",
+        "### Objectif",
+        primary or "(non renseigné)",
+        "",
+        "### Routage (indices)",
+        f"Indication simulateur pour ce message : route={route_hint.get('route')}, "
+        f"handler={route_hint.get('handler')}, score_route={route_hint.get('confidence')}",
+        "",
+    ]
+    if aud_txt:
+        parts.extend(["### Public cible", aud_txt, ""])
+    if intent_lines:
+        parts.append("### Intents configurés")
+        parts.extend(intent_lines)
+        parts.append("")
+    if tone or forb_lines:
+        parts.append("### Politiques")
+        if tone:
+            parts.append(f"- Ton: {tone}")
+        parts.extend(forb_lines)
+        parts.append("")
+    if tool_lines:
+        parts.append("### Outils (référence métier — ne pas invoquer depuis WhatsApp)")
+        parts.extend(tool_lines)
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+async def generate_agent_studio_inbox_reply_with_confidence(
+    conversation_id: str,
+    account_id: str,
+    latest_user_message: str,
+    contact_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Réponse inbox pilotée par la fiche Agent Studio par défaut du compte (pas le playbook bot_profiles).
+    """
+    from app.services.agent_studio_service import (
+        get_default_agent_config_for_account,
+        simulate_agent_route,
+    )
+
+    empty = {
+        "reply": None,
+        "confidence": 0.0,
+        "confidence_reasons": [],
+        "qa_queries_used": [],
+    }
+    if not settings.GEMINI_API_KEY:
+        empty["confidence_reasons"] = ["GEMINI_API_KEY absent côté serveur."]
+        return empty
+
+    msg = (latest_user_message or "").strip()
+    if not msg:
+        empty["confidence_reasons"] = ["Message utilisateur vide."]
+        return empty
+
+    row = await get_default_agent_config_for_account(account_id)
+    if not row:
+        empty["confidence_reasons"] = [
+            "Aucun agent Agent Studio par défaut pour ce compte (déployez et définissez un agent par défaut)."
+        ]
+        return empty
+
+    cfg = row.get("config") or {}
+    dep = cfg.get("deployment") or {}
+    st = str(dep.get("status") or "draft").strip().lower()
+    if st not in ("active", "canary"):
+        empty["confidence_reasons"] = [
+            f"Agent Studio non actif pour réponses auto (statut déploiement: {st})."
+        ]
+        return empty
+
+    route_hint = simulate_agent_route(cfg, msg)
+    agent_playbook = _format_agent_studio_inbox_playbook(cfg, route_hint)
+
+    logger.info(
+        "Agent Studio inbox context for conversation %s: account=%s, message_len=%d, agent_sheet_len=%d",
+        conversation_id,
+        account_id,
+        len(msg),
+        len(agent_playbook),
+    )
+
+    qa_block = ""
+    qa_matches: List[Dict[str, Any]] = []
+    qa_queries_used: List[str] = []
+    try:
+        from app.services.qa_service import format_qa_context
+
+        qa_queries_used = await _build_related_qa_queries(account_id, msg)
+        qa_matches = await _search_similar_qa_multi_query(
+            account_id, qa_queries_used, per_query_limit=5, final_limit=8
+        )
+        qa_block = format_qa_context(qa_matches)
+    except Exception as _qa_exc:
+        logger.debug("agent studio inbox: QA RAG skipped: %s", _qa_exc)
+
+    instruction = (
+        "Tu es l'agent défini dans la fiche Agent Studio ci-dessous (conversation WhatsApp, français).\n"
+        "- Suis l'objectif, le ton et les politiques de cette fiche.\n"
+        "- Les intents sont des indices ; adapte-toi au message réel du client.\n"
+        "- Tu rédiges uniquement le message à envoyer au client : n'invoque pas d'outils ni d'API.\n"
+        "- Si la fiche ne couvre pas le sujet, reste prudent et propose une suite concrète sans inventer de faits.\n"
+        "- Pas de Markdown avec doubles astérisques ni titres # ; texte simple, tirets si besoin.\n"
+        "- Commence par une phrase directe, puis détails courts si utile.\n"
+    )
+    system_text_full = f"{instruction}\n\n{agent_playbook}"
+    if qa_block:
+        system_text_full = f"{system_text_full}\n\nAppui factuel optionnel (Q&A interne):\n{qa_block}"
+    system_text_full = system_text_full.strip()
+
+    history_rows = await fetch_message_history_rows_for_ai(conversation_id)
+    conversation_parts: List[Dict[str, Any]] = []
+    for row_h in history_rows:
+        content = _ai_history_line_content(row_h)
+        if not content:
+            continue
+        role = "user" if row_h.get("direction") == "inbound" else "model"
+        conversation_parts.append({"role": role, "parts": [{"text": content}]})
+
+    if conversation_parts and conversation_parts[-1]["role"] == "user":
+        conversation_parts[-1] = {"role": "user", "parts": [{"text": msg}]}
+    else:
+        conversation_parts.append({"role": "user", "parts": [{"text": msg}]})
+
+    generation_config: Dict[str, Any] = {
+        "temperature": 0.4,
+        "maxOutputTokens": 2048,
+    }
+    if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
+        generation_config["thinkingConfig"] = {"thinkingBudget": 512}
+
+    payload_v1beta = {
+        "system_instruction": {"role": "system", "parts": [{"text": system_text_full}]},
+        "contents": conversation_parts,
+        "generationConfig": generation_config,
+    }
+    system_message = {"role": "user", "parts": [{"text": system_text_full}]}
+    payload_v1 = {
+        "contents": [system_message] + conversation_parts,
+        "generationConfig": generation_config,
+    }
+
+    endpoint_v1beta = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+    endpoint_v1 = (
+        f"https://generativelanguage.googleapis.com/v1/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+
+    logger.info("🔍 [GEMINI DEBUG] Agent Studio inbox using model: %s", settings.GEMINI_MODEL)
+    data: Optional[Dict[str, Any]] = None
+    try:
+        logger.info("🔍 [GEMINI DEBUG] Trying v1beta endpoint (agent studio inbox): %s", endpoint_v1beta)
+        data = await gemini_circuit_breaker.call_async(
+            _call_gemini_api, endpoint_v1beta, payload_v1beta, conversation_id
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in (404, 400):
+            logger.warning(
+                "🔍 [GEMINI DEBUG] v1beta failed (status=%s), trying v1 (agent studio inbox)",
+                exc.response.status_code,
+            )
+            try:
+                data = await gemini_circuit_breaker.call_async(
+                    _call_gemini_api, endpoint_v1, payload_v1, conversation_id
+                )
+            except Exception as exc2:
+                logger.error("❌ Agent Studio inbox Gemini v1 error: %s", exc2)
+                return {
+                    "reply": None,
+                    "confidence": 0.0,
+                    "confidence_reasons": ["Erreur appel Gemini."],
+                    "qa_queries_used": qa_queries_used,
+                }
+        else:
+            logger.error("❌ Agent Studio inbox Gemini error: %s", exc)
+            return {
+                "reply": None,
+                "confidence": 0.0,
+                "confidence_reasons": ["Erreur appel Gemini."],
+                "qa_queries_used": qa_queries_used,
+            }
+    except CircuitBreakerOpenError:
+        logger.warning(
+            "Gemini circuit breaker open, skipping agent studio inbox generation for %s",
+            conversation_id,
+        )
+        return {
+            "reply": None,
+            "confidence": 0.0,
+            "confidence_reasons": ["Circuit Gemini ouvert."],
+            "qa_queries_used": qa_queries_used,
+        }
+    except (httpx.HTTPError, httpx.TimeoutException) as exc:
+        logger.error("Agent Studio inbox Gemini failed for %s: %s", conversation_id, str(exc))
+        return {
+            "reply": None,
+            "confidence": 0.0,
+            "confidence_reasons": ["Erreur réseau Gemini."],
+            "qa_queries_used": qa_queries_used,
+        }
+    except Exception as exc:
+        logger.exception("Unexpected agent studio inbox Gemini error for %s: %s", conversation_id, exc)
+        return {
+            "reply": None,
+            "confidence": 0.0,
+            "confidence_reasons": ["Erreur inattendue Gemini."],
+            "qa_queries_used": qa_queries_used,
+        }
+
+    if not data or "candidates" not in data:
+        return {
+            "reply": None,
+            "confidence": 0.0,
+            "confidence_reasons": ["Réponse Gemini vide ou invalide."],
+            "qa_queries_used": qa_queries_used,
+        }
+
+    for candidate in data.get("candidates") or []:
+        parts = (candidate.get("content") or {}).get("parts") or []
+        for part in parts:
+            text = (part.get("text") or "").strip()
+            if not text:
+                continue
+            logger.info(
+                "✅ Gemini produced Agent Studio inbox reply for conversation %s (chars=%d)",
+                conversation_id,
+                len(text),
+            )
+            confidence, reasons = _compute_bot_confidence(
+                knowledge_text=agent_playbook,
+                qa_matches=qa_matches,
+                user_message=msg,
+                generated_reply=text,
+            )
+            reasons = list(reasons)
+            reasons.insert(0, "Mode Agent Studio (fiche par défaut).")
+            logger.info(
+                "🔍 [BOT CONFIDENCE] agent_studio conversation=%s confidence=%.2f reasons=%s qa_count=%d",
+                conversation_id,
+                confidence,
+                reasons,
+                len(qa_matches),
+            )
+            return {
+                "reply": text,
+                "confidence": confidence,
+                "confidence_reasons": reasons,
+                "qa_queries_used": qa_queries_used,
+            }
+
+    return {
+        "reply": None,
+        "confidence": 0.0,
+        "confidence_reasons": ["Gemini n'a pas renvoyé de texte exploitable."],
+        "qa_queries_used": qa_queries_used,
+    }
+
+
 async def _build_related_qa_queries(account_id: str, user_message: str) -> List[str]:
     base = (user_message or "").strip()
     if not base:

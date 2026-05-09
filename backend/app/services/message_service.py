@@ -1902,26 +1902,42 @@ async def _maybe_trigger_bot_reply(
                 )
                 return
 
+    agent_mode = reply_mode == "agent"
     try:
-        logger.debug(
-            "starting Gemini for conversation %s (account=%s message_len=%s)",
-            conversation_id,
-            account_id,
-            len(message_text),
-        )
-        bot_payload = await bot_service.generate_bot_reply_with_confidence(
-            conversation_id,
-            conversation["account_id"],
-            message_text,
-            contact_name,
-        )
+        if agent_mode:
+            logger.debug(
+                "starting Agent Studio inbox bot for conversation %s (account=%s message_len=%s)",
+                conversation_id,
+                account_id,
+                len(message_text),
+            )
+            bot_payload = await bot_service.generate_agent_studio_inbox_reply_with_confidence(
+                conversation_id,
+                conversation["account_id"],
+                message_text,
+                contact_name,
+            )
+        else:
+            logger.debug(
+                "starting Gemini playbook bot for conversation %s (account=%s message_len=%s)",
+                conversation_id,
+                account_id,
+                len(message_text),
+            )
+            bot_payload = await bot_service.generate_bot_reply_with_confidence(
+                conversation_id,
+                conversation["account_id"],
+                message_text,
+                contact_name,
+            )
         reply = (bot_payload or {}).get("reply")
         confidence = float((bot_payload or {}).get("confidence") or 0.0)
         confidence_reasons = (bot_payload or {}).get("confidence_reasons") or []
         logger.debug(
-            "Gemini reply length=%s confidence=%.2f",
+            "bot reply length=%s confidence=%.2f agent_mode=%s",
             len(reply) if reply else 0,
             confidence,
+            agent_mode,
         )
     except Exception as exc:
         logger.error(
@@ -1970,7 +1986,10 @@ async def _maybe_trigger_bot_reply(
             "conversation_id": conversation_id,
             "content": reply,
             "sent_via": "bot",
-            "outbound_meta": {"source": "gemini_bot", "mode": "conversation"},
+            "outbound_meta": {
+                "source": "agent_studio_bot" if agent_mode else "gemini_bot",
+                "mode": "conversation",
+            },
         },
         skip_bot_trigger=True,
     )

@@ -387,6 +387,35 @@ async def get_agent_config(config_id: str) -> Optional[Dict[str, Any]]:
     return finalize_agent_config_row(dict(res.data[0]))
 
 
+async def get_default_agent_config_for_account(account_id: str) -> Optional[Dict[str, Any]]:
+    """Ligne Agent Studio avec ``is_default`` (agent défini au déploiement activate/canary)."""
+    aid = str(account_id or "").strip()
+    if not aid:
+        return None
+    if get_pool():
+        row = await fetch_one(
+            """
+            SELECT *
+            FROM agent_studio_configs
+            WHERE account_id = $1::uuid AND is_default = true
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            aid,
+        )
+        return finalize_agent_config_row(dict(row)) if row else None
+    res = await supabase_execute(
+        supabase.table("agent_studio_configs")
+        .select("*")
+        .eq("account_id", aid)
+        .eq("is_default", True)
+        .order("updated_at", desc=True)
+        .limit(1)
+    )
+    rows = list(res.data or [])
+    return finalize_agent_config_row(dict(rows[0])) if rows else None
+
+
 async def create_agent_config(
     account_id: str, config: Dict[str, Any], user_id: str
 ) -> Dict[str, Any]:

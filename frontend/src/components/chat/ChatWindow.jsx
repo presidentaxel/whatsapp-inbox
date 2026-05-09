@@ -27,6 +27,8 @@ export default function ChatWindow({
   canSend = true,
   isWindowActive = true,
   conversationInternallyBlocked = false,
+  canUsePlayground = false,
+  canUseAgentStudio = false,
 }) {
   const { profile } = useAuth();
   const [messages, setMessages] = useState([]);
@@ -629,8 +631,26 @@ export default function ChatWindow({
 
   const activeBotSegment = useMemo(() => {
     if (!conversation?.bot_enabled) return "human";
-    return conversation?.bot_reply_mode === "playground" ? "playground" : "gemini";
+    const mode = String(conversation?.bot_reply_mode || "gemini").toLowerCase();
+    if (mode === "playground") return "playground";
+    if (mode === "agent") return "agent";
+    return "gemini";
   }, [conversation?.bot_enabled, conversation?.bot_reply_mode]);
+
+  const botSegments = useMemo(() => {
+    const segs = [{ id: "human", label: "Humain" }];
+    const showPlaygroundSuite =
+      canUsePlayground ||
+      activeBotSegment === "gemini" ||
+      activeBotSegment === "playground";
+    if (showPlaygroundSuite) {
+      segs.push({ id: "gemini", label: "Gemini" }, { id: "playground", label: "Playground" });
+    }
+    if (canUseAgentStudio || activeBotSegment === "agent") {
+      segs.push({ id: "agent", label: "Agent" });
+    }
+    return segs;
+  }, [canUseAgentStudio, canUsePlayground, activeBotSegment]);
 
   useEffect(() => {
     setPlaygroundFlowError(null);
@@ -945,11 +965,7 @@ export default function ChatWindow({
         <div className="chat-header-bot-stack">
           <div className="chat-bot-mode">
             <div className="chat-bot-mode__segments" role="group" aria-label="Mode bot conversation">
-              {[
-                { id: "human", label: "Humain" },
-                { id: "gemini", label: "Gemini" },
-                { id: "playground", label: "Playground" },
-              ].map((opt) => (
+              {botSegments.map((opt) => (
                 <button
                   key={opt.id}
                   type="button"
@@ -957,6 +973,15 @@ export default function ChatWindow({
                     activeBotSegment === opt.id ? "is-active" : ""
                   }`}
                   disabled={!conversation || botTogglePending}
+                  title={
+                    opt.id === "gemini"
+                      ? "Assistant playbook + Q&A (profil bot)"
+                      : opt.id === "agent"
+                        ? "Agent Studio — fiche par défaut déployée"
+                        : opt.id === "playground"
+                          ? "Scénario Playground"
+                          : undefined
+                  }
                   onClick={async () => {
                     if (!conversation || !onBotModeChange || activeBotSegment === opt.id) return;
                     setBotTogglePending(true);

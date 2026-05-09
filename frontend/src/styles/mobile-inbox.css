@@ -545,6 +545,11 @@
   color: #c4b5fd;
 }
 
+.mobile-conv-item__bot-indicator.agent {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}
+
 .mobile-conv-item__time {
   color: #8696a0;
   font-size: 0.75rem;

@@ -641,6 +641,16 @@ export default function MobileInboxPage({ onLogout }) {
             onShowContact={handleShowContact}
             onBotSettingsUpdated={handleBotSettingsUpdated}
             conversationInternallyBlocked={conversationInternallyBlocked}
+            canUsePlayground={
+              selectedConversation?.account_id
+                ? !!hasPermission?.("playground.access", selectedConversation.account_id)
+                : false
+            }
+            canUseAgentStudio={
+              selectedConversation?.account_id
+                ? !!hasPermission?.("agent_studio.access", selectedConversation.account_id)
+                : false
+            }
           />
         );
       }

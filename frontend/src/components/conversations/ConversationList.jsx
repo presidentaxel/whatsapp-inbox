@@ -131,15 +131,23 @@ export default function ConversationList({
                     className={`bot-pill ${
                       c.bot_reply_mode === "playground"
                         ? "bot-pill--playground"
-                        : "bot-pill--on"
+                        : c.bot_reply_mode === "agent"
+                          ? "bot-pill--agent"
+                          : "bot-pill--on"
                     }`}
                     title={
                       c.bot_reply_mode === "playground"
                         ? "Parcours automatisé (scénario). Peut inclure des blocs IA dans le graphe."
-                        : "Réponses pilotées par l’assistant Gemini sur cette conversation, sans scénario graphique."
+                        : c.bot_reply_mode === "agent"
+                          ? "Réponses pilotées par la fiche Agent Studio par défaut (déployée)."
+                          : "Réponses pilotées par le playbook + Q&A (mode Gemini)."
                     }
                   >
-                    {c.bot_reply_mode === "playground" ? "Scénario" : "Assistant IA"}
+                    {c.bot_reply_mode === "playground"
+                      ? "Scénario"
+                      : c.bot_reply_mode === "agent"
+                        ? "Agent"
+                        : "Gemini"}
                   </span>
                 )}
                 <span className="conversation-time">{timeLabel}</span>

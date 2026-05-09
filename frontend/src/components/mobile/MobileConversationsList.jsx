@@ -277,21 +277,27 @@ export default function MobileConversationsList({
                             ? "human"
                             : conv.bot_reply_mode === "playground"
                               ? "playground"
-                              : "bot"
+                              : conv.bot_reply_mode === "agent"
+                                ? "agent"
+                                : "bot"
                         }`}
                         title={
                           !conv.bot_enabled
                             ? "Réponses manuelles"
                             : conv.bot_reply_mode === "playground"
                               ? "Parcours automatisé (peut inclure des blocs IA)"
-                              : "Assistant Gemini sur cette conversation"
+                              : conv.bot_reply_mode === "agent"
+                                ? "Agent Studio (fiche par défaut)"
+                                : "Playbook + Q&A (Gemini)"
                         }
                       >
                         {!conv.bot_enabled
                           ? "Humain"
                           : conv.bot_reply_mode === "playground"
                             ? "Scénario"
-                            : "Assistant IA"}
+                            : conv.bot_reply_mode === "agent"
+                              ? "Agent"
+                              : "Gemini"}
                       </span>
                     </div>
                     <span className="mobile-conv-item__time">{time}</span>
