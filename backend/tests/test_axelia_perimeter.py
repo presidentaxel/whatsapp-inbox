@@ -18,6 +18,7 @@ def test_perimeter_single_contains_name_and_phone():
     assert "+33123456789" in s
     assert "abc-uuid" in s
     assert "search_inbox_messages" in s
+    assert "analyze_inbound_question_themes" in s
 
 
 def test_perimeter_all_lists_accounts():

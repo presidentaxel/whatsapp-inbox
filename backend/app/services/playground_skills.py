@@ -340,7 +340,8 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
         "name": "summarize_contact_inbox",
         "description": (
             "Agrège les derniers messages de conversations inbox liées à un même contact "
-            "(nom affiché ou numéro). "
+            "(nom affiché CRM, **nom de profil WhatsApp** `whatsapp_name`, ou numéro). "
+            "Un **prénom seul** suffit souvent (ex. « Louis »). "
             "Avec account_scope=primary (défaut) : une ligne WABA (sélecteur ou périmètre unique). "
             "Avec account_scope=all_accessible : **toutes les lignes auxquelles l’utilisateur a accès** "
             "(même logique que « tous les comptes » dans le CRM - filtre conversations.view), "
@@ -358,9 +359,60 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             },
         ],
         "use_when": (
-            "l’utilisateur veut résumer les échanges avec une personne ; "
+            "l’utilisateur veut résumer les échanges avec une personne, ou demande « qu’est-ce que X veut », "
+            "« ma conv avec X » : appeler cet outil avec contact_search = prénom ou nom affiché ; "
             "sur **toutes les lignes** / « tous les comptes », utiliser account_scope=all_accessible "
-            "sans demander de choisir une ligne (le serveur agrège)."
+            "sans demander de choisir une ligne (le serveur agrège). "
+            "Ne pas conclure à l’absence de conversation sans résultat de cet outil sur la ligne ou all_accessible."
+        ),
+    },
+    {
+        "name": "analyze_inbound_question_themes",
+        "description": (
+            "Identifie les **thèmes et types de questions** les plus récurrents parmi les messages "
+            "**entrants clients** (échantillon récent sur la ligne WABA ou sur toutes les lignes accessibles). "
+            "À utiliser quand l’utilisateur demande les questions les plus posées, les sujets récurrents, "
+            "une vue FAQ qualitative sur l’inbox, ou « ce qui revient le plus » — **sans mot-clé**. "
+            "Retourne une liste de thèmes avec fréquence relative à l’échantillon et exemples anonymisés. "
+            "Filtre temporel optionnel since/until (ISO 8601)."
+        ),
+        "parameters": [
+            {
+                "name": "account_scope",
+                "type": "string",
+                "required": False,
+                "enum": ["primary", "all_accessible"],
+            },
+            {
+                "name": "since",
+                "type": "string",
+                "required": False,
+                "description": "Borne basse ISO 8601 (comme search_inbox_messages).",
+            },
+            {
+                "name": "until",
+                "type": "string",
+                "required": False,
+                "description": "Borne haute ISO 8601 (comme search_inbox_messages).",
+            },
+            {
+                "name": "sample_limit",
+                "type": "integer",
+                "required": False,
+                "description": "Taille cible de l’échantillon (défaut ~320, max 500).",
+            },
+            {
+                "name": "max_themes",
+                "type": "integer",
+                "required": False,
+                "description": "Nombre max de thèmes dans la synthèse (défaut 12, max 20).",
+            },
+        ],
+        "use_when": (
+            "questions du type « quelles sont les questions les plus posées », « sujets qui reviennent le plus », "
+            "« thèmes récurrents sur l’inbox », « aide-moi à voir les FAQs implicites » ; "
+            "préférer cet outil à search_inbox_messages quand **aucun mot-clé** n’est fourni. "
+            "Multi-lignes : account_scope=all_accessible."
         ),
     },
     {
@@ -702,7 +754,9 @@ def get_axelia_skills_prompt_section() -> str:
         "- Contacts : search_contacts puis get_contact ou summarize_contact_inbox.",
         "- Inbox : search_inbox_messages (match_mode=any pour élargir ; account_scope=all_accessible si multi-lignes ; "
         "since/until ISO pour borner par dates - ex. since=2025-04-01, until=2025-04-30) ; "
-        "summarize_contact_inbox idem pour résumé contact multi-lignes.",
+        "summarize_contact_inbox idem pour résumé contact multi-lignes ; "
+        "**analyze_inbound_question_themes** pour « questions les plus posées / thèmes récurrents » **sans mot-clé** "
+        "(échantillon messages entrants + synthèse ; pas un décompte SQL exhaustif).",
         "- Conversations récentes sans mot-clé : list_recent_conversations.",
         "- Profil WhatsApp public : get_whatsapp_business_profile sur une ligne sélectionnée.",
         "- Résumés : get_conversation_digest une fois conversation_id connu ; "
@@ -1481,6 +1535,105 @@ async def _skill_get_conversation_digest(
     return await get_conversation_digest_for_account(aid, cid, max_messages=cap)
 
 
+async def _skill_analyze_inbound_question_themes(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    from app.services.axelia_inbox_tools import (
+        parse_iso_datetime,
+        sample_inbound_customer_messages_all_accessible,
+        sample_inbound_customer_messages_for_account,
+        synthesize_inbound_question_themes_with_gemini,
+    )
+
+    since_raw = args.get("since")
+    until_raw = args.get("until")
+    if since_raw and parse_iso_datetime(since_raw) is None:
+        return {
+            "error": "Paramètre `since` invalide (ISO 8601 attendu).",
+            "themes": [],
+        }
+    if until_raw and parse_iso_datetime(until_raw, end_of_day=True) is None:
+        return {
+            "error": "Paramètre `until` invalide (ISO 8601 attendu).",
+            "themes": [],
+        }
+
+    try:
+        slimit = int(args.get("sample_limit")) if args.get("sample_limit") is not None else 320
+    except (TypeError, ValueError):
+        slimit = 320
+    slimit = max(40, min(slimit, 500))
+
+    try:
+        max_themes = int(args.get("max_themes")) if args.get("max_themes") is not None else 12
+    except (TypeError, ValueError):
+        max_themes = 12
+    max_themes = max(5, min(max_themes, 20))
+
+    ctx_label = ""
+    texts: List[str] = []
+    meta: Dict[str, Any] = {"sample_limit_requested": slimit}
+
+    if _skill_args_want_all_accessible(args, account):
+        rt = _axelia_rt()
+        if not rt or not rt.acting_user:
+            return {"error": "Analyse multi-lignes : contexte utilisateur indisponible.", "themes": []}
+        bundle = await sample_inbound_customer_messages_all_accessible(
+            rt.acting_user,
+            limit_total=slimit,
+            since=since_raw,
+            until=until_raw,
+        )
+        if bundle.get("error"):
+            return {"error": bundle.get("error"), "themes": []}
+        meta["account_scope"] = "all_accessible"
+        meta["sample_count"] = bundle.get("sample_count", 0)
+        meta["accounts_iterated"] = bundle.get("accounts_iterated")
+        for s in bundle.get("samples") or []:
+            if isinstance(s, dict) and (s.get("text") or "").strip():
+                texts.append(str(s.get("text")).strip())
+        ctx_label = "Multi-lignes WABA agrégées (comptes accessibles)."
+    else:
+        aid = str(account.get("id") or "")
+        if not aid:
+            return {"error": "Compte WABA manquant.", "themes": []}
+        bundle = await sample_inbound_customer_messages_for_account(
+            aid,
+            limit=slimit,
+            since=since_raw,
+            until=until_raw,
+        )
+        if bundle.get("error"):
+            return {"error": bundle.get("error"), "themes": []}
+        meta["account_scope"] = "primary"
+        meta["account_id"] = aid
+        meta["sample_count"] = bundle.get("sample_count", 0)
+        nm = (account.get("name") or "").strip()
+        ctx_label = f"Ligne : {nm or aid}."
+        for s in bundle.get("samples") or []:
+            if isinstance(s, dict) and (s.get("text") or "").strip():
+                texts.append(str(s.get("text")).strip())
+
+    if bundle.get("date_filter"):
+        meta["date_filter"] = bundle.get("date_filter")
+
+    synth = await synthesize_inbound_question_themes_with_gemini(
+        texts,
+        max_themes=max_themes,
+        context_label=ctx_label,
+    )
+    out = {**meta, **synth}
+    if synth.get("error") and not synth.get("themes"):
+        return out
+    out.setdefault(
+        "disclaimer",
+        "Analyse qualitative sur un échantillon récent de messages entrants ; "
+        "les fréquences sont relatives à cet échantillon, pas des volumes officiels Meta.",
+    )
+    return out
+
+
 async def _skill_summarize_contact_inbox(
     args: Dict[str, Any],
     account: Dict[str, Any],
@@ -2145,6 +2298,7 @@ _SKILL_HANDLERS = {
     "search_inbox_messages": _skill_search_inbox_messages,
     "get_conversation_digest": _skill_get_conversation_digest,
     "summarize_contact_inbox": _skill_summarize_contact_inbox,
+    "analyze_inbound_question_themes": _skill_analyze_inbound_question_themes,
     "search_contacts": _skill_search_contacts,
     "get_contact": _skill_get_contact,
     "list_recent_conversations": _skill_list_recent_conversations,

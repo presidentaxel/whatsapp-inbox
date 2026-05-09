@@ -400,6 +400,7 @@ _AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
     "search_inbox_messages": ("Recherche inbox", "Je parcours les messages de l’inbox…"),
     "get_conversation_digest": ("Fil de discussion", "Je lis le détail de cette conversation…"),
     "summarize_contact_inbox": ("Résumé contact", "Je synthétise l’historique avec ce contact…"),
+    "analyze_inbound_question_themes": ("Thèmes inbox", "J’analyse les messages clients pour en extraire les sujets récurrents…"),
     "search_contacts": ("Recherche contacts", "Je recherche dans le CRM…"),
     "get_contact": ("Fiche contact", "J’ouvre la fiche du contact…"),
     "list_recent_conversations": ("Conversations récentes", "Je liste les derniers fils actifs…"),
@@ -1116,7 +1117,8 @@ def format_perimeter_context_prompt(
             "`list_agent_studio_configs` et `get_agent_studio_config` (accès agent_studio + conversations requis) ; "
             "**ne dis pas** que tu ne peux pas consulter les agents tant que ces permissions sont en place.\n"
             "Pour toute question sur l’historique, les résumés ou « qui a dit quoi », tu DOIS utiliser les outils "
-            "`search_inbox_messages`, `get_conversation_digest` et `summarize_contact_inbox` - "
+            "`search_inbox_messages`, `get_conversation_digest`, `summarize_contact_inbox` et, pour les "
+            "**questions les plus posées / thèmes récurrents sans mot-clé**, `analyze_inbound_question_themes` — "
             "**ne dis pas** que tu n’as pas accès au CRM lorsque ce bloc est présent.\n"
             "Si l’utilisateur demande « sur quel WABA » ou « quel compte », réponds avec le nom et le téléphone ci‑dessus."
             f"{hint_line}\n"
@@ -1129,8 +1131,9 @@ def format_perimeter_context_prompt(
             "Mode interface : **Tous les comptes** - équivalent à « toutes les lignes WhatsApp Business **auxquelles "
             "cet utilisateur a accès** » (filtrage serveur sur conversations.view), **pas** l’ensemble de la base.\n",
             "Avec **un seul** compte accessible, ce périmètre se comporte comme une ligne unique pour les données inbox.\n",
-            "Pour l’inbox : tu peux appeler `search_inbox_messages` et `summarize_contact_inbox` avec "
-            "`account_scope: \"all_accessible\"` afin d’**agréger** recherche ou résumé **sur toutes ces lignes** "
+            "Pour l’inbox : tu peux appeler `search_inbox_messages`, `summarize_contact_inbox` et "
+            "`analyze_inbound_question_themes` avec "
+            "`account_scope: \"all_accessible\"` afin d’**agréger** recherche, résumé ou analyse de thèmes **sur toutes ces lignes** "
             "(le serveur itère compte par compte, avec limites et timeouts). "
             "Ne refuse pas une synthèse multi-lignes sous prétexte qu’une ligne ne peut être lue qu’isolément.\n",
             "Pour les actions **Meta par compte** (templates, groupes, blocage), une ligne WABA explicite reste "

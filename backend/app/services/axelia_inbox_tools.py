@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 from datetime import datetime, time, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+import httpx
 
 from app.core.db import supabase, supabase_execute
 from app.core.pg import fetch_all, fetch_one, get_pool
@@ -13,6 +17,8 @@ from app.services.account_service import get_all_accounts
 
 if TYPE_CHECKING:
     from app.core.permissions import CurrentUser
+
+logger = logging.getLogger("uvicorn.error").getChild("axelia_inbox_tools")
 
 _AXELIA_MULTI_MAX_ACCOUNTS = 40
 _AXELIA_MULTI_SUMMARY_TIMEOUT_S = 25.0
@@ -859,16 +865,28 @@ async def summarize_contact_inbox_for_account(
             """
             SELECT c.id AS conversation_id,
                    co.id AS contact_id,
-                   COALESCE(NULLIF(TRIM(co.display_name), ''), c.client_number, '') AS contact_label,
+                   COALESCE(
+                       NULLIF(TRIM(co.display_name), ''),
+                       NULLIF(TRIM(co.whatsapp_name), ''),
+                       c.client_number,
+                       ''
+                   ) AS contact_label,
                    c.client_number,
                    c.updated_at AS last_ts
             FROM conversations c
             LEFT JOIN contacts co ON co.id = c.contact_id
             WHERE c.account_id = $1::uuid
               AND (
-                co.display_name ILIKE $2
-                OR co.whatsapp_number ILIKE $2
-                OR c.client_number ILIKE $2
+                COALESCE(co.display_name, '') ILIKE $2
+                OR COALESCE(co.whatsapp_name, '') ILIKE $2
+                OR COALESCE(co.whatsapp_number, '') ILIKE $2
+                OR COALESCE(c.client_number, '') ILIKE $2
+                OR c.contact_id IN (
+                    SELECT ct.id
+                    FROM contacts ct
+                    WHERE COALESCE(ct.display_name, '') ILIKE $2
+                       OR COALESCE(ct.whatsapp_name, '') ILIKE $2
+                )
               )
             ORDER BY c.updated_at DESC NULLS LAST
             LIMIT $3
@@ -881,7 +899,7 @@ async def summarize_contact_inbox_for_account(
         res = await supabase_execute(
             supabase.table("conversations")
             .select(
-                "id, updated_at, client_number, contact_id, contacts(display_name, whatsapp_number)"
+                "id, updated_at, client_number, contact_id, contacts(display_name, whatsapp_number, whatsapp_name)"
             )
             .eq("account_id", account_id)
             .order("updated_at", desc=True)
@@ -892,8 +910,9 @@ async def summarize_contact_inbox_for_account(
             nested = row.get("contacts") or {}
             dn = str(nested.get("display_name") or "").lower()
             wn = str(nested.get("whatsapp_number") or "").lower()
+            wprof = str(nested.get("whatsapp_name") or "").lower()
             cn = str(row.get("client_number") or "").lower()
-            if needle in dn or needle in wn or needle in cn:
+            if needle in dn or needle in wn or needle in wprof or needle in cn:
                 thread_rows.append(
                     {
                         "conversation_id": row.get("id"),
@@ -923,6 +942,16 @@ async def summarize_contact_inbox_for_account(
             account_id, cid, max_messages=cap_msgs
         )
         if digest.get("error"):
+            bundles.append(
+                {
+                    "conversation_id": cid,
+                    "contact_label": tr.get("contact_label"),
+                    "client_number": tr.get("client_number"),
+                    "digest_error": digest.get("error"),
+                    "message_count": 0,
+                    "transcript_recent": "",
+                }
+            )
             continue
         bundles.append(
             {
@@ -934,8 +963,367 @@ async def summarize_contact_inbox_for_account(
             }
         )
 
-    return {
+    out: Dict[str, Any] = {
         "contact_query": contact_query,
         "threads_matched": len(thread_rows),
         "bundles": bundles,
+    }
+    if thread_rows and not any(
+        (b.get("transcript_recent") or "").strip() or int(b.get("message_count") or 0) > 0
+        for b in bundles
+    ):
+        out["note"] = (
+            "Des fils de discussion correspondent au nom, mais aucun extrait de messages texte "
+            "n’a pu être chargé (vérifiez les erreurs digest_error par conversation)."
+        )
+    return out
+
+
+_THEMES_MSG_CAP = 420
+_THEMES_SAMPLE_HARD_MAX = 500
+
+
+def _clip_sample_text(text: str, cap: int = _THEMES_MSG_CAP) -> str:
+    t = " ".join((text or "").split())
+    if len(t) <= cap:
+        return t
+    return t[: cap - 1].rstrip() + "…"
+
+
+async def sample_inbound_customer_messages_for_account(
+    account_id: str,
+    *,
+    limit: int = 320,
+    since: Any = None,
+    until: Any = None,
+    min_chars: int = 14,
+) -> Dict[str, Any]:
+    """
+    Échantillon des derniers messages **entrants** texte (clients), pour analyse de thèmes / FAQ.
+    Pas de filtre par mot-clé — utile pour ``analyze_inbound_question_themes``.
+    """
+    aid = str(account_id or "").strip()
+    if not aid:
+        return {"error": "account_id manquant.", "samples": [], "sample_count": 0}
+
+    since_dt, until_dt = _resolve_date_range(since, until)
+    date_filter_meta: Dict[str, Any] = {}
+    if since_dt:
+        date_filter_meta["since"] = since_dt.isoformat()
+    if until_dt:
+        date_filter_meta["until"] = until_dt.isoformat()
+
+    lim = max(30, min(int(limit), _THEMES_SAMPLE_HARD_MAX))
+    min_c = max(8, min(int(min_chars), 120))
+
+    pool = get_pool()
+    if pool:
+        where_parts = [
+            "c.account_id = $1::uuid",
+            "m.direction = 'inbound'",
+            "m.message_type = 'text'",
+            "LENGTH(TRIM(COALESCE(m.content_text, ''))) >= $2",
+        ]
+        params: List[Any] = [aid, min_c]
+        idx = 3
+        if since_dt:
+            where_parts.append(f"m.timestamp >= ${idx}")
+            params.append(_to_naive_utc(since_dt))
+            idx += 1
+        if until_dt:
+            where_parts.append(f"m.timestamp <= ${idx}")
+            params.append(_to_naive_utc(until_dt))
+            idx += 1
+        params.append(lim)
+        lim_ph = idx
+        sql = f"""
+            SELECT m.content_text, m.timestamp
+            FROM messages m
+            INNER JOIN conversations c ON c.id = m.conversation_id
+            WHERE {" AND ".join(where_parts)}
+            ORDER BY m.timestamp DESC
+            LIMIT ${lim_ph}
+        """
+        rows = await fetch_all(sql, *params)
+        samples = []
+        for r in rows:
+            raw = (r.get("content_text") or "").strip()
+            if len(raw) < min_c:
+                continue
+            ts = r.get("timestamp")
+            samples.append(
+                {
+                    "text": _clip_sample_text(raw),
+                    "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+                }
+            )
+        out: Dict[str, Any] = {
+            "account_id": aid,
+            "sample_count": len(samples),
+            "samples": samples,
+        }
+        if date_filter_meta:
+            out["date_filter"] = date_filter_meta
+        return out
+
+    conv_res = await supabase_execute(
+        supabase.table("conversations")
+        .select("id")
+        .eq("account_id", aid)
+        .order("updated_at", desc=True)
+        .limit(_SUPABASE_FALLBACK_MAX_CONVERSATIONS)
+    )
+    conv_ids = [r["id"] for r in (conv_res.data or []) if r.get("id")]
+    samples_fb: List[Dict[str, Any]] = []
+    step = 40
+    for i in range(0, len(conv_ids), step):
+        chunk = conv_ids[i : i + step]
+        msg_q = (
+            supabase.table("messages")
+            .select("content_text, timestamp")
+            .in_("conversation_id", chunk)
+            .eq("direction", "inbound")
+            .eq("message_type", "text")
+        )
+        if since_dt:
+            msg_q = msg_q.gte("timestamp", since_dt.isoformat())
+        if until_dt:
+            msg_q = msg_q.lte("timestamp", until_dt.isoformat())
+        msg_q = msg_q.order("timestamp", desc=True).limit(250)
+        res = await supabase_execute(msg_q)
+        for m in res.data or []:
+            raw = (m.get("content_text") or "").strip()
+            if len(raw) < min_c:
+                continue
+            ts = m.get("timestamp")
+            samples_fb.append({"text": _clip_sample_text(raw), "timestamp": str(ts)})
+            if len(samples_fb) >= lim:
+                break
+        if len(samples_fb) >= lim:
+            break
+
+    samples_fb.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+    samples_fb = samples_fb[:lim]
+    out_fb: Dict[str, Any] = {
+        "account_id": aid,
+        "sample_count": len(samples_fb),
+        "samples": samples_fb,
+        "note": "Échantillon via API Supabase (fenêtre conversations récentes).",
+    }
+    if date_filter_meta:
+        out_fb["date_filter"] = date_filter_meta
+    return out_fb
+
+
+async def sample_inbound_customer_messages_all_accessible(
+    user: "CurrentUser",
+    *,
+    limit_total: int = 360,
+    since: Any = None,
+    until: Any = None,
+    min_chars: int = 14,
+    max_accounts: Optional[int] = None,
+    per_account_timeout_s: float = 18.0,
+) -> Dict[str, Any]:
+    """Agrège des échantillons entrants sur chaque ligne où ``conversations.view`` est accordé."""
+    cap_acc = max_accounts if max_accounts is not None else _AXELIA_MULTI_MAX_ACCOUNTS
+    lt = max(60, min(int(limit_total), _THEMES_SAMPLE_HARD_MAX))
+
+    rows = await list_accessible_account_rows_for_inbox(user)
+    selected = rows[:cap_acc]
+    if not selected:
+        return {
+            "account_scope": "all_accessible",
+            "error": "Aucun compte inbox accessible.",
+            "accounts": [],
+            "samples": [],
+            "sample_count": 0,
+        }
+
+    per_acc = max(35, min(200, lt // max(1, len(selected))))
+
+    async def _one(acc_row: Dict[str, Any]) -> Dict[str, Any]:
+        aid = str(acc_row.get("id") or "")
+        if not aid or not user.permissions.has(PermissionCodes.CONVERSATIONS_VIEW, aid):
+            return {"account_id": aid, "error": "accès conversations refusé", "samples": []}
+        try:
+            part = await asyncio.wait_for(
+                sample_inbound_customer_messages_for_account(
+                    aid,
+                    limit=per_acc,
+                    since=since,
+                    until=until,
+                    min_chars=min_chars,
+                ),
+                timeout=per_account_timeout_s,
+            )
+        except asyncio.TimeoutError:
+            return {"account_id": aid, "error": f"délai dépassé ({per_account_timeout_s}s)", "samples": []}
+        err = part.get("error") if isinstance(part, dict) else None
+        samps = part.get("samples") if isinstance(part, dict) else []
+        return {
+            "account_id": aid,
+            "account_name": acc_row.get("name") or "-",
+            "error": err,
+            "samples": samps if isinstance(samps, list) else [],
+            "sample_count": len(samps) if isinstance(samps, list) else 0,
+        }
+
+    parts = await asyncio.gather(*(_one(r) for r in selected))
+    merged: List[Dict[str, Any]] = []
+    for p in parts:
+        nm = (p.get("account_name") or "").strip()
+        aid = (p.get("account_id") or "").strip()
+        prefix = f"[{nm or aid}] " if nm or aid else ""
+        for s in p.get("samples") or []:
+            if not isinstance(s, dict):
+                continue
+            tx = (s.get("text") or "").strip()
+            if not tx:
+                continue
+            merged.append(
+                {
+                    "text": _clip_sample_text(prefix + tx),
+                    "timestamp": s.get("timestamp"),
+                    "account_id": aid,
+                    "account_name": nm,
+                }
+            )
+
+    merged.sort(key=lambda x: str(x.get("timestamp") or ""), reverse=True)
+    merged = merged[:lt]
+    since_dt, until_dt = _resolve_date_range(since, until)
+    date_filter_meta: Dict[str, Any] = {}
+    if since_dt:
+        date_filter_meta["since"] = since_dt.isoformat()
+    if until_dt:
+        date_filter_meta["until"] = until_dt.isoformat()
+
+    return {
+        "account_scope": "all_accessible",
+        "accounts": parts,
+        "sample_count": len(merged),
+        "samples": merged,
+        "limit_total": lt,
+        "per_account_limit": per_acc,
+        "accounts_iterated": len(selected),
+        **({"date_filter": date_filter_meta} if date_filter_meta else {}),
+    }
+
+
+def _parse_themes_json_blob(raw: str) -> Optional[Dict[str, Any]]:
+    s = (raw or "").strip()
+    if not s:
+        return None
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s).strip()
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+async def synthesize_inbound_question_themes_with_gemini(
+    texts: List[str],
+    *,
+    max_themes: int = 12,
+    context_label: str = "",
+) -> Dict[str, Any]:
+    """
+    Regroupe les messages clients en thèmes / types de questions (sortie JSON Gemini).
+    """
+    from app.core.circuit_breaker import CircuitBreakerOpenError, gemini_circuit_breaker
+    from app.core.config import settings
+    from app.services.audio_transcription_service import _extract_text_from_gemini_response
+    from app.services.bot_service import _call_gemini_api
+
+    if not settings.GEMINI_API_KEY:
+        return {"error": "GEMINI_API_KEY non configurée.", "themes": []}
+
+    lines = [t.strip() for t in texts if (t or "").strip()]
+    if len(lines) < 12:
+        return {
+            "error": "Pas assez de messages dans l’échantillon pour une analyse fiable (minimum ~12).",
+            "themes": [],
+        }
+
+    mt = max(5, min(int(max_themes), 20))
+    numbered = "\n".join(f"{i + 1}. {lines[i]}" for i in range(min(len(lines), 380)))
+
+    ctx = (context_label or "").strip()
+    ctx_line = f"\nContexte périmètre : {ctx}\n" if ctx else ""
+
+    instruction = (
+        "Tu analyses des messages WhatsApp **reçus des clients** (français ou mixte).\n"
+        "Tâche : identifier les **thèmes récurrents** et **types de questions / demandes** les plus fréquents.\n"
+        "Contraintes :\n"
+        "- Tu ne cites pas de données personnelles identifiables (pas de numéros complets, emails).\n"
+        "- Les libellés de thèmes sont courts et métier (ex. « Retards / horaires », « Facturation »).\n"
+        "- La fréquence est **relative à cet échantillon** (pas une vérité statistique globale).\n"
+        "- Réponds **uniquement** avec un objet JSON valide, sans markdown ni texte autour.\n"
+        f"{ctx_line}"
+        "Schéma JSON attendu :\n"
+        "{\n"
+        '  "themes": [\n'
+        "    {\n"
+        '      "rank": 1,\n'
+        '      "title": "…",\n'
+        '      "description": "…",\n'
+        '      "relative_frequency": "très élevée|élevée|modérée|faible",\n'
+        '      "example_customer_messages": ["…", "…"]\n'
+        "    }\n"
+        "  ],\n"
+        '  "methodology_note": "phrase courte sur les limites (échantillon récent, pas exhaustif)"\n'
+        "}\n"
+        f"Nombre maximal de thèmes : {mt}.\n"
+    )
+
+    payload = {
+        "system_instruction": {"role": "system", "parts": [{"text": instruction}]},
+        "contents": [{"role": "user", "parts": [{"text": numbered}]}],
+        "generationConfig": {
+            "temperature": 0.25,
+            "maxOutputTokens": 2048,
+        },
+    }
+    endpoint = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{settings.GEMINI_MODEL}:generateContent"
+    )
+
+    try:
+        data = await gemini_circuit_breaker.call_async(
+            _call_gemini_api,
+            endpoint,
+            payload,
+            "axelia-inbound-themes",
+            read_timeout=55.0,
+        )
+    except CircuitBreakerOpenError:
+        return {"error": "Service IA temporairement indisponible (circuit ouvert).", "themes": []}
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Gemini themes HTTP %s", exc.response.status_code)
+        return {"error": "Erreur HTTP lors de la synthèse des thèmes.", "themes": []}
+    except Exception as exc:
+        logger.exception("Gemini themes failed: %s", exc)
+        return {"error": f"Synthèse impossible : {str(exc)[:160]}", "themes": []}
+
+    raw_text = (_extract_text_from_gemini_response(data or {}) or "").strip()
+    parsed = _parse_themes_json_blob(raw_text)
+    if not parsed:
+        return {
+            "error": "Réponse IA non JSON exploitable.",
+            "raw_excerpt": raw_text[:800],
+            "themes": [],
+        }
+
+    themes = parsed.get("themes")
+    if not isinstance(themes, list):
+        themes = []
+    methodology_note = parsed.get("methodology_note")
+    return {
+        "themes": themes[:mt],
+        "methodology_note": methodology_note if isinstance(methodology_note, str) else None,
     }
