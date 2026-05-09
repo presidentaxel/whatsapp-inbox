@@ -51,23 +51,11 @@ import {
   streamAxeliaChat,
 } from "../../api/axeliaApi";
 import { platformConfirm, platformPrompt } from "../../platform/platformDialogs";
-
-export const AXELIA_CONTEXT_ALL = "__all__";
-
-/** Aligné sur `_AXELIA_SECTOR_FOCUS` (backend). */
-export const AXELIA_SECTORS = [
-  { id: "general", label: "Général" },
-  { id: "templates", label: "Templates Meta" },
-  { id: "broadcast", label: "Diffusion" },
-  { id: "writing", label: "Rédaction WA" },
-  { id: "flows", label: "Parcours & auto" },
-];
-
-export const AXELIA_RESPONSE_DEPTHS = [
-  { id: "brief", label: "Bref" },
-  { id: "standard", label: "Standard" },
-  { id: "expert", label: "Expert" },
-];
+import {
+  AXELIA_CONTEXT_ALL,
+  AXELIA_RESPONSE_DEPTHS,
+  AXELIA_SECTORS,
+} from "./axeliaChatConstants";
 
 /** Skills Agent Studio soumis à carte de confirmation (multi-comptes : account_id dans les args). */
 const AGENT_STUDIO_CONFIRM_SKILLS = new Set([
