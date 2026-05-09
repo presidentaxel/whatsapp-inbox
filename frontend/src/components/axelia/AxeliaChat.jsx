@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   FiPaperclip,
-  FiImage,
   FiEdit3,
   FiZap,
   FiHeadphones,
@@ -34,6 +33,10 @@ import {
 } from "../../utils/axeliaSettings";
 import { toAxeliaModelLabel } from "../../utils/axeliaModelLabel";
 import { toAxeliaDepthLabel } from "../../utils/axeliaDepthLabel";
+import {
+  pickConversationRowForAccountContext,
+  resolveInitialAxeliaAccountContext,
+} from "../../utils/axeliaContextPick";
 import {
   createAxeliaConversation,
   getAxeliaChatProgress,
@@ -338,29 +341,12 @@ export default function AxeliaChat({
   }, [accessibleAccounts]);
 
   const [selectedContext, setSelectedContext] = useState(AXELIA_CONTEXT_ALL);
-  const contextSeededRef = useRef(false);
-  useEffect(() => {
-    if (accessibleAccounts.length === 0) return;
-    if (contextSeededRef.current) return;
-    contextSeededRef.current = true;
-    const pick =
-      initialAccountId &&
-      accessibleAccounts.some((a) => a.id === initialAccountId)
-        ? initialAccountId
-        : AXELIA_CONTEXT_ALL;
-    setSelectedContext(pick);
-  }, [accessibleAccounts, initialAccountId]);
 
   const canUseSend =
     !!accessibleAccounts.length &&
     (selectedContext === AXELIA_CONTEXT_ALL
       ? accessibleAccounts.length > 0
       : !!hasPermission?.("conversations.view", selectedContext));
-
-  const toolsAvailable =
-    canUseSend &&
-    selectedContext !== AXELIA_CONTEXT_ALL &&
-    accessibleAccounts.some((a) => a.id === selectedContext);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -444,7 +430,9 @@ export default function AxeliaChat({
   const progressTimerRef = useRef(null);
   const [contextSelectWidthPx, setContextSelectWidthPx] = useState(undefined);
 
-  const initDone = useRef(false);
+  /** Évite les boots dupliqués ; réinitialisé si `initialAccountId` arrive tard ou échec réseau. */
+  const bootstrapKeyRef = useRef(null);
+  const bootstrapGenRef = useRef(0);
   const sidebarListScrollRef = useRef(null);
 
   /** Affichage d'un toast informatif (générique : copie, confirmation, etc.). */
@@ -630,49 +618,87 @@ export default function AxeliaChat({
     setSidebarMenuPopupAbove(openAbove);
   }, [menuOpenId, sidebarFilter, conversations.length]);
 
-  /** Bootstrap : premier fil ou création automatique */
+  /** Bootstrap : périmètre aligné sur la coop active (initialAccountId) puis fil ou création correspondante */
   useEffect(() => {
-    if (!canUseSend || initDone.current) return;
+    if (!canUseSend || !accessibleAccounts.length) return;
+
+    const resolvedContext = resolveInitialAxeliaAccountContext(
+      initialAccountId,
+      accessibleAccounts,
+    );
+    /** Dépend du périmètre résolu uniquement (évite un 2e boot si `initialAccountId` arrive après coup pour le même compte). */
+    const bootstrapKey = resolvedContext;
+    if (bootstrapKeyRef.current === bootstrapKey) return;
+    bootstrapKeyRef.current = bootstrapKey;
+
+    setSelectedContext(resolvedContext);
+    const gen = ++bootstrapGenRef.current;
+
     (async () => {
-      initDone.current = true;
-      const rows = await loadConversations();
-      if (rows?.length) {
-        setConversationId(rows[0].id);
-      } else {
-        try {
-          const cr = await createAxeliaConversation({
-            account_context: selectedContext || AXELIA_CONTEXT_ALL,
-          });
-          if (cr.data?.id) {
-            setConversationId(cr.data.id);
-            setConversations([cr.data]);
-          }
-        } catch {
-          initDone.current = false;
+      try {
+        const rows = await loadConversations();
+        if (gen !== bootstrapGenRef.current) return;
+        const match = pickConversationRowForAccountContext(
+          rows,
+          resolvedContext,
+        );
+        if (match?.id) {
+          setConversationId(match.id);
+          return;
         }
+        const cr = await createAxeliaConversation({
+          account_context: resolvedContext,
+        });
+        if (gen !== bootstrapGenRef.current) return;
+        if (cr.data?.id) {
+          setConversationId(cr.data.id);
+          setConversations((prev) => {
+            const exists = prev.some((x) => x.id === cr.data.id);
+            if (exists) return prev;
+            return [cr.data, ...prev];
+          });
+        }
+      } catch {
+        if (gen === bootstrapGenRef.current) bootstrapKeyRef.current = null;
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bootstrap once when canUseSend turns true
-  }, [canUseSend]);
+  }, [canUseSend, accessibleAccounts, initialAccountId, loadConversations]);
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c.id === conversationId),
     [conversations, conversationId],
   );
+
+  /** Périmètre réellement utilisé par l’API (discussion figée sur son account_context). */
+  const effectiveAccountContext = useMemo(() => {
+    if (
+      activeConversation?.account_context != null &&
+      activeConversation.account_context !== ""
+    ) {
+      return activeConversation.account_context;
+    }
+    return selectedContext;
+  }, [activeConversation?.account_context, selectedContext]);
+
+  const toolsAvailable =
+    canUseSend &&
+    effectiveAccountContext !== AXELIA_CONTEXT_ALL &&
+    accessibleAccounts.some((a) => a.id === effectiveAccountContext);
   const isReadOnlyConversation = !!activeConversation?.read_only;
   const canShareConversation = !!conversationId && !isReadOnlyConversation;
   const canUseComposer = canUseSend && !isReadOnlyConversation;
 
   /** Aligné sur le sélecteur de périmètre (le serveur garde la vérité sur nom / téléphone). */
   const uiPerimeterHint = useMemo(() => {
-    if (selectedContext === AXELIA_CONTEXT_ALL) return "Tous les comptes";
-    const a = accessibleAccounts.find((x) => x.id === selectedContext);
+    if (effectiveAccountContext === AXELIA_CONTEXT_ALL)
+      return "Tous les comptes";
+    const a = accessibleAccounts.find((x) => x.id === effectiveAccountContext);
     if (!a) return null;
     const name = (a.name || "").trim();
     const ph = (a.phone_number || "").trim();
     if (name && ph) return `${name} - ${ph}`;
     return name || ph || null;
-  }, [selectedContext, accessibleAccounts]);
+  }, [effectiveAccountContext, accessibleAccounts]);
 
   const topbarConversationTitle = useMemo(() => {
     const t = activeConversation?.title?.trim();
@@ -927,8 +953,7 @@ export default function AxeliaChat({
       }
     }
 
-    const accountId =
-      activeConversation?.account_context || selectedContext;
+    const accountId = effectiveAccountContext;
 
     // Snapshot pour pouvoir restaurer le textarea si l'envoi échoue.
     const inputSnapshot = input;
@@ -1147,7 +1172,7 @@ export default function AxeliaChat({
   const confirmPendingCreates = async (assistMessageId, calls) => {
     if (!conversationId || !calls?.length || loading) return;
     let accountId =
-      activeConversation?.account_context || selectedContext || AXELIA_CONTEXT_ALL;
+      effectiveAccountContext || AXELIA_CONTEXT_ALL;
 
     // En mode « Tous les comptes », l'IA peut viser une ligne précise via
     // `args.account_id` (typiquement pour upsert_agent_studio_config). On utilise alors
@@ -1376,10 +1401,15 @@ export default function AxeliaChat({
       await patchAxeliaConversation(c.id, { hidden: true });
       const rows = await loadConversations();
       if (c.id === conversationId) {
-        if (rows?.length) setConversationId(rows[0].id);
+        const ctx =
+          c.account_context != null && c.account_context !== ""
+            ? c.account_context
+            : selectedContext || AXELIA_CONTEXT_ALL;
+        const next = pickConversationRowForAccountContext(rows, ctx);
+        if (next?.id) setConversationId(next.id);
         else {
           setConversationId(null);
-          await bootstrapNewConversation(selectedContext || AXELIA_CONTEXT_ALL);
+          await bootstrapNewConversation(ctx);
         }
       }
     } catch {
