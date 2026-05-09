@@ -22,6 +22,15 @@ describe("agentStudioModel", () => {
     expect(cfg.routing.confidenceThreshold).toBe(0.72);
   });
 
+  it("normalizes JSON string config from API", () => {
+    const raw =
+      '{"name":"Agent SAV","objective":{"primary_goal":"SAV","kpi":[],"audience":"Louis"}}';
+    const cfg = normalizeAgentStudioConfig(raw);
+    expect(cfg.name).toBe("Agent SAV");
+    expect(cfg.objective.primaryGoal).toBe("SAV");
+    expect(cfg.objective.audience).toBe("Louis");
+  });
+
   it("returns validation issues for invalid config", () => {
     const issues = validateAgentStudioConfig({
       objective: { primaryGoal: "" },

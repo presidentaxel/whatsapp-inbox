@@ -102,10 +102,35 @@ def default_agent_config() -> Dict[str, Any]:
     }
 
 
+def coerce_config_mapping(raw: Any) -> Optional[Dict[str, Any]]:
+    """Interprète la colonne jsonb `config` : dict attendu, ou chaîne JSON (cas réels observés).
+
+    Si la valeur est une chaîne contenant un objet JSON sérialisé, ``normalize_agent_config``
+    et l’UI voyaient auparavant un objet vide (« nom null », objectif vide) alors que la
+    ligne en base est correcte.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        try:
+            parsed = json.loads(s)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
 def normalize_agent_config(raw: Any) -> Dict[str, Any]:
     base = default_agent_config()
-    if not isinstance(raw, dict):
+    coerced = coerce_config_mapping(raw)
+    if coerced is None:
         return base
+    raw = coerced
     out = {**base, **raw}
     for key in ("objective", "routing", "policies", "capabilities", "deployment"):
         merged = base.get(key, {})
@@ -116,6 +141,13 @@ def normalize_agent_config(raw: Any) -> Dict[str, Any]:
             out[key] = merged if not isinstance(incoming, dict) else incoming
     tests_raw = raw.get("tests")
     out["tests"] = tests_raw if isinstance(tests_raw, list) else []
+    return out
+
+
+def finalize_agent_config_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Assure ``config`` dict normalisé pour les réponses API / outils (parse chaîne incluse)."""
+    out = dict(row)
+    out["config"] = normalize_agent_config(out.get("config"))
     return out
 
 
@@ -330,14 +362,15 @@ async def list_agent_configs(account_id: str) -> List[Dict[str, Any]]:
             """,
             account_id,
         )
-        return [dict(r) for r in rows]
+        return [finalize_agent_config_row(dict(r)) for r in rows]
     res = await supabase_execute(
         supabase.table("agent_studio_configs")
         .select("id,account_id,version,config,is_default,created_by,updated_by,created_at,updated_at")
         .eq("account_id", account_id)
         .order("updated_at", desc=True)
     )
-    return list(res.data or [])
+    rows = list(res.data or [])
+    return [finalize_agent_config_row(dict(r)) for r in rows]
 
 
 async def get_agent_config(config_id: str) -> Optional[Dict[str, Any]]:
@@ -345,11 +378,13 @@ async def get_agent_config(config_id: str) -> Optional[Dict[str, Any]]:
         row = await fetch_one(
             "SELECT * FROM agent_studio_configs WHERE id = $1::uuid LIMIT 1", config_id
         )
-        return dict(row) if row else None
+        return finalize_agent_config_row(dict(row)) if row else None
     res = await supabase_execute(
         supabase.table("agent_studio_configs").select("*").eq("id", config_id).limit(1)
     )
-    return res.data[0] if res.data else None
+    if not res.data:
+        return None
+    return finalize_agent_config_row(dict(res.data[0]))
 
 
 async def create_agent_config(
@@ -378,9 +413,11 @@ async def create_agent_config(
             user_id,
             now,
         )
-        return dict(row) if row else {}
+        return finalize_agent_config_row(dict(row)) if row else {}
     res = await supabase_execute(supabase.table("agent_studio_configs").insert(payload))
-    return res.data[0] if res.data else payload
+    if res.data:
+        return finalize_agent_config_row(dict(res.data[0]))
+    return finalize_agent_config_row(dict(payload))
 
 
 async def update_agent_config(

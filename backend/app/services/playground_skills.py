@@ -86,9 +86,9 @@ def _skill_args_want_all_accessible(
 
 def _slim_agent_studio_config_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Résumé compact pour list_agent_studio_configs (économie de tokens)."""
-    cfg = row.get("config") or {}
-    if not isinstance(cfg, dict):
-        cfg = {}
+    from app.services.agent_studio_service import normalize_agent_config
+
+    cfg = normalize_agent_config(row.get("config"))
     objective = cfg.get("objective") or {}
     if not isinstance(objective, dict):
         objective = {}

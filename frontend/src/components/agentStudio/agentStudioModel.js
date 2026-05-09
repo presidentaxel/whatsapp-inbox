@@ -30,7 +30,16 @@ export function createDefaultAgentStudioConfig(name = "Nouvel agent") {
 
 export function normalizeAgentStudioConfig(raw) {
   const base = createDefaultAgentStudioConfig();
-  if (!raw || typeof raw !== "object") return base;
+  let parsed = raw;
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return base;
+  raw = parsed;
   const objectiveRaw = raw.objective || {};
   const routingRaw = raw.routing || {};
   const policiesRaw = raw.policies || {};
