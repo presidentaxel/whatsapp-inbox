@@ -3,6 +3,7 @@ import { FiArrowLeft, FiSave, FiX, FiUser, FiMail, FiImage, FiEdit } from 'react
 import { supabaseClient } from '../../api/supabaseClient';
 import { updateProfile, uploadProfilePicture } from '../../api/authApi';
 import '../../styles/mobile-account-settings.css';
+import { platformAlert } from '../../platform/platformDialogs';
 
 export default function MobileAccountSettings({ onBack }) {
   const [profile, setProfile] = useState(null);
@@ -53,7 +54,7 @@ export default function MobileAccountSettings({ onBack }) {
       setIsEditing(false);
     } catch (error) {
       console.error('Erreur lors de la mise à jour du profil:', error);
-      alert('Erreur lors de la mise à jour du profil');
+      await platformAlert('Erreur lors de la mise à jour du profil');
     } finally {
       setLoading(false);
     }
@@ -69,13 +70,13 @@ export default function MobileAccountSettings({ onBack }) {
 
     // Vérifier le type
     if (!file.type.startsWith('image/')) {
-      alert('Veuillez sélectionner une image');
+      await platformAlert('Veuillez sélectionner une image');
       return;
     }
 
     // Vérifier la taille (5MB max)
     if (file.size > 5 * 1024 * 1024) {
-      alert('L\'image est trop volumineuse (max 5MB)');
+      await platformAlert('L\'image est trop volumineuse (max 5MB)');
       return;
     }
 
@@ -93,7 +94,7 @@ export default function MobileAccountSettings({ onBack }) {
       }
     } catch (error) {
       console.error('Erreur lors de l\'upload de la photo:', error);
-      alert('Erreur lors de l\'upload de la photo');
+      await platformAlert('Erreur lors de l\'upload de la photo');
     } finally {
       setUploading(false);
       if (fileInputRef.current) {

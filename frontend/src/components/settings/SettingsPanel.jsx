@@ -28,6 +28,7 @@ import {
   disconnectGoogleDrive,
   backfillGoogleDrive,
 } from "../../api/accountsApi";
+import { platformConfirm } from "../../platform/platformDialogs";
 import NotificationSettings from "./NotificationSettings";
 import PermissionsTable from "./PermissionsTable";
 import AxeliaAccessTable from "./AxeliaAccessTable";
@@ -131,7 +132,11 @@ export default function SettingsPanel({
   };
 
   const handleDeleteAccount = async (accountId) => {
-    if (!window.confirm("Supprimer ce compte WhatsApp ?")) return;
+    const ok = await platformConfirm("Supprimer ce compte WhatsApp ?", {
+      variant: "danger",
+      confirmLabel: "Supprimer",
+    });
+    if (!ok) return;
     await deleteAccount(accountId);
     onAccountsRefresh?.();
   };
@@ -167,7 +172,8 @@ export default function SettingsPanel({
   };
 
   const handleDisconnectGoogleDrive = async (accountId) => {
-    if (!window.confirm("Déconnecter Google Drive de ce compte ?")) return;
+    const ok = await platformConfirm("Déconnecter Google Drive de ce compte ?");
+    if (!ok) return;
     try {
       await disconnectGoogleDrive(accountId);
       setStatusMessage("Google Drive déconnecté avec succès.");
@@ -196,7 +202,10 @@ export default function SettingsPanel({
   };
 
   const handleBackfillGoogleDrive = async (accountId) => {
-    if (!window.confirm("Uploader tous les médias existants vers Google Drive ? Cela peut prendre du temps.")) return;
+    const ok = await platformConfirm(
+      "Uploader tous les médias existants vers Google Drive ? Cela peut prendre du temps."
+    );
+    if (!ok) return;
     
     setBackfilling((prev) => ({ ...prev, [accountId]: true }));
     setStatusMessage("Upload des médias en cours...");

@@ -6,6 +6,7 @@ import {
   updateUserAgentStudioAccess,
   updateUserPlaygroundAccess,
 } from "../../api/adminApi";
+import { platformAlert } from "../../platform/platformDialogs";
 
 export default function AxeliaAccessTable({
   currentUserRole,
@@ -64,7 +65,7 @@ export default function AxeliaAccessTable({
     } catch (e) {
       console.error(e);
       setUsers(prev);
-      alert("Erreur lors de la mise à jour de l'accès Axelia.");
+      await platformAlert("Erreur lors de la mise à jour de l'accès Axelia.");
     }
   };
 
@@ -85,7 +86,7 @@ export default function AxeliaAccessTable({
     } catch (e) {
       console.error(e);
       setUsers(prev);
-      alert("Erreur lors de la mise à jour de l'accès Playground.");
+      await platformAlert("Erreur lors de la mise à jour de l'accès Playground.");
     }
   };
 
@@ -106,7 +107,7 @@ export default function AxeliaAccessTable({
     } catch (e) {
       console.error(e);
       setUsers(prev);
-      alert("Erreur lors de la mise à jour de l'accès Agent Studio.");
+      await platformAlert("Erreur lors de la mise à jour de l'accès Agent Studio.");
     }
   };
 

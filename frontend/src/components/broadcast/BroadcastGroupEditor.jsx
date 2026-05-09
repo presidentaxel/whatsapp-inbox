@@ -12,6 +12,7 @@ import {
 } from "../../api/broadcastApi";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 import { contactMatchesSearch, foldString } from "../../utils/contactSearch";
+import { platformAlert, platformConfirm } from "../../platform/platformDialogs";
 
 function normalizePhoneDigits(raw) {
   let d = String(raw || "").replace(/\D/g, "");
@@ -95,7 +96,7 @@ export default function BroadcastGroupEditor({
 
   const handleSave = async () => {
     if (!name.trim()) {
-      alert("Le nom du groupe est requis");
+      await platformAlert("Le nom du groupe est requis");
       return;
     }
 
@@ -120,7 +121,7 @@ export default function BroadcastGroupEditor({
             });
           } catch (error) {
             console.error("Error importing pending recipients:", error);
-            alert(error.response?.data?.detail || "Groupe créé mais import des destinataires partiellement échoué.");
+            await platformAlert(error.response?.data?.detail || "Groupe créé mais import des destinataires partiellement échoué.");
           }
         }
 
@@ -131,7 +132,7 @@ export default function BroadcastGroupEditor({
       onClose();
     } catch (error) {
       console.error("Error saving group:", error);
-      alert(error.response?.data?.detail || "Erreur lors de la sauvegarde");
+      await platformAlert(error.response?.data?.detail || "Erreur lors de la sauvegarde");
     } finally {
       setLoading(false);
     }
@@ -140,14 +141,14 @@ export default function BroadcastGroupEditor({
   const handleAddRecipient = async (contact = null, phoneNumber = null) => {
     const phone = phoneNumber || contact?.whatsapp_number;
     if (!phone) {
-      alert("Numéro de téléphone requis");
+      await platformAlert("Numéro de téléphone requis");
       return;
     }
 
     // Vérifier si le destinataire n'est pas déjà ajouté
     const allRecipients = group ? recipients : pendingRecipients;
     if (allRecipients.some((r) => r.phone_number === phone)) {
-      alert("Ce destinataire est déjà dans le groupe");
+      await platformAlert("Ce destinataire est déjà dans le groupe");
       return;
     }
 
@@ -165,7 +166,7 @@ export default function BroadcastGroupEditor({
         setShowAddRecipient(false);
       } catch (error) {
         console.error("Error adding recipient:", error);
-        alert(error.response?.data?.detail || "Erreur lors de l'ajout");
+        await platformAlert(error.response?.data?.detail || "Erreur lors de l'ajout");
       } finally {
         setLoading(false);
       }
@@ -270,7 +271,11 @@ export default function BroadcastGroupEditor({
   };
 
   const handleRemoveRecipient = async (recipientId, phoneNumber = null) => {
-    if (!confirm("Retirer ce destinataire du groupe ?")) return;
+    const ok = await platformConfirm("Retirer ce destinataire du groupe ?", {
+      variant: "danger",
+      confirmLabel: "Retirer",
+    });
+    if (!ok) return;
 
     if (group) {
       // Groupe existant : supprimer de la base
@@ -280,7 +285,7 @@ export default function BroadcastGroupEditor({
         await loadRecipients();
       } catch (error) {
         console.error("Error removing recipient:", error);
-        alert(error.response?.data?.detail || "Erreur lors de la suppression");
+        await platformAlert(error.response?.data?.detail || "Erreur lors de la suppression");
       } finally {
         setLoading(false);
       }

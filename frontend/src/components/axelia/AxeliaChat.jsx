@@ -47,6 +47,7 @@ import {
   postAxeliaRegenerate,
   streamAxeliaChat,
 } from "../../api/axeliaApi";
+import { platformConfirm, platformPrompt } from "../../platform/platformDialogs";
 
 export const AXELIA_CONTEXT_ALL = "__all__";
 
@@ -1322,7 +1323,9 @@ export default function AxeliaChat({
   };
 
   const renameConv = async (c) => {
-    const t = window.prompt("Nouveau titre", c.title || "");
+    const t = await platformPrompt("Nouveau titre", c.title || "", {
+      title: "Renommer la discussion",
+    });
     if (t == null) return;
     const title = t.trim();
     if (!title) return;
@@ -1336,8 +1339,11 @@ export default function AxeliaChat({
   };
 
   const hideConv = async (c) => {
-    if (!window.confirm("Supprimer cette discussion ?"))
-      return;
+    const ok = await platformConfirm("Supprimer cette discussion ?", {
+      variant: "danger",
+      confirmLabel: "Supprimer",
+    });
+    if (!ok) return;
     try {
       await patchAxeliaConversation(c.id, { hidden: true });
       const rows = await loadConversations();

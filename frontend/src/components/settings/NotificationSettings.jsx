@@ -12,6 +12,7 @@ import {
   areNotificationsEnabled,
   showTestNotification,
 } from '../../utils/notifications';
+import { platformAlert } from '../../platform/platformDialogs';
 
 const STORAGE_KEY = 'notif_prefs_v1';
 
@@ -65,7 +66,7 @@ export default function NotificationSettings({ accounts = [] }) {
 
   const handleToggleNotifications = async () => {
     if (notificationsEnabled) {
-      alert(
+      await platformAlert(
         '⚠️ Pour désactiver les notifications, allez dans les paramètres de votre navigateur.\n\n' +
         'Chrome: Paramètres > Confidentialité > Notifications\n' +
         'Firefox: Paramètres > Vie privée > Notifications'
@@ -87,7 +88,7 @@ export default function NotificationSettings({ accounts = [] }) {
 
   const handleTestNotification = async () => {
     if (!notificationsEnabled) {
-      alert('⚠️ Activez d\'abord les notifications');
+      await platformAlert('⚠️ Activez d\'abord les notifications');
       return;
     }
 

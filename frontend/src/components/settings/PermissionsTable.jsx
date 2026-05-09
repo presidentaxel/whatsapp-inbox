@@ -6,6 +6,7 @@ import {
   setUserRoles,
   getAllAccountsForPermissions 
 } from "../../api/adminApi";
+import { platformAlert } from "../../platform/platformDialogs";
 
 const ACCESS_LEVELS = [
   { value: "full", label: "Full", description: "Tous les droits (écrire, lire, ...)" },
@@ -122,7 +123,7 @@ export default function PermissionsTable({
       }
     } catch (error) {
       console.error("Erreur lors de la sauvegarde:", error);
-      alert("Erreur lors de la sauvegarde de l'accès");
+      await platformAlert("Erreur lors de la sauvegarde de l'accès");
       // Optionnel : recharger pour restaurer l'état précédent
       await loadUsers();
     } finally {
@@ -141,7 +142,7 @@ export default function PermissionsTable({
 
     const newRole = roles.find((r) => r.slug === newRoleSlug);
     if (!newRole) {
-      alert("Rôle introuvable");
+      await platformAlert("Rôle introuvable");
       return;
     }
 
@@ -158,7 +159,7 @@ export default function PermissionsTable({
       }
     } catch (error) {
       console.error("Erreur lors de la sauvegarde du rôle:", error);
-      alert("Erreur lors de la sauvegarde du rôle");
+      await platformAlert("Erreur lors de la sauvegarde du rôle");
       await loadUsers();
     } finally {
       setSavingKey(null);

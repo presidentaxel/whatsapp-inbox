@@ -5,6 +5,7 @@ import { getDeviceType } from "./utils/deviceDetection";
 import { getAuthSession, saveAuthSession, clearAuthSession } from "./utils/secureStorage";
 import { useTheme } from "./hooks/useTheme";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { PlatformDialogProvider } from "./platform/PlatformDialogProvider";
 
 // Lazy-loaded pages: desktop and mobile bundles are split
 const InboxPage = lazy(() => import("./pages/InboxPage"));
@@ -266,7 +267,9 @@ export default function App() {
   if (deviceType === "mobile") {
     return (
       <AuthProvider>
-        <MobileApp />
+        <PlatformDialogProvider>
+          <MobileApp />
+        </PlatformDialogProvider>
       </AuthProvider>
     );
   }
@@ -274,7 +277,9 @@ export default function App() {
   // Desktop + tablettes large : on sert l'UI desktop
   return (
     <AuthProvider>
-      <DesktopApp />
+      <PlatformDialogProvider>
+        <DesktopApp />
+      </PlatformDialogProvider>
     </AuthProvider>
   );
 }

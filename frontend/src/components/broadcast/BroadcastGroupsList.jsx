@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { FiPlus, FiEdit2, FiTrash2, FiUsers } from "react-icons/fi";
+import { platformConfirm } from "../../platform/platformDialogs";
 
 export default function BroadcastGroupsList({
   groups,
@@ -84,10 +85,14 @@ export default function BroadcastGroupsList({
           <button
             className="danger"
             onClick={() => {
-              if (confirm(`Supprimer le groupe "${contextMenu.group.name}" ?`)) {
-                onDeleteGroup(contextMenu.group.id);
-              }
-              closeContextMenu();
+              void (async () => {
+                const ok = await platformConfirm(
+                  `Supprimer le groupe "${contextMenu.group.name}" ?`,
+                  { variant: "danger", confirmLabel: "Supprimer" }
+                );
+                if (ok) onDeleteGroup(contextMenu.group.id);
+                closeContextMenu();
+              })();
             }}
           >
             <FiTrash2 /> Supprimer

@@ -6367,3 +6367,110 @@ body {
 .btn-danger:hover {
   background: rgba(239, 68, 68, 0.1);
 }
+
+/* Dialogues plateforme (remplacement alert / confirm / prompt natifs) */
+.platform-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+}
+
+.platform-dialog-panel {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1.25rem 1.35rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+}
+
+.platform-dialog-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.platform-dialog-message {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+}
+
+.platform-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 1rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.platform-dialog-input:focus {
+  outline: 2px solid rgba(37, 211, 102, 0.45);
+  outline-offset: 1px;
+}
+
+.platform-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  padding-top: 0.85rem;
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--border-light);
+}
+
+.platform-dialog-btn {
+  padding: 0.55rem 1.1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: opacity 0.15s ease, transform 0.1s ease;
+}
+
+.platform-dialog-btn:active {
+  transform: scale(0.98);
+}
+
+.platform-dialog-btn--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.platform-dialog-btn--ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.platform-dialog-btn--primary {
+  background: #25d366;
+  color: #0b141a;
+}
+
+.platform-dialog-btn--primary:hover {
+  opacity: 0.92;
+}
+
+.platform-dialog-btn--danger {
+  background: #dc2626;
+  color: #fff;
+}
+
+.platform-dialog-btn--danger:hover {
+  opacity: 0.92;
+}

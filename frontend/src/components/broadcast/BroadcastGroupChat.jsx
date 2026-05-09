@@ -3,6 +3,7 @@ import { FiSend, FiUsers, FiBarChart2 } from "react-icons/fi";
 import { sendBroadcastCampaign, getBroadcastCampaigns } from "../../api/broadcastApi";
 import { formatRelativeDateTime } from "../../utils/date";
 import BroadcastCampaignStats from "./BroadcastCampaignStats";
+import { platformAlert } from "../../platform/platformDialogs";
 
 export default function BroadcastGroupChat({
   group,
@@ -50,7 +51,7 @@ export default function BroadcastGroupChat({
       }
     } catch (error) {
       console.error("Error sending broadcast:", error);
-      alert(error.response?.data?.detail || "Erreur lors de l'envoi");
+      await platformAlert(error.response?.data?.detail || "Erreur lors de l'envoi");
     } finally {
       setSending(false);
     }

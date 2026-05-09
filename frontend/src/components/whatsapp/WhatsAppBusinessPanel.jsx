@@ -11,6 +11,7 @@ import {
   getWabaDetails
 } from "../../api/whatsappApi";
 import { supabaseClient } from "../../api/supabaseClient";
+import { platformAlert, platformConfirm } from "../../platform/platformDialogs";
 
 export default function WhatsAppBusinessPanel({ accountId, accounts }) {
   const [activeTab, setActiveTab] = useState("info");
@@ -150,13 +151,13 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
       };
 
       await updateBusinessProfile(accountId, data);
-      alert("Profil mis à jour avec succès !");
+      await platformAlert("Profil mis à jour avec succès !");
       setEditingProfile(false);
       
       // OPTIMISATION : Ne recharger que le profil au lieu de tout recharger
       await reloadProfile();
     } catch (err) {
-      alert("Erreur lors de la mise à jour du profil");
+      await platformAlert("Erreur lors de la mise à jour du profil");
       console.error(err);
     } finally {
       setLoading(false);
@@ -165,7 +166,7 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
 
   const handleCreateTemplate = async () => {
     if (!accountId || !templateForm.name || !templateForm.body) {
-      alert("Veuillez remplir tous les champs obligatoires");
+      await platformAlert("Veuillez remplir tous les champs obligatoires");
       return;
     }
 
@@ -183,12 +184,12 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
         ]
       });
 
-      alert("Template créé et soumis à Meta pour validation !");
+      await platformAlert("Template créé et soumis à Meta pour validation !");
       setCreatingTemplate(false);
       setTemplateForm({ name: "", category: "UTILITY", language: "fr", body: "" });
       loadData();
     } catch (err) {
-      alert(`Erreur: ${err.response?.data?.detail || "Erreur inconnue"}`);
+      await platformAlert(`Erreur: ${err.response?.data?.detail || "Erreur inconnue"}`);
       console.error(err);
     } finally {
       setLoading(false);
@@ -196,15 +197,19 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
   };
 
   const handleDeleteTemplate = async (name) => {
-    if (!confirm(`Supprimer le template "${name}" ?`)) return;
+    const ok = await platformConfirm(`Supprimer le template "${name}" ?`, {
+      variant: "danger",
+      confirmLabel: "Supprimer",
+    });
+    if (!ok) return;
 
     setLoading(true);
     try {
       await deleteTemplate(accountId, { name });
-      alert("Template supprimé !");
+      await platformAlert("Template supprimé !");
       loadData();
     } catch (err) {
-      alert("Erreur lors de la suppression");
+      await platformAlert("Erreur lors de la suppression");
       console.error(err);
     } finally {
       setLoading(false);
@@ -277,10 +282,10 @@ export default function WhatsAppBusinessPanel({ accountId, accounts }) {
       
       if (mediaId) {
         setUploadedMedias([...uploadedMedias, { id: mediaId, name: file.name, type: file.type }]);
-        alert(`Fichier uploadé ! Media ID: ${mediaId}`);
+        await platformAlert(`Fichier uploadé ! Media ID: ${mediaId}`);
       }
     } catch (err) {
-      alert("Erreur lors de l'upload");
+      await platformAlert("Erreur lors de l'upload");
       console.error(err);
     } finally {
       setUploadingMedia(false);

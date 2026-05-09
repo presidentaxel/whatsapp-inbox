@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { FiArrowLeft, FiTrash2, FiSave, FiX, FiEdit } from "react-icons/fi";
 import { updateContact, deleteContact, getContactWhatsAppInfo } from "../../api/contactsApi";
 import { formatPhoneNumber } from "../../utils/formatPhone";
+import { platformAlert, platformConfirm } from "../../platform/platformDialogs";
 
 export default function MobileContactDetail({
   contact,
@@ -63,7 +64,7 @@ export default function MobileContactDetail({
       }
     } catch (error) {
       console.error("Erreur lors de la mise à jour du contact:", error);
-      alert("Erreur lors de la mise à jour du contact");
+      await platformAlert("Erreur lors de la mise à jour du contact");
     } finally {
       setLoading(false);
     }
@@ -72,9 +73,11 @@ export default function MobileContactDetail({
   const handleDelete = async () => {
     if (!contact) return;
     
-    if (!confirm("Êtes-vous sûr de vouloir supprimer ce contact ?")) {
-      return;
-    }
+    const ok = await platformConfirm("Êtes-vous sûr de vouloir supprimer ce contact ?", {
+      variant: "danger",
+      confirmLabel: "Supprimer",
+    });
+    if (!ok) return;
 
     setLoading(true);
     try {
@@ -85,7 +88,7 @@ export default function MobileContactDetail({
       onBack();
     } catch (error) {
       console.error("Erreur lors de la suppression du contact:", error);
-      alert("Erreur lors de la suppression du contact");
+      await platformAlert("Erreur lors de la suppression du contact");
     } finally {
       setLoading(false);
     }

@@ -6,6 +6,7 @@ import { sendMediaMessage, sendMessageWithAutoTemplate, sendMessage, getMessageP
 import { useTheme } from "../../hooks/useTheme";
 import TemplateVariablesModal from "../chat/TemplateVariablesModal";
 import { hasTemplateVariables } from "../../utils/templateVariables";
+import { platformAlert } from "../../platform/platformDialogs";
 
 export default function MobileMessageInput({ conversationId, accountId, onSend, onMediaSent, disabled, messages = [] }) {
   const [text, setText] = useState("");
@@ -325,13 +326,13 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
       // Afficher les erreurs
       const errorData = error.response?.data;
       if (errorData?.detail?.errors) {
-        alert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
+        await platformAlert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
       } else if (errorData?.detail?.message) {
-        alert(`Erreur: ${errorData.detail.message}`);
+        await platformAlert(`Erreur: ${errorData.detail.message}`);
       } else if (errorData?.detail) {
-        alert(`Erreur: ${errorData.detail}`);
+        await platformAlert(`Erreur: ${errorData.detail}`);
       } else {
-        alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
+        await platformAlert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
       }
     } finally {
       setSending(false);
@@ -477,7 +478,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         } : null);
       }).catch(() => {});
     } catch (err) {
-      alert(`Erreur lors de l'envoi du template: ${err.response?.data?.detail || err.message}`);
+      await platformAlert(`Erreur lors de l'envoi du template: ${err.response?.data?.detail || err.message}`);
       if (onSend) onSend("", true, optimisticMessage.id);
     } finally {
       setUploading(false);
@@ -580,7 +581,7 @@ export default function MobileMessageInput({ conversationId, accountId, onSend, 
         setText("");
       } catch (error) {
         console.error("❌ Erreur upload/envoi:", error);
-        alert(`Erreur lors de l'envoi du fichier: ${error.message}`);
+        await platformAlert(`Erreur lors de l'envoi du fichier: ${error.message}`);
       } finally {
         setUploading(false);
       }

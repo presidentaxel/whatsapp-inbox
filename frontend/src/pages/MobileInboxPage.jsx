@@ -36,6 +36,7 @@ import MobileSettingsHome from "../components/mobile/MobileSettingsHome";
 import MobileInviteUser from "../components/mobile/MobileInviteUser";
 import MobileAppUpdates from "../components/mobile/MobileAppUpdates";
 import MetaBlockAccountModal from "../components/contacts/MetaBlockAccountModal";
+import { platformAlert } from "../platform/platformDialogs";
 import { useAuth } from "../context/AuthContext";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import { MOBILE_PATH_BY_MODE, mobilePathToMode } from "../routes/mobileInboxRoutes";
@@ -205,7 +206,7 @@ export default function MobileInboxPage({ onLogout }) {
         setMetaBlockModal(null);
       } catch (error) {
         const detail = error.response?.data?.detail;
-        alert(
+        await platformAlert(
           typeof detail === "string"
             ? detail
             : Array.isArray(detail)

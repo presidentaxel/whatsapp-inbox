@@ -19,6 +19,7 @@ import {
   recordAssistDuration,
 } from "./playgroundAssistTiming.js";
 import { summarizeWaitUntilCanvas } from "./nodeShared";
+import { platformConfirm } from "../../platform/platformDialogs";
 
 const ASSIST_MODE_KEY = "whatsapp-inbox.playground-assist-mode";
 
@@ -567,13 +568,10 @@ export default function PlaygroundAssistantChat({
 
   const removeThread = useCallback(async () => {
     if (!activeSessionId || disabled) return;
-    if (
-      !window.confirm(
-        "Retirer cette discussion de la liste ? Elle reste en base (récupérable dans Archives)."
-      )
-    ) {
-      return;
-    }
+    const ok = await platformConfirm(
+      "Retirer cette discussion de la liste ? Elle reste en base (récupérable dans Archives)."
+    );
+    if (!ok) return;
     try {
       await deletePlaygroundAssistThread(activeSessionId);
       await loadVisibleThreads();

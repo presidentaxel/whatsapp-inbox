@@ -30,6 +30,7 @@ import { useAuth } from "../context/AuthContext";
 import { useGlobalNotifications } from "../hooks/useGlobalNotifications";
 import { saveActiveAccount, getActiveAccount } from "../utils/accountStorage";
 import { clearConversationNotification } from "../registerSW";
+import { platformAlert } from "../platform/platformDialogs";
 import { supabaseClient } from "../api/supabaseClient";
 import { filterContactsBySearch } from "../utils/contactSearch";
 import {
@@ -220,7 +221,7 @@ export default function InboxPage() {
         setMetaBlockModal(null);
       } catch (error) {
         const detail = error.response?.data?.detail;
-        alert(
+        await platformAlert(
           typeof detail === "string"
             ? detail
             : Array.isArray(detail)
@@ -642,7 +643,7 @@ export default function InboxPage() {
       }
     } catch (error) {
       console.error("Error deleting group:", error);
-      alert(error.response?.data?.detail || "Erreur lors de la suppression");
+      await platformAlert(error.response?.data?.detail || "Erreur lors de la suppression");
     }
   };
 
@@ -725,12 +726,12 @@ export default function InboxPage() {
 
   const handleCreateCampaignFromContacts = useCallback(async () => {
     if (!activeAccount) {
-      alert("Aucun compte WhatsApp actif. Veuillez sélectionner un compte.");
+      await platformAlert("Aucun compte WhatsApp actif. Veuillez sélectionner un compte.");
       return;
     }
 
     if (selectedContacts.size === 0) {
-      alert("Veuillez sélectionner au moins un contact.");
+      await platformAlert("Veuillez sélectionner au moins un contact.");
       return;
     }
 
@@ -772,10 +773,10 @@ export default function InboxPage() {
       setSelectedGroup(newGroup);
       setFilter("groups");
 
-      alert(`Campagne créée avec ${contactObjects.length} contact(s) !`);
+      await platformAlert(`Campagne créée avec ${contactObjects.length} contact(s) !`);
     } catch (error) {
       console.error("Error creating campaign:", error);
-      alert(error.response?.data?.detail || "Erreur lors de la création de la campagne");
+      await platformAlert(error.response?.data?.detail || "Erreur lors de la création de la campagne");
     }
   }, [activeAccount, selectedContacts, contacts, loadBroadcastGroups]);
 
@@ -1153,7 +1154,7 @@ export default function InboxPage() {
                             }
                           } catch (error) {
                             const errorMsg = error.response?.data?.detail || error.message || "Erreur inconnue";
-                            alert(`Impossible de créer la conversation: ${errorMsg}`);
+                            await platformAlert(`Impossible de créer la conversation: ${errorMsg}`);
                           }
                         }
                       }

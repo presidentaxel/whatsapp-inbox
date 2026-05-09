@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { FiArrowLeft, FiSave, FiX } from "react-icons/fi";
 import { createContact } from "../../api/contactsApi";
+import { platformAlert } from "../../platform/platformDialogs";
 
 export default function MobileContactForm({ onBack, onCreated }) {
   const [displayName, setDisplayName] = useState("");
@@ -11,7 +12,7 @@ export default function MobileContactForm({ onBack, onCreated }) {
     e.preventDefault();
     
     if (!whatsappNumber.trim()) {
-      alert("Le numéro WhatsApp est requis");
+      await platformAlert("Le numéro WhatsApp est requis");
       return;
     }
 
@@ -28,7 +29,7 @@ export default function MobileContactForm({ onBack, onCreated }) {
     } catch (error) {
       console.error("Erreur lors de la création du contact:", error);
       const message = error.response?.data?.detail || "Erreur lors de la création du contact";
-      alert(message);
+      await platformAlert(message);
     } finally {
       setLoading(false);
     }

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { FiArrowLeft, FiShield, FiCheck, FiTrash2, FiSearch } from "react-icons/fi";
 import { api } from '../../api/axiosClient';
 import '../../styles/mobile-team-panel.css';
+import { platformAlert, platformConfirm } from '../../platform/platformDialogs';
 
 export default function MobileTeamPanel({ onBack }) {
   const [users, setUsers] = useState([]);
@@ -60,7 +61,7 @@ export default function MobileTeamPanel({ onBack }) {
       await loadData();
     } catch (error) {
       console.error('Error updating user status:', error);
-      alert('Erreur lors de la mise à jour du statut');
+      await platformAlert('Erreur lors de la mise à jour du statut');
     }
   };
 
@@ -72,14 +73,16 @@ export default function MobileTeamPanel({ onBack }) {
       await loadData();
     } catch (error) {
       console.error('Error updating user roles:', error);
-      alert('Erreur lors de la mise à jour des rôles');
+      await platformAlert('Erreur lors de la mise à jour des rôles');
     }
   };
 
   const handleDeleteUser = async (userId) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.')) {
-      return;
-    }
+    const ok = await platformConfirm(
+      'Êtes-vous sûr de vouloir supprimer cet utilisateur ? Cette action est irréversible.',
+      { variant: 'danger', confirmLabel: 'Supprimer' }
+    );
+    if (!ok) return;
     try {
       await api.delete(`/admin/users/${userId}`);
       await loadData();
@@ -87,9 +90,9 @@ export default function MobileTeamPanel({ onBack }) {
     } catch (error) {
       console.error('Error deleting user:', error);
       if (error.response?.data?.detail === 'cannot_delete_self') {
-        alert('Vous ne pouvez pas vous supprimer vous-même');
+        await platformAlert('Vous ne pouvez pas vous supprimer vous-même');
       } else {
-        alert('Erreur lors de la suppression de l\'utilisateur');
+        await platformAlert('Erreur lors de la suppression de l\'utilisateur');
       }
     }
   };

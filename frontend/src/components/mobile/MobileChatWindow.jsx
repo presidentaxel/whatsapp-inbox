@@ -8,6 +8,7 @@ import MobileMessageInput from "./MobileMessageInput";
 import { formatPhoneNumber } from "../../utils/formatPhone";
 import MobileContactDetail from "./MobileContactDetail";
 import MobileChatSettings from "./MobileChatSettings";
+import { platformAlert } from "../../platform/platformDialogs";
 
 export default function MobileChatWindow({
   conversation,
@@ -520,8 +521,9 @@ export default function MobileChatWindow({
             </button>
             <button onClick={() => {
               setShowMenu(false);
-              // Nouveau groupe - à implémenter plus tard
-              alert("Nouveau groupe - Fonctionnalité à venir");
+              void (async () => {
+                await platformAlert("Nouveau groupe - Fonctionnalité à venir");
+              })();
             }}>
               <FiUsers /> Nouveau groupe
             </button>
@@ -553,7 +555,7 @@ export default function MobileChatWindow({
                   onRefresh?.();
                 } catch (error) {
                   console.error("Erreur mode humain:", error);
-                  alert("Erreur lors du changement de mode");
+                  await platformAlert("Erreur lors du changement de mode");
                 } finally {
                   setIsTogglingBot(false);
                 }
@@ -578,7 +580,7 @@ export default function MobileChatWindow({
                   onRefresh?.();
                 } catch (error) {
                   console.error("Erreur mode Gemini:", error);
-                  alert("Erreur lors du changement de mode");
+                  await platformAlert("Erreur lors du changement de mode");
                 } finally {
                   setIsTogglingBot(false);
                 }
@@ -603,7 +605,7 @@ export default function MobileChatWindow({
                   onRefresh?.();
                 } catch (error) {
                   console.error("Erreur mode Playground:", error);
-                  alert("Erreur lors du changement de mode");
+                  await platformAlert("Erreur lors du changement de mode");
                 } finally {
                   setIsTogglingBot(false);
                 }

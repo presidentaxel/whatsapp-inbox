@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FiArrowLeft, FiCheck } from 'react-icons/fi';
 import '../../styles/mobile-chat-settings.css';
+import { platformAlert, platformConfirm } from '../../platform/platformDialogs';
 
 export default function MobileChatSettings({ onBack }) {
   const [theme, setTheme] = useState(localStorage.getItem('chatTheme') || 'default');
@@ -149,10 +150,13 @@ export default function MobileChatSettings({ onBack }) {
           <div className="mobile-chat-settings__action">
             <span>Effacer toutes les discussions</span>
             <button className="mobile-chat-settings__action-btn" onClick={() => {
-              if (confirm('Êtes-vous sûr de vouloir effacer toutes les discussions ? Cette action est irréversible.')) {
-                // TODO: Implémenter l'effacement des discussions
-                alert('Fonctionnalité à implémenter');
-              }
+              void (async () => {
+                const ok = await platformConfirm(
+                  'Êtes-vous sûr de vouloir effacer toutes les discussions ? Cette action est irréversible.',
+                  { variant: 'danger', confirmLabel: 'Effacer' }
+                );
+                if (ok) await platformAlert('Fonctionnalité à implémenter');
+              })();
             }}>
               Effacer
             </button>

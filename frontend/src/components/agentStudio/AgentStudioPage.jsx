@@ -25,6 +25,7 @@ import {
   PolicySection,
   TestsSection,
 } from "./AgentStudioSections";
+import { platformConfirm } from "../../platform/platformDialogs";
 
 import "./agentStudio.css";
 
@@ -206,12 +207,11 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
       if (!item?.id || !accountId) return;
       const label = agentSidebarLabel(item.config);
       // Confirmation utilisateur : suppression définitive (cascade SQL côté backend).
-      if (typeof window !== "undefined" && typeof window.confirm === "function") {
-        const ok = window.confirm(
-          `Supprimer définitivement l'agent « ${label} » ? Cette action est irréversible.`
-        );
-        if (!ok) return;
-      }
+      const ok = await platformConfirm(
+        `Supprimer définitivement l'agent « ${label} » ? Cette action est irréversible.`,
+        { variant: "danger", confirmLabel: "Supprimer" }
+      );
+      if (!ok) return;
       setStatus("");
       try {
         await deleteAgentStudioConfig(item.id);

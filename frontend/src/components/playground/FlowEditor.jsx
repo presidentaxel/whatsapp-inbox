@@ -27,6 +27,7 @@ import {
   duplicatePlaygroundFlow,
   pastePlaygroundSubgraph,
 } from "../../api/playgroundFlowsApi";
+import { platformConfirm } from "../../platform/platformDialogs";
 import {
   PatchNodeContext,
   DeleteNodeContext,
@@ -765,7 +766,11 @@ function FlowEditorInner({ accountId }) {
 
   const removeCurrentFlow = useCallback(async () => {
     if (!activeFlowId || flowsList.length <= 1) return;
-    if (!window.confirm("Supprimer ce flux ?")) return;
+    const ok = await platformConfirm("Supprimer ce flux ?", {
+      variant: "danger",
+      confirmLabel: "Supprimer",
+    });
+    if (!ok) return;
     try {
       await deletePlaygroundFlow(activeFlowId);
       const next = flowsList.filter((f) => f.id !== activeFlowId)[0];

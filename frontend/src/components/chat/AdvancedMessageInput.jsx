@@ -7,6 +7,7 @@ import { useTheme } from "../../hooks/useTheme";
 import TemplateVariablesModal from "./TemplateVariablesModal";
 import { hasTemplateVariables } from "../../utils/templateVariables";
 import { devLog } from "../../utils/devLog";
+import { platformAlert } from "../../platform/platformDialogs";
 
 export default function AdvancedMessageInput({ conversation, onSend, disabled = false, editingMessage = null, onCancelEdit, accountId = null, messages = [], replyingToMessage = null, onCancelReply = null }) {
   const [text, setText] = useState("");
@@ -437,17 +438,17 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       const errorData = error.response?.data;
       if (errorData?.detail?.errors) {
         console.error("❌ [FRONTEND] Erreurs de validation:", errorData.detail.errors);
-        alert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
+        await platformAlert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
       } else if (errorData?.detail?.message) {
         console.error("❌ [FRONTEND] Message d'erreur:", errorData.detail.message);
-        alert(`Erreur: ${errorData.detail.message}`);
+        await platformAlert(`Erreur: ${errorData.detail.message}`);
       } else if (errorData?.detail) {
         // Si detail est une string directement
         console.error("❌ [FRONTEND] Erreur (string):", errorData.detail);
-        alert(`Erreur: ${errorData.detail}`);
+        await platformAlert(`Erreur: ${errorData.detail}`);
       } else {
         console.error("❌ [FRONTEND] Erreur inconnue:", error);
-        alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
+        await platformAlert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
       }
     }
   };
@@ -668,7 +669,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
         status: error.response?.status,
         url: error.config?.url
       });
-      alert(`Erreur lors de l'envoi du template: ${error.response?.data?.detail || error.message}`);
+      await platformAlert(`Erreur lors de l'envoi du template: ${error.response?.data?.detail || error.message}`);
       // Supprimer le message optimiste en cas d'erreur
       if (onSend) {
         onSend("", true); // Force refresh pour supprimer le message optimiste
@@ -704,7 +705,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     
     if (!conversation?.id) {
       console.error("No conversation ID");
-      alert("Aucune conversation sélectionnée");
+      await platformAlert("Aucune conversation sélectionnée");
       return;
     }
     
@@ -715,7 +716,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     if (!accountIdToUse) {
       console.error("Conversation object:", conversation);
       console.error("AccountId prop:", accountId);
-      alert("Impossible de déterminer le compte WhatsApp. Veuillez recharger la page.");
+      await platformAlert("Impossible de déterminer le compte WhatsApp. Veuillez recharger la page.");
       return;
     }
     
@@ -730,7 +731,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       
       if (!mediaId) {
         console.error("No media ID returned from upload");
-        alert("Erreur lors de l'upload du fichier. Aucun ID média retourné.");
+        await platformAlert("Erreur lors de l'upload du fichier. Aucun ID média retourné.");
         return;
       }
 
@@ -760,7 +761,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     } catch (error) {
       console.error("Erreur envoi média:", error);
       console.error("Error details:", error.response?.data || error.message);
-      alert(`Erreur lors de l'envoi du fichier: ${error.response?.data?.detail || error.message || "Erreur inconnue"}`);
+      await platformAlert(`Erreur lors de l'envoi du fichier: ${error.response?.data?.detail || error.message || "Erreur inconnue"}`);
     } finally {
       setUploading(false);
     }
@@ -833,7 +834,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     const validButtons = buttons.filter(b => b.id && b.title).slice(0, 3);
     devLog("🔘 [FRONTEND] Boutons valides:", validButtons);
     if (validButtons.length === 0) {
-      alert("Ajoutez au moins un bouton");
+      await platformAlert("Ajoutez au moins un bouton");
       return;
     }
 
@@ -915,13 +916,13 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       // Afficher les erreurs de validation si disponibles
       const errorData = error.response?.data;
       if (errorData?.detail?.errors) {
-        alert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
+        await platformAlert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
       } else if (errorData?.detail?.message) {
-        alert(`Erreur: ${errorData.detail.message}`);
+        await platformAlert(`Erreur: ${errorData.detail.message}`);
       } else if (errorData?.detail) {
-        alert(`Erreur: ${errorData.detail}`);
+        await platformAlert(`Erreur: ${errorData.detail}`);
       } else {
-        alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
+        await platformAlert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
       }
     }
   };
@@ -942,7 +943,7 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
     
     devLog("📋 [FRONTEND] Sections valides:", validSections);
     if (validSections.length === 0) {
-      alert("Ajoutez au moins une section avec des lignes");
+      await platformAlert("Ajoutez au moins une section avec des lignes");
       return;
     }
 
@@ -1024,13 +1025,13 @@ export default function AdvancedMessageInput({ conversation, onSend, disabled = 
       // Afficher les erreurs de validation si disponibles
       const errorData = error.response?.data;
       if (errorData?.detail?.errors) {
-        alert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
+        await platformAlert(`Erreur de validation:\n${errorData.detail.errors.join('\n')}`);
       } else if (errorData?.detail?.message) {
-        alert(`Erreur: ${errorData.detail.message}`);
+        await platformAlert(`Erreur: ${errorData.detail.message}`);
       } else if (errorData?.detail) {
-        alert(`Erreur: ${errorData.detail}`);
+        await platformAlert(`Erreur: ${errorData.detail}`);
       } else {
-        alert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
+        await platformAlert(`Erreur lors de l'envoi: ${error.message || "Erreur inconnue"}`);
       }
     }
   };
