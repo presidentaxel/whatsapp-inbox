@@ -1694,7 +1694,12 @@ _TEMPLATE_STATUS_ALLOWED = frozenset(
 
 
 _PENDING_USER_CONFIRM_SKILLS = frozenset(
-    {"create_template", "meta_block_contact", "upsert_agent_studio_config"}
+    {
+        "create_template",
+        "meta_block_contact",
+        "upsert_agent_studio_config",
+        "upsert_agent_studio_routing",
+    }
 )
 
 
@@ -1826,7 +1831,7 @@ async def generate_playground_assist_reply(
                 return {
                     "reply": (
                         "Seules les actions sensibles prévues (create_template, meta_block_contact, "
-                        "upsert_agent_studio_config) peuvent être confirmées via ce flux."
+                        "upsert_agent_studio_config, upsert_agent_studio_routing) peuvent être confirmées via ce flux."
                     ),
                     "graph": None,
                     "todo": None,

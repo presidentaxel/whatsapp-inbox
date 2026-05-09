@@ -459,7 +459,7 @@ async def axelia_chat(
     approve_only = bool(body.approve_tool_calls) and not txt and not has_att
 
     # Une discussion lancée en « Tous les comptes » peut viser une ligne précise au moment
-    # de la confirmation d'une action sensible (ex. upsert_agent_studio_config) sans qu'on
+    # de la confirmation d'une action sensible (ex. upsert_agent_studio_config / upsert_agent_studio_routing) sans qu'on
     # force l'utilisateur à recréer un fil : on accepte l'override si le contexte stocké
     # est `__all__` et que l'utilisateur a accès à la ligne demandée (déjà vérifié plus haut).
     conv_ctx = conv.get("account_context") or _AXELIA_CONTEXT_ALL

@@ -411,6 +411,7 @@ _AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
     "list_agent_studio_configs": ("Agent Studio", "Je liste les agents configurés sur la ligne…"),
     "get_agent_studio_config": ("Agent Studio", "Je charge la configuration détaillée de l’agent…"),
     "upsert_agent_studio_config": ("Agent Studio", "Je prépare la configuration de l’agent pour validation…"),
+    "upsert_agent_studio_routing": ("Règles Agent Studio", "Je prépare la mise à jour du routage (intents / règles) pour validation…"),
 }
 
 
@@ -1523,7 +1524,7 @@ async def _run_axelia_with_tools(
                 creates.append(tc)
             elif sn == "meta_block_contact":
                 blocks.append(tc)
-            elif sn == "upsert_agent_studio_config":
+            elif sn in ("upsert_agent_studio_config", "upsert_agent_studio_routing"):
                 studio_updates.append(tc)
             else:
                 raise ValueError("invalid_approve_tool_calls")

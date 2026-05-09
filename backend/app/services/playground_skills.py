@@ -528,6 +528,46 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
         ),
     },
     {
+        "name": "upsert_agent_studio_routing",
+        "description": (
+            "Met à jour la partie **règles / routage** d’un agent Studio existant (brouillon ou non) : "
+            "intentions (`intents` : key, handler, description, min_confidence optionnel), "
+            "stratégie de **fallback** (`human` | `safe_reply` | `ask_clarification`), "
+            "**seuil de confiance**, liste **forbidden_actions**. "
+            "Nécessite un `config_id` existant. "
+            "Action sensible : exécution uniquement après confirmation dans l’UI ; "
+            "validation serveur identique à Agent Studio."
+        ),
+        "parameters": [
+            {"name": "config_id", "type": "string", "required": True},
+            {"name": "account_id", "type": "string", "required": False},
+            {"name": "intents", "type": "array", "required": False},
+            {
+                "name": "replace_intents",
+                "type": "boolean",
+                "required": False,
+            },
+            {
+                "name": "fallback",
+                "type": "string",
+                "required": False,
+            },
+            {
+                "name": "confidence_threshold",
+                "type": "number",
+                "required": False,
+            },
+            {"name": "forbidden_actions", "type": "array", "required": False},
+        ],
+        "use_when": (
+            "l’utilisateur veut ajouter ou modifier des intentions (« si le client dit X… »), "
+            "le fallback, le seuil de confiance ou les actions interdites ; "
+            "après `list_agent_studio_configs` ou `get_agent_studio_config` pour obtenir `config_id`. "
+            "`replace_intents` true (défaut) remplace toute la liste ; false fusionne par `key`. "
+            "En périmètre multi-comptes, passe `account_id` comme pour upsert_agent_studio_config."
+        ),
+    },
+    {
         "name": "upsert_agent_studio_config",
         "description": (
             "Crée ou met à jour une configuration Agent Studio pour une ligne WABA précise. "
@@ -586,7 +626,8 @@ def get_axelia_skills_prompt_section() -> str:
         'Chaque entrée de tool_calls : {"skill": "nom_du_skill", "args": { ... } }',
         "Le backend exécute les skills et te renvoie les résultats dans un message suivant.",
         "Ne devine pas les noms de templates, groupes ou UUID : appelle les skills.",
-        "Pour create_template, meta_block_contact et upsert_agent_studio_config : confirmation utilisateur obligatoire dans l’UI "
+        "Pour create_template, meta_block_contact, upsert_agent_studio_config et upsert_agent_studio_routing : "
+        "confirmation utilisateur obligatoire dans l’UI "
         "(tu inclus tool_calls avec les args ; tu n’exécutes pas toi‑même l’action sensible).",
         "Tu agis dans le périmètre décrit dans le bloc « CONTEXTE PÉRIMÈTRE CRM » du prompt système. "
         "Si une **ligne unique** est sélectionnée, les outils inbox utilisent ce compte. "
@@ -663,8 +704,10 @@ def get_axelia_skills_prompt_section() -> str:
         "les agents (résumé par ligne ; account_scope=all_accessible ou account_id explicite en mode multi-comptes) ; "
         "`get_agent_studio_config` pour la fiche complète + anomalies de validation quand tu as un config_id UUID. "
         "**Ne dis pas** que tu ne peux pas lister ou lire les configurations si l'utilisateur a l'accès Studio.",
-        "- Agent Studio (écriture) : upsert_agent_studio_config crée/met à jour l'agent en **mode brouillon (draft)** "
-        "uniquement (deployment.status='draft' par défaut côté serveur) - aucun déploiement automatique. "
+        "- Agent Studio (écriture) : upsert_agent_studio_config crée/met à jour l'en-tête (objectif, outils…) en **brouillon** ; "
+            "upsert_agent_studio_routing met à jour les **règles de routage** (intents, fallback, seuil, forbidden_actions) "
+            "sur un config_id existant — même **carte de confirmation**, aucun déploiement auto "
+            "(deployment.status inchangé sauf si déjà défini côté UI). "
         "En mode « Tous les comptes », si une ligne WABA précise est identifiable (nom, UUID dans le bloc périmètre), "
         "passe son `account_id` dans les args : ne demande PAS à l'utilisateur de changer le sélecteur en haut "
         "de l'écran avant de valider, la carte d'approbation utilisera ce `account_id` directement. "
@@ -1760,6 +1803,177 @@ async def _skill_get_agent_studio_config(
     }
 
 
+_FALLBACK_ROUTING_VALUES = frozenset({"human", "safe_reply", "ask_clarification"})
+_MAX_AGENT_STUDIO_INTENTS = 100
+
+
+async def _skill_upsert_agent_studio_routing(
+    args: Dict[str, Any],
+    account: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Met à jour routing + forbidden_actions ; exécuté après confirmation UI (comme upsert_agent_studio_config)."""
+    from app.services.agent_studio_service import (
+        get_agent_config,
+        normalize_agent_config,
+        update_agent_config,
+        validate_agent_config,
+    )
+
+    rt = _axelia_rt()
+    user = rt.acting_user if rt else None
+    if not user:
+        return {"error": "Contexte utilisateur indisponible."}
+
+    aid = str(args.get("account_id") or "").strip() or str(account.get("id") or "").strip()
+    if not aid:
+        return {
+            "error": (
+                "Sélectionne une ligne WABA ou passe `account_id` (UUID) pour modifier les règles Agent Studio."
+            )
+        }
+    user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
+
+    cfg_id = str(args.get("config_id") or "").strip()
+    if not cfg_id:
+        return {"error": "config_id requis (UUID de l'agent Studio à modifier)."}
+
+    patch_intents = "intents" in args
+    patch_fallback = "fallback" in args
+    patch_threshold = "confidence_threshold" in args or "confidenceThreshold" in args
+    patch_forbidden = "forbidden_actions" in args or "forbiddenActions" in args
+
+    if not (patch_intents or patch_fallback or patch_threshold or patch_forbidden):
+        return {
+            "error": (
+                "Indique au moins un champ parmi : intents, fallback, confidence_threshold, forbidden_actions."
+            )
+        }
+
+    row = await get_agent_config(cfg_id)
+    if not row:
+        return {"error": "config_id introuvable."}
+    if str(row.get("account_id") or "") != aid:
+        return {"error": "config_id n'appartient pas au compte actif."}
+
+    base_cfg = normalize_agent_config(row.get("config") or {})
+    routing = dict(base_cfg.get("routing") or {})
+
+    if patch_fallback:
+        fb = str(args.get("fallback") or "").strip()
+        if fb not in _FALLBACK_ROUTING_VALUES:
+            return {
+                "error": (
+                    "fallback invalide ; utiliser human, safe_reply ou ask_clarification."
+                )
+            }
+        routing["fallback"] = fb
+
+    if patch_threshold:
+        ct_raw = args.get("confidence_threshold")
+        if ct_raw is None:
+            ct_raw = args.get("confidenceThreshold")
+        try:
+            ctf = float(ct_raw)
+        except (TypeError, ValueError):
+            return {"error": "confidence_threshold doit être un nombre."}
+        if not (0.0 < ctf <= 1.0):
+            return {"error": "confidence_threshold doit être dans l'intervalle ]0, 1]."}
+        routing["confidence_threshold"] = ctf
+
+    if patch_intents:
+        raw_list = args.get("intents")
+        if not isinstance(raw_list, list):
+            return {
+                "error": "intents doit être une liste d'objets {key, handler, description?, min_confidence?}.",
+            }
+        if len(raw_list) > _MAX_AGENT_STUDIO_INTENTS:
+            return {"error": f"Trop d'intents (max {_MAX_AGENT_STUDIO_INTENTS})."}
+        new_intents: List[Dict[str, Any]] = []
+        for i, item in enumerate(raw_list):
+            if not isinstance(item, dict):
+                return {"error": f"intent_{i}_invalid : entrée non objet."}
+            key = str(item.get("key") or "").strip()
+            handler = str(item.get("handler") or "").strip()
+            desc = str(item.get("description") or "").strip()
+            if len(key) > 80 or len(handler) > 120:
+                return {"error": f"intent_{i} : key (max 80) ou handler (max 120) trop long."}
+            mc = item.get("min_confidence")
+            mc_out: Optional[float] = None
+            if mc is not None and mc != "":
+                try:
+                    mcf = float(mc)
+                    if not (0.0 <= mcf <= 1.0):
+                        return {"error": f"intent_{i} : min_confidence doit être dans [0, 1]."}
+                    mc_out = mcf
+                except (TypeError, ValueError):
+                    return {"error": f"intent_{i} : min_confidence invalide."}
+            ent: Dict[str, Any] = {"key": key, "handler": handler, "description": desc}
+            if mc_out is not None:
+                ent["min_confidence"] = mc_out
+            new_intents.append(ent)
+
+        replace_raw = args.get("replace_intents")
+        if replace_raw is None:
+            replace_raw = args.get("replaceIntents")
+        replace_b = True if replace_raw is None else bool(replace_raw)
+
+        if replace_b:
+            routing["intents"] = new_intents
+        else:
+            by_key: Dict[str, Dict[str, Any]] = {}
+            for x in routing.get("intents") or []:
+                if isinstance(x, dict):
+                    k = str(x.get("key") or "").strip()
+                    if k:
+                        by_key[k] = dict(x)
+            for ni in new_intents:
+                k = str(ni.get("key") or "").strip()
+                if k:
+                    by_key[k] = ni
+            routing["intents"] = list(by_key.values())
+
+    if patch_forbidden:
+        fa_raw = args.get("forbidden_actions")
+        if fa_raw is None:
+            fa_raw = args.get("forbiddenActions")
+        if not isinstance(fa_raw, list):
+            return {"error": "forbidden_actions doit être une liste de chaînes."}
+        policies = dict(base_cfg.get("policies") or {})
+        policies["forbidden_actions"] = [str(x).strip() for x in fa_raw if str(x).strip()]
+        base_cfg["policies"] = policies
+
+    base_cfg["routing"] = routing
+
+    normalized = normalize_agent_config(base_cfg)
+    issues = validate_agent_config(normalized)
+    blocking = [i for i in issues if i.get("severity") == "error"]
+    if blocking:
+        return {
+            "error": "Validation Agent Studio en erreur (routage / politiques).",
+            "issues": blocking,
+            "hint": (
+                "Vérifie les intents (clés uniques, handler non vide), le seuil ]0,1], "
+                "et la cohérence forbidden_actions vs require_approval_for."
+            ),
+        }
+
+    saved = await update_agent_config(cfg_id, normalized, user.id)
+    if not saved:
+        return {"error": "Impossible de sauvegarder les règles Agent Studio."}
+
+    saved_cfg = saved.get("config") if isinstance(saved.get("config"), dict) else {}
+    return {
+        "ok": True,
+        "config_id": saved.get("id"),
+        "account_id": saved.get("account_id"),
+        "routing": saved_cfg.get("routing"),
+        "policies_summary": {
+            "forbidden_actions": (saved_cfg.get("policies") or {}).get("forbidden_actions"),
+        },
+        "warnings": [i for i in issues if i.get("severity") != "error"],
+    }
+
+
 async def _skill_upsert_agent_studio_config(
     args: Dict[str, Any],
     account: Dict[str, Any],
@@ -1928,6 +2142,7 @@ _SKILL_HANDLERS = {
     "get_whatsapp_business_profile": _skill_get_whatsapp_business_profile,
     "list_agent_studio_configs": _skill_list_agent_studio_configs,
     "get_agent_studio_config": _skill_get_agent_studio_config,
+    "upsert_agent_studio_routing": _skill_upsert_agent_studio_routing,
     "upsert_agent_studio_config": _skill_upsert_agent_studio_config,
     "meta_block_contact": _skill_meta_block_contact_stub,
 }

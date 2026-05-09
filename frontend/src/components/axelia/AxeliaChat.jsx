@@ -66,6 +66,12 @@ export const AXELIA_RESPONSE_DEPTHS = [
   { id: "expert", label: "Expert" },
 ];
 
+/** Skills Agent Studio soumis à carte de confirmation (multi-comptes : account_id dans les args). */
+const AGENT_STUDIO_CONFIRM_SKILLS = new Set([
+  "upsert_agent_studio_config",
+  "upsert_agent_studio_routing",
+]);
+
 const SKILL_LABELS = {
   list_templates: "Templates consultés",
   get_template_status: "Statut template vérifié",
@@ -84,6 +90,7 @@ const SKILL_LABELS = {
   get_whatsapp_business_profile: "Profil WhatsApp Business",
   meta_block_contact: "Blocage Meta (confirmation)",
   upsert_agent_studio_config: "Agent Studio (confirmation)",
+  upsert_agent_studio_routing: "Règles Agent Studio (confirmation)",
 };
 
 /** Libellés affichés pendant la génération (skill courant). */
@@ -105,6 +112,7 @@ const SKILL_RUNNING_LABELS = {
   get_whatsapp_business_profile: "Lecture du profil WhatsApp Business…",
   meta_block_contact: "Préparation du blocage Meta…",
   upsert_agent_studio_config: "Preparation de l'agent Studio…",
+  upsert_agent_studio_routing: "Mise à jour des règles de routage Studio…",
 };
 
 const PHASE_LABELS = {
@@ -206,7 +214,7 @@ function describePendingToolCalls(calls, accountsById = {}) {
   const names = calls.map((tc) => tc.skill || tc.name || "");
   const hasTpl = names.some((n) => n === "create_template");
   const hasBlock = names.some((n) => n === "meta_block_contact");
-  const hasStudio = names.some((n) => n === "upsert_agent_studio_config");
+  const hasStudio = names.some((n) => AGENT_STUDIO_CONFIRM_SKILLS.has(n));
   let title = "Action à confirmer";
   if ((hasTpl && hasBlock) || (hasTpl && hasStudio) || (hasBlock && hasStudio)) title = "Actions à confirmer";
   else if (hasTpl) title = "Création de template sur Meta";
@@ -235,6 +243,26 @@ function describePendingToolCalls(calls, accountsById = {}) {
         : null;
       const target = accountLabel ? ` pour « ${accountLabel} »` : "";
       return `${mode} l'agent Studio « ${label} »${target} (mode brouillon)`;
+    }
+    if (name === "upsert_agent_studio_routing") {
+      const cid = args.config_id || "?";
+      const nIntents = Array.isArray(args.intents) ? args.intents.length : null;
+      const bits = [];
+      if (nIntents !== null) bits.push(`${nIntents} intention(s)`);
+      if (args.fallback != null && String(args.fallback).trim())
+        bits.push(`fallback ${String(args.fallback).trim()}`);
+      if (
+        args.confidence_threshold != null ||
+        args.confidenceThreshold != null
+      )
+        bits.push("seuil confiance");
+      if (
+        Array.isArray(args.forbidden_actions) ||
+        Array.isArray(args.forbiddenActions)
+      )
+        bits.push("actions interdites");
+      const detail = bits.length ? bits.join(", ") : "routage";
+      return `Mettre à jour les règles Studio (config ${cid}) — ${detail}`;
     }
     return String(name);
   });
@@ -1142,7 +1170,7 @@ export default function AxeliaChat({
         skillNames.every((n) => n === "meta_block_contact");
       const onlyStudio =
         skillNames.length > 0 &&
-        skillNames.every((n) => n === "upsert_agent_studio_config");
+        skillNames.every((n) => AGENT_STUDIO_CONFIRM_SKILLS.has(n));
       setError(
         onlyBlocks
           ? "Choisis un compte WABA pour confirmer le blocage Meta."
