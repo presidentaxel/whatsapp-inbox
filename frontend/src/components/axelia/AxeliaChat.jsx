@@ -262,7 +262,7 @@ function describePendingToolCalls(calls, accountsById = {}) {
       )
         bits.push("actions interdites");
       const detail = bits.length ? bits.join(", ") : "routage";
-      return `Mettre à jour les règles Studio (config ${cid}) — ${detail}`;
+      return `Mettre à jour les règles Studio (config ${cid}) - ${detail}`;
     }
     return String(name);
   });

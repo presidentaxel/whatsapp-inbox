@@ -399,7 +399,7 @@ export default function AgentStudioPage({ accountId, accounts, onAccountChange, 
               setActiveId(null);
               writePersistedActiveId(accountId, null);
               setConfig(createDefaultAgentStudioConfig());
-              setStatus("Nouveau brouillon local — Enregistrer créera un nouvel agent.");
+              setStatus("Nouveau brouillon local - Enregistrer créera un nouvel agent.");
             }}
             disabled={!canWrite}
           >

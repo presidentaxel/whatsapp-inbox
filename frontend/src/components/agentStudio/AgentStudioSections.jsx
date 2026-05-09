@@ -234,6 +234,15 @@ export function TestsSection({
           Simuler
         </button>
       </div>
+      <p className="agent-studio__help-text">
+        La simulation applique une <strong>règle simple</strong> (pas le LLM) : pour chaque ligne dans
+        « Intentions » (onglet Règles), soit la <strong>clé</strong> apparaît dans le message du client
+        (texte en minuscules), soit un <strong>mot de la description</strong> (plus de 3 lettres) est
+        trouvé dans le message. Si <strong>aucune intention</strong> ne correspond - ou si la liste est
+        vide - le résultat est toujours <code>fallback</code> avec la stratégie configurée (ex.{' '}
+        <code>human</code>). « Bonjour » sans intention qui matche retombe donc sur le fallback : ce n'est
+        pas une panne du simulateur.
+      </p>
       {simulateResult ? (
         <pre className="agent-studio__pre">{JSON.stringify(simulateResult, null, 2)}</pre>
       ) : null}

@@ -18,7 +18,7 @@ def test_normalize_agent_config_merges_defaults():
 
 
 def test_normalize_agent_config_parses_json_string():
-    """Colonne jsonb parfois relue comme chaîne JSON — ne doit pas effacer le contenu."""
+    """Colonne jsonb parfois relue comme chaîne JSON - ne doit pas effacer le contenu."""
     blob = '{"name": "Agent SAV", "objective": {"primary_goal": "SAV", "kpi": [], "audience": null}}'
     cfg = normalize_agent_config(blob)
     assert cfg["name"] == "Agent SAV"

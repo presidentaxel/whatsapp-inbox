@@ -601,7 +601,7 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             "Pour un **profil brouillon complet** (comportement par défaut attendu) : dans la même "
             "session, après validation utilisateur, enchaîne avec `upsert_agent_studio_routing` "
             "(intents représentatifs des scénarios clients, fallback, seuil de confiance, "
-            "forbidden_actions si pertinent) — soit dans le tour suivant après création, soit "
+            "forbidden_actions si pertinent) - soit dans le tour suivant après création, soit "
             "plusieurs tool_calls si le modèle peut tout préparer d'un coup (chaque écriture sensible "
             "reste soumise à carte de confirmation). "
             "Renseigne aussi `kpi` et une `audience` claire quand tu as le contexte ; choisis "
@@ -709,7 +709,7 @@ def get_axelia_skills_prompt_section() -> str:
         "summarize_contact_inbox (all_accessible pour toutes les lignes permises).",
         "- Blocage Meta : meta_block_contact seulement avec contact_id réel ; jamais sans confirmation UI.",
         "- Profil agent Axelia (comportement par défaut) : pour une création ou refonte, viser un **brouillon "
-        "complet** — objectif + audience + outils dans `upsert_agent_studio_config`, puis règles de routage "
+        "complet** - objectif + audience + outils dans `upsert_agent_studio_config`, puis règles de routage "
         "(intents, fallback, seuil, actions interdites si utile) via `upsert_agent_studio_routing` ; "
         "rappelle l’onglet **Tests** dans Agent Studio avant activation / canary en prod. "
         "- Agent Studio (lecture, sans carte de confirmation) : `list_agent_studio_configs` pour inventorier "
@@ -718,7 +718,7 @@ def get_axelia_skills_prompt_section() -> str:
         "**Ne dis pas** que tu ne peux pas lister ou lire les configurations si l'utilisateur a l'accès Studio.",
         "- Agent Studio (écriture) : upsert_agent_studio_config crée/met à jour l'en-tête (objectif, outils…) en **brouillon** ; "
             "upsert_agent_studio_routing met à jour les **règles de routage** (intents, fallback, seuil, forbidden_actions) "
-            "sur un config_id existant — même **carte de confirmation**, aucun déploiement auto "
+            "sur un config_id existant - même **carte de confirmation**, aucun déploiement auto "
             "(deployment.status inchangé sauf si déjà défini côté UI). "
         "En mode « Tous les comptes », si une ligne WABA précise est identifiable (nom, UUID dans le bloc périmètre), "
         "passe son `account_id` dans les args : ne demande PAS à l'utilisateur de changer le sélecteur en haut "

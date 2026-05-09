@@ -245,7 +245,7 @@ async def post_deploy_pause(
         raise HTTPException(status_code=404, detail="config_not_found")
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     try:
         release = await create_release(config_id, aid, "pause", current_user.id)
     except ValueError as exc:
@@ -264,7 +264,7 @@ async def post_deploy_rollback(
         raise HTTPException(status_code=404, detail="config_not_found")
     aid = str(row["account_id"])
     current_user.require(PermissionCodes.MESSAGES_SEND, aid)
-    current_user.require(PermissionCodes.PLAYGROUND_ACCESS, aid)
+    current_user.require(PermissionCodes.AGENT_STUDIO_ACCESS, aid)
     ok, code = await rollback_release(config_id, release_id, current_user.id)
     if not ok:
         st = 404 if code in ("config_not_found", "release_not_found") else 400

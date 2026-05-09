@@ -354,3 +354,11 @@
   font-weight: 600;
 }
 
+.agent-studio__help-text code {
+  font-size: 12px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--studio-surface-soft);
+  border: 1px solid var(--studio-border);
+}
+
