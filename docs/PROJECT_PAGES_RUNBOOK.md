@@ -12,6 +12,10 @@ La documentation est desormais structuree en **un document par page** dans `docs
 - `docs/pages/http-502.md`
 - `docs/pages/http-503.md`
 
+## Agent Studio (inbox, flags backend)
+
+- `docs/AGENT_STUDIO_RUNBOOK.md` — fiche agent, permissions, boucle outbound M2/M3, variables d’environnement, tests.
+
 ## Pages desktop
 
 - `docs/pages/desktop-discussions.md`

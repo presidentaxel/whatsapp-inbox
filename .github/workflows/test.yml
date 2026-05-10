@@ -44,6 +44,18 @@ jobs:
       - name: Lint with ruff
         run: ruff check app
 
+      - name: Run backend unit tests (pytest)
+        env:
+          SUPABASE_URL: https://mock.supabase.co
+          SUPABASE_KEY: mock_key_123456789012345678901234567890
+          WHATSAPP_TOKEN: mock_token
+          WHATSAPP_VERIFY_TOKEN: mock_verify_token
+          WHATSAPP_PHONE_ID: mock_phone_id
+          WHATSAPP_PHONE_NUMBER: +1234567890
+          GEMINI_API_KEY: mock_gemini_key
+          APP_ENV: test
+        run: pytest tests/ -q --tb=short
+
       # Vérification de format non bloquante tant que le legacy n'est pas
       # passé sous `ruff format`. À durcir une fois le repo nettoyé.
       - name: Format check (non blocking)
