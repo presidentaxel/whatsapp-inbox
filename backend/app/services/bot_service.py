@@ -606,6 +606,8 @@ def _format_agent_studio_inbox_playbook(
     tools_execution_mode: bool = False,
 ) -> str:
     """Bloc texte Agent Studio pour prompt + scoring de confiance (inbox, séparé du playbook bot_profiles)."""
+    from app.services.agent_studio_service import AGENT_STUDIO_NATIVE_HANDOFF_SKILL_PLAYBOOK
+
     name = str(cfg.get("name") or "Agent").strip()
     obj = cfg.get("objective") or {}
     primary = str(obj.get("primary_goal") or "").strip()
@@ -669,6 +671,8 @@ def _format_agent_studio_inbox_playbook(
             parts.append("### Outils (référence métier - ne pas invoquer depuis WhatsApp)")
         parts.extend(tool_lines)
         parts.append("")
+    parts.append(AGENT_STUDIO_NATIVE_HANDOFF_SKILL_PLAYBOOK)
+    parts.append("")
     return "\n".join(parts).strip()
 
 

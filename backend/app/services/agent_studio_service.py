@@ -32,6 +32,22 @@ ALLOWED_AGENT_TOOLS = frozenset(
 
 SENSITIVE_AGENT_TOOLS = frozenset({"create_template", "meta_block_contact"})
 
+# Toujours injecté dans le playbook inbox (WhatsApp) — tous les agents, même sans outils listés.
+AGENT_STUDIO_NATIVE_HANDOFF_SKILL_PLAYBOOK = """
+### Skill natif (tous agents) : transfert / escalade humaine sur WhatsApp
+
+Tu n’as **aucun bouton** ni API côté client : le **serveur** applique l’escalade **après** ton message, dès qu’au moins une condition est vraie :
+- l’indication **Routage** ci-dessus associe ce message à un intent en **handler humain** ;
+- **ou** ton texte **annonce clairement** un passage à un humain (formulations du type : « Je vous transfère… », « Je transfère votre demande… », « un collègue / conseiller prendra le relais… », « mise en relation avec… »).
+
+**À faire :** si le sujet dépasse ta fiche, si le client est en colère ou insiste, ou si la moindre erreur coûterait cher (juridique, financier, santé/sécurité, engagement contractuel), **dis-le simplement** et **formule une promesse de transfert explicite** en une ou deux phrases — le système enclenchera la file humaine côté ligne (notifications internes si configurées).
+
+**À ne pas faire :** ne promets **pas** un transfert immédiat si tu restes sur le cas toi-même ; dans ce cas, évite les tournures ci-dessus. Ne dis pas « je transfère » puis ne donne pas une formulation nette : une phrase ambiguë peut ne pas être détectée.
+
+**Cohérence fiche :** respecte les intents **human** et les actions interdites : pour ces sujets, **oriente et transfère** plutôt que d’argumenter longuement.
+""".strip()
+
+
 _metrics_lock = threading.Lock()
 _metrics_counters: Dict[str, int] = {
     "validate_calls": 0,

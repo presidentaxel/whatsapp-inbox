@@ -139,6 +139,23 @@ def test_agent_reply_suggests_human_handoff_false_when_short():
     assert not agent_reply_suggests_human_handoff("merci")
 
 
+def test_format_agent_studio_playbook_includes_native_handoff_skill():
+    from app.services.bot_service import _format_agent_studio_inbox_playbook
+
+    text = _format_agent_studio_inbox_playbook(
+        {
+            "name": "Agent test",
+            "objective": {"primary_goal": "Répondre aux clients"},
+            "routing": {"intents": [], "fallback": "safe_reply"},
+            "policies": {},
+            "capabilities": {"allowed_tools": []},
+        },
+        {"route": "fallback", "handler": "safe_reply", "confidence": 0.0},
+    )
+    assert "Skill natif" in text
+    assert "transfert" in text.lower()
+
+
 def test_validate_agent_config_rejects_unknown_tools():
     issues = validate_agent_config(
         {
