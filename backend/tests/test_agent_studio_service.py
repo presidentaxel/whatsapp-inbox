@@ -1,4 +1,5 @@
 from app.services.agent_studio_service import (
+    agent_reply_suggests_human_handoff,
     agent_route_hint_triggers_human_handoff,
     can_deploy_agent_config,
     map_config_to_runtime_graph,
@@ -118,6 +119,24 @@ def test_agent_route_hint_triggers_human_handoff_false_for_safe_reply():
     assert not agent_route_hint_triggers_human_handoff(
         {"route": "documents_administratifs", "handler": "safe_reply", "confidence": 0.72}
     )
+
+
+def test_agent_reply_suggests_human_handoff_transfer_to_colleague():
+    text = (
+        "Je comprends votre réaction. Je vous transfère à un collègue "
+        "qui pourra vous répondre plus en détail."
+    )
+    assert agent_reply_suggests_human_handoff(text)
+
+
+def test_agent_reply_suggests_human_handoff_false_on_negation():
+    assert not agent_reply_suggests_human_handoff(
+        "Je ne peux pas vous transférer pour le moment, merci de rappeler demain."
+    )
+
+
+def test_agent_reply_suggests_human_handoff_false_when_short():
+    assert not agent_reply_suggests_human_handoff("merci")
 
 
 def test_validate_agent_config_rejects_unknown_tools():

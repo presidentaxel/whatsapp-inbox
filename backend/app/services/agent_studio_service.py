@@ -363,6 +363,58 @@ def agent_route_hint_triggers_human_handoff(hint: Any) -> bool:
     return handler == "human"
 
 
+def agent_reply_suggests_human_handoff(text: Any) -> bool:
+    """
+    Détecte une promesse explicite de transfert / escalade humaine dans le message **envoyé au client**.
+
+    Complète ``agent_route_hint_triggers_human_handoff`` : le modèle peut annoncer un transfert alors que
+    ``simulate_agent_route`` ne matche aucune intention (message court, ton émotionnel, sujet implicite).
+    """
+    if not isinstance(text, str):
+        return False
+    t = text.strip().lower()
+    if len(t) < 12:
+        return False
+    negations = (
+        "ne vous transfère pas",
+        "ne pas vous transférer",
+        "pas de transfert",
+        "sans vous transférer",
+        "je ne peux pas transférer",
+        "je ne transfère pas",
+        "aucun transfert",
+        "ne transfère pas votre demande",
+    )
+    if any(n in t for n in negations):
+        return False
+    markers = (
+        "je vous transfère",
+        "je transfère votre demande",
+        "je transfère immédiatement",
+        "transfère votre demande",
+        "transfère vers un",
+        "transfère à un",
+        "transfert vers un",
+        "transfert à un",
+        "vous mets en relation",
+        "met en relation avec",
+        "mets en relation avec",
+        "mise en relation avec",
+        "un collègue qui pourra",
+        "un collègue pourra",
+        "un conseiller qui pourra",
+        "un conseiller pourra",
+        "prendre le relais",
+        "prenons le relais",
+        "conseiller humain",
+        "notre équipe pourra",
+        "équipe pourra vous",
+        "vous orienter vers un conseiller",
+        "orientation vers un conseiller",
+    )
+    return any(m in t for m in markers)
+
+
 def simulate_agent_route(config: Dict[str, Any], input_text: str) -> Dict[str, Any]:
     metrics_record("simulate_calls")
     cfg = normalize_agent_config(config)

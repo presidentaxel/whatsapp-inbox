@@ -2021,15 +2021,25 @@ async def _maybe_trigger_bot_reply(
             ai_confidence_reasons=confidence_reasons,
         )
     elif agent_mode:
-        from app.services.agent_studio_service import agent_route_hint_triggers_human_handoff
+        from app.services.agent_studio_service import (
+            agent_reply_suggests_human_handoff,
+            agent_route_hint_triggers_human_handoff,
+        )
 
-        if agent_route_hint_triggers_human_handoff((bot_payload or {}).get("agent_route_hint")):
-            rh = (bot_payload or {}).get("agent_route_hint") or {}
-            route_key = rh.get("route")
+        rh = (bot_payload or {}).get("agent_route_hint")
+        route_escalate = agent_route_hint_triggers_human_handoff(rh)
+        reply_escalate = agent_reply_suggests_human_handoff(reply)
+        if route_escalate or reply_escalate:
             ext_reasons = list(confidence_reasons or [])
-            ext_reasons.append(
-                f"Agent Studio: intention « {route_key} » avec escalade humaine (routage heuristique)."
-            )
+            if route_escalate:
+                route_key = (rh or {}).get("route")
+                ext_reasons.append(
+                    f"Agent Studio: intention « {route_key} » avec escalade humaine (routage heuristique)."
+                )
+            if reply_escalate:
+                ext_reasons.append(
+                    "Agent Studio: la réponse envoyée annonce un transfert vers un humain (détection texte)."
+                )
             await _escalate_to_human(
                 conversation,
                 message_text,
