@@ -1,4 +1,5 @@
 from app.services.agent_studio_service import (
+    agent_route_hint_triggers_human_handoff,
     can_deploy_agent_config,
     map_config_to_runtime_graph,
     metrics_reset_for_tests,
@@ -57,7 +58,13 @@ def test_map_config_to_runtime_graph_creates_expected_nodes():
     graph = map_config_to_runtime_graph(
         {
             "objective": {"primary_goal": "Traiter support niveau 1"},
-            "routing": {"fallback": "human", "intents": [{"key": "refund", "handler": "RefundAgent"}]},
+            "routing": {
+                "fallback": "human",
+                "intents": [
+                    {"key": "refund", "handler": "RefundAgent"},
+                    {"key": "facturation", "handler": "human"},
+                ],
+            },
         }
     )
     node_types = {n["type"] for n in graph["nodes"]}
@@ -65,6 +72,9 @@ def test_map_config_to_runtime_graph_creates_expected_nodes():
     assert "gemini" in node_types
     assert "handoffNode" in node_types
     assert graph["v"] == 2
+    handles = {e.get("sourceHandle") for e in graph["edges"]}
+    assert "fallback" in handles
+    assert "facturation" in handles
 
 
 def test_simulate_agent_route_matches_intent():
@@ -90,6 +100,24 @@ def test_simulate_agent_route_fallback_when_no_match():
     )
     assert out["route"] == "fallback"
     assert out["handler"] == "ask_clarification"
+
+
+def test_agent_route_hint_triggers_human_handoff_for_matched_intent():
+    assert agent_route_hint_triggers_human_handoff(
+        {"route": "facturation", "handler": "human", "confidence": 0.72}
+    )
+
+
+def test_agent_route_hint_triggers_human_handoff_false_for_fallback():
+    assert not agent_route_hint_triggers_human_handoff(
+        {"route": "fallback", "handler": "human", "confidence": 0.0}
+    )
+
+
+def test_agent_route_hint_triggers_human_handoff_false_for_safe_reply():
+    assert not agent_route_hint_triggers_human_handoff(
+        {"route": "documents_administratifs", "handler": "safe_reply", "confidence": 0.72}
+    )
 
 
 def test_validate_agent_config_rejects_unknown_tools():

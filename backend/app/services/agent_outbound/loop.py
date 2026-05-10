@@ -306,6 +306,7 @@ async def run_agent_outbound_inbox_gemini_with_tools(
     conversation_parts: List[Dict[str, Any]],
     qa_queries_used: List[str],
     qa_matches: List[Dict[str, Any]],
+    route_hint: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Génère une réponse inbox avec au plus un tour d’exécution d’outils, optionnellement une réflexion
@@ -313,6 +314,7 @@ async def run_agent_outbound_inbox_gemini_with_tools(
 
     Retour aligné sur ``generate_agent_studio_inbox_reply_with_confidence`` :
     ``reply``, ``confidence``, ``confidence_reasons``, ``qa_queries_used``,
+    ``agent_route_hint`` si ``route_hint`` est fourni,
     optionnellement ``agent_kernel_tools_used``, ``agent_outbound_reflection_used`` (M3).
     """
     from app.core.config import settings
@@ -324,15 +326,21 @@ async def run_agent_outbound_inbox_gemini_with_tools(
         "qa_queries_used": qa_queries_used,
     }
 
+    def _with_route(payload: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(payload)
+        if route_hint is not None:
+            out["agent_route_hint"] = route_hint
+        return out
+
     effective = build_effective_kernel_v1_allowlist(allowed_tools)
     if not effective:
         empty["confidence_reasons"] = ["Aucun outil noyau v1 disponible pour la configuration."]
-        return empty
+        return _with_route({**empty})
 
     specs, _rejected = build_agent_kernel_v1_catalog(allowed_tools)
     if not specs:
         empty["confidence_reasons"] = ["Catalogue outils agent vide après filtrage."]
-        return empty
+        return _with_route({**empty})
 
     catalog = _format_tool_catalog_for_system(specs)
     read_timeout = float(getattr(settings, "AGENT_OUTBOUND_GEMINI_READ_TIMEOUT_S", 45.0) or 45.0)
@@ -378,17 +386,17 @@ async def run_agent_outbound_inbox_gemini_with_tools(
     )
     if err1 or not data1:
         empty["confidence_reasons"] = [f"Erreur Gemini (tour outils): {err1 or 'empty'}."]
-        return empty
+        return _with_route({**empty})
 
     text1 = _extract_text_from_gemini(data1)
     if not text1:
         empty["confidence_reasons"] = ["Gemini n’a pas renvoyé de texte (tour outils)."]
-        return empty
+        return _with_route({**empty})
 
     parsed = parse_json_object(text1)
     if not parsed:
         empty["confidence_reasons"] = ["Réponse JSON Gemini illisible (tour outils)."]
-        return empty
+        return _with_route({**empty})
 
     tool_calls = normalize_agent_tool_calls_payload(parsed.get("tool_calls"))
     tools_used: List[str] = []
@@ -472,12 +480,12 @@ async def run_agent_outbound_inbox_gemini_with_tools(
     )
     if err2 or not data2:
         empty["confidence_reasons"] = [f"Erreur Gemini (synthèse): {err2 or 'empty'}."]
-        return empty
+        return _with_route({**empty})
 
     final_text = _extract_text_from_gemini(data2).strip()
     if not final_text:
         empty["confidence_reasons"] = ["Gemini n’a pas renvoyé de texte exploitable (synthèse)."]
-        return empty
+        return _with_route({**empty})
 
     confidence, reasons = _compute_reply_confidence(
         knowledge_text=agent_playbook,
@@ -509,4 +517,4 @@ async def run_agent_outbound_inbox_gemini_with_tools(
         tools_used,
         reflection_active,
     )
-    return out
+    return _with_route(out)

@@ -22,7 +22,7 @@ def test_parse_themes_markdown_fence():
 def test_parse_themes_preamble_and_balanced_extract():
     payload = {"themes": [], "methodology_note": "y"}
     inner = json.dumps(payload, ensure_ascii=False)
-    raw = "Sure — here is JSON.\n" + inner + "\nThanks."
+    raw = "Sure - here is JSON.\n" + inner + "\nThanks."
     assert _parse_themes_json_blob(raw) == payload
 
 

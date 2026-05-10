@@ -2020,6 +2020,23 @@ async def _maybe_trigger_bot_reply(
             ai_confidence=confidence,
             ai_confidence_reasons=confidence_reasons,
         )
+    elif agent_mode:
+        from app.services.agent_studio_service import agent_route_hint_triggers_human_handoff
+
+        if agent_route_hint_triggers_human_handoff((bot_payload or {}).get("agent_route_hint")):
+            rh = (bot_payload or {}).get("agent_route_hint") or {}
+            route_key = rh.get("route")
+            ext_reasons = list(confidence_reasons or [])
+            ext_reasons.append(
+                f"Agent Studio: intention « {route_key} » avec escalade humaine (routage heuristique)."
+            )
+            await _escalate_to_human(
+                conversation,
+                message_text,
+                ai_reply=reply,
+                ai_confidence=confidence,
+                ai_confidence_reasons=ext_reasons,
+            )
 
 
 async def get_messages(

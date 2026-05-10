@@ -687,7 +687,7 @@ async def generate_agent_studio_inbox_reply_with_confidence(
         simulate_agent_route,
     )
 
-    empty = {
+    empty: Dict[str, Any] = {
         "reply": None,
         "confidence": 0.0,
         "confidence_reasons": [],
@@ -710,15 +710,20 @@ async def generate_agent_studio_inbox_reply_with_confidence(
         return empty
 
     cfg = row.get("config") or {}
+    route_hint = simulate_agent_route(cfg, msg)
+
+    def _with_route(payload: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(payload)
+        out["agent_route_hint"] = route_hint
+        return out
+
     dep = cfg.get("deployment") or {}
     st = str(dep.get("status") or "draft").strip().lower()
     if st not in ("active", "canary"):
         empty["confidence_reasons"] = [
             f"Agent Studio non actif pour réponses auto (statut déploiement: {st})."
         ]
-        return empty
-
-    route_hint = simulate_agent_route(cfg, msg)
+        return _with_route(empty)
     caps_pre = cfg.get("capabilities") or {}
     allowed_tools_list = [
         str(x).strip() for x in (caps_pre.get("allowed_tools") or []) if str(x).strip()
@@ -788,12 +793,14 @@ async def generate_agent_studio_inbox_reply_with_confidence(
 
         account_row = await get_account_by_id(account_id)
         if not account_row:
-            return {
-                "reply": None,
-                "confidence": 0.0,
-                "confidence_reasons": ["Compte introuvable pour l'exécution des outils agent."],
-                "qa_queries_used": qa_queries_used,
-            }
+            return _with_route(
+                {
+                    "reply": None,
+                    "confidence": 0.0,
+                    "confidence_reasons": ["Compte introuvable pour l'exécution des outils agent."],
+                    "qa_queries_used": qa_queries_used,
+                }
+            )
         return await run_agent_outbound_inbox_gemini_with_tools(
             conversation_id=conversation_id,
             account_id=account_id,
@@ -805,6 +812,7 @@ async def generate_agent_studio_inbox_reply_with_confidence(
             conversation_parts=conversation_parts,
             qa_queries_used=qa_queries_used,
             qa_matches=qa_matches,
+            route_hint=route_hint,
         )
 
     generation_config: Dict[str, Any] = {
@@ -853,55 +861,67 @@ async def generate_agent_studio_inbox_reply_with_confidence(
                 )
             except Exception as exc2:
                 logger.error("❌ Agent Studio inbox Gemini v1 error: %s", exc2)
-                return {
+                return _with_route(
+                    {
+                        "reply": None,
+                        "confidence": 0.0,
+                        "confidence_reasons": ["Erreur appel Gemini."],
+                        "qa_queries_used": qa_queries_used,
+                    }
+                )
+        else:
+            logger.error("❌ Agent Studio inbox Gemini error: %s", exc)
+            return _with_route(
+                {
                     "reply": None,
                     "confidence": 0.0,
                     "confidence_reasons": ["Erreur appel Gemini."],
                     "qa_queries_used": qa_queries_used,
                 }
-        else:
-            logger.error("❌ Agent Studio inbox Gemini error: %s", exc)
-            return {
-                "reply": None,
-                "confidence": 0.0,
-                "confidence_reasons": ["Erreur appel Gemini."],
-                "qa_queries_used": qa_queries_used,
-            }
+            )
     except CircuitBreakerOpenError:
         logger.warning(
             "Gemini circuit breaker open, skipping agent studio inbox generation for %s",
             conversation_id,
         )
-        return {
-            "reply": None,
-            "confidence": 0.0,
-            "confidence_reasons": ["Circuit Gemini ouvert."],
-            "qa_queries_used": qa_queries_used,
-        }
+        return _with_route(
+            {
+                "reply": None,
+                "confidence": 0.0,
+                "confidence_reasons": ["Circuit Gemini ouvert."],
+                "qa_queries_used": qa_queries_used,
+            }
+        )
     except (httpx.HTTPError, httpx.TimeoutException) as exc:
         logger.error("Agent Studio inbox Gemini failed for %s: %s", conversation_id, str(exc))
-        return {
-            "reply": None,
-            "confidence": 0.0,
-            "confidence_reasons": ["Erreur réseau Gemini."],
-            "qa_queries_used": qa_queries_used,
-        }
+        return _with_route(
+            {
+                "reply": None,
+                "confidence": 0.0,
+                "confidence_reasons": ["Erreur réseau Gemini."],
+                "qa_queries_used": qa_queries_used,
+            }
+        )
     except Exception as exc:
         logger.exception("Unexpected agent studio inbox Gemini error for %s: %s", conversation_id, exc)
-        return {
-            "reply": None,
-            "confidence": 0.0,
-            "confidence_reasons": ["Erreur inattendue Gemini."],
-            "qa_queries_used": qa_queries_used,
-        }
+        return _with_route(
+            {
+                "reply": None,
+                "confidence": 0.0,
+                "confidence_reasons": ["Erreur inattendue Gemini."],
+                "qa_queries_used": qa_queries_used,
+            }
+        )
 
     if not data or "candidates" not in data:
-        return {
-            "reply": None,
-            "confidence": 0.0,
-            "confidence_reasons": ["Réponse Gemini vide ou invalide."],
-            "qa_queries_used": qa_queries_used,
-        }
+        return _with_route(
+            {
+                "reply": None,
+                "confidence": 0.0,
+                "confidence_reasons": ["Réponse Gemini vide ou invalide."],
+                "qa_queries_used": qa_queries_used,
+            }
+        )
 
     for candidate in data.get("candidates") or []:
         parts = (candidate.get("content") or {}).get("parts") or []
@@ -929,19 +949,23 @@ async def generate_agent_studio_inbox_reply_with_confidence(
                 reasons,
                 len(qa_matches),
             )
-            return {
-                "reply": text,
-                "confidence": confidence,
-                "confidence_reasons": reasons,
-                "qa_queries_used": qa_queries_used,
-            }
+            return _with_route(
+                {
+                    "reply": text,
+                    "confidence": confidence,
+                    "confidence_reasons": reasons,
+                    "qa_queries_used": qa_queries_used,
+                }
+            )
 
-    return {
-        "reply": None,
-        "confidence": 0.0,
-        "confidence_reasons": ["Gemini n'a pas renvoyé de texte exploitable."],
-        "qa_queries_used": qa_queries_used,
-    }
+    return _with_route(
+        {
+            "reply": None,
+            "confidence": 0.0,
+            "confidence_reasons": ["Gemini n'a pas renvoyé de texte exploitable."],
+            "qa_queries_used": qa_queries_used,
+        }
+    )
 
 
 async def _build_related_qa_queries(account_id: str, user_message: str) -> List[str]:

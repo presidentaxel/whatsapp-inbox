@@ -328,8 +328,39 @@ def map_config_to_runtime_graph(config: Dict[str, Any]) -> Dict[str, Any]:
                 "target": "fallback-human",
             }
         )
+        for it in intents:
+            key = str(it.get("key") or "").strip()
+            if not key:
+                continue
+            if str(it.get("handler") or "").strip().lower() != "human":
+                continue
+            safe = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in key)[:80]
+            edges.append(
+                {
+                    "id": f"e-gemini-{safe}-human",
+                    "source": "agent-gemini",
+                    "sourceHandle": key,
+                    "target": "fallback-human",
+                }
+            )
 
     return {"v": 2, "nodes": nodes, "edges": edges}
+
+
+def agent_route_hint_triggers_human_handoff(hint: Any) -> bool:
+    """
+    Indique si le routage heuristique (même logique que l'onglet Tests) impose une escalade humaine.
+
+    On n'active **pas** l'escalade pour ``route == "fallback"`` : le fallback ``human`` signifie souvent
+    « politique par défaut », pas « chaque message sans intention explicite doit notifier un humain ».
+    """
+    if not isinstance(hint, dict):
+        return False
+    route = str(hint.get("route") or "").strip().lower()
+    if route in ("", "fallback"):
+        return False
+    handler = str(hint.get("handler") or "").strip().lower()
+    return handler == "human"
 
 
 def simulate_agent_route(config: Dict[str, Any], input_text: str) -> Dict[str, Any]:

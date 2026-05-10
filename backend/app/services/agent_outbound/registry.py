@@ -1,5 +1,5 @@
 """
-Jalon M0 / M4 — Spécification du noyau agent (outils v1 lecture seule).
+Jalon M0 / M4 - Spécification du noyau agent (outils v1 lecture seule).
 
 - Catalogue distinct d’Axelia : seuls les noms listés ici sont exposables au modèle
   outbound quand la politique le permet.
@@ -43,7 +43,7 @@ AGENT_STUDIO_ALLOWLIST_SLUGS: frozenset[str] = frozenset(
     }
 )
 
-# Outils Agent Studio « sensibles » (écriture / action Meta) — jamais dans le noyau v1 lecture seule.
+# Outils Agent Studio « sensibles » (écriture / action Meta) - jamais dans le noyau v1 lecture seule.
 _AGENT_WRITE_OR_SENSITIVE = frozenset(
     {
         "create_template",
