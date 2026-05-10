@@ -1,10 +1,12 @@
 """
-Jalon M0 — Spécification du noyau agent (outils v1 lecture seule).
+Jalon M0 / M4 — Spécification du noyau agent (outils v1 lecture seule).
 
 - Catalogue distinct d’Axelia : seuls les noms listés ici sont exposables au modèle
   outbound quand la politique le permet.
 - Schémas JSON (arguments) sans ``account_scope=all_accessible`` : le runtime
   agent reste mono-ligne (M1+).
+- M4 : validation structurelle des args (``validate_args_security_shape``), slugs
+  coercés dans les allowlists, entiers stricts (pas de bool).
 - Codes d’erreur stables pour journalisation et réinjection modèle.
 """
 from __future__ import annotations
@@ -12,6 +14,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+from app.services.agent_outbound.security import (
+    coerce_kernel_tool_slug,
+    validate_args_security_shape,
+)
 
 # Doit rester strictement aligné sur ``agent_studio_service.ALLOWED_AGENT_TOOLS``
 # (sans import circulaire / effet de bord DB au chargement du module).
@@ -293,7 +300,11 @@ def _spec_index() -> Dict[str, AgentOutboundToolSpec]:
 
 def build_effective_kernel_v1_allowlist(allowed_tools: Iterable[str]) -> frozenset[str]:
     """Intersection demandée (config agent) ∩ outils noyau v1 lecture seule."""
-    wanted = {str(x).strip() for x in allowed_tools if str(x).strip()}
+    wanted: set[str] = set()
+    for x in allowed_tools:
+        c = coerce_kernel_tool_slug(str(x))
+        if c:
+            wanted.add(c)
     return frozenset(wanted & AGENT_KERNEL_V1_READ_TOOLS)
 
 
@@ -306,11 +317,18 @@ def build_agent_kernel_v1_catalog(
     Retourne (specs ordonnés par nom), (outils demandés mais non disponibles en v1 lecture :
     inconnus d’Agent Studio, écriture, ou hors périmètre kernel).
     """
-    wanted = [str(x).strip() for x in allowed_tools if str(x).strip()]
-    wanted_set = set(wanted)
+    wanted_raw = [str(x).strip() for x in allowed_tools if str(x).strip()]
+    wanted_set: set[str] = set()
+    rejected: List[str] = []
+    for raw in wanted_raw:
+        c = coerce_kernel_tool_slug(raw)
+        if c:
+            wanted_set.add(c)
+        else:
+            rejected.append(raw)
+
     allowed_set = set(AGENT_STUDIO_ALLOWLIST_SLUGS)
 
-    rejected: List[str] = []
     for name in sorted(wanted_set):
         if name not in allowed_set:
             rejected.append(name)
@@ -344,6 +362,9 @@ def validate_agent_kernel_v1_args(tool_name: str, args: Mapping[str, Any]) -> Op
     if not isinstance(args, Mapping):
         return AgentOutboundToolErrorCode.INVALID_ARGUMENTS
 
+    if validate_args_security_shape(args):
+        return AgentOutboundToolErrorCode.INVALID_ARGUMENTS
+
     schema = spec.parameters_json_schema
     required: List[str] = list(schema.get("required") or [])
     properties: Dict[str, Any] = dict(schema.get("properties") or {})
@@ -361,15 +382,16 @@ def validate_agent_kernel_v1_args(tool_name: str, args: Mapping[str, Any]) -> Op
         ptype = prop.get("type")
         if ptype == "string" and not isinstance(val, str):
             return AgentOutboundToolErrorCode.INVALID_ARGUMENTS
-        if ptype == "integer" and not isinstance(val, int):
-            return AgentOutboundToolErrorCode.INVALID_ARGUMENTS
+        if ptype == "integer":
+            if isinstance(val, bool) or not isinstance(val, int):
+                return AgentOutboundToolErrorCode.INVALID_ARGUMENTS
         if isinstance(val, str) and "minLength" in prop:
             if len(val.strip()) < int(prop["minLength"]):
                 return AgentOutboundToolErrorCode.INVALID_ARGUMENTS
 
     for key, val in args.items():
         prop = properties.get(key) or {}
-        if isinstance(val, int):
+        if type(val) is int:
             if "minimum" in prop and val < int(prop["minimum"]):
                 return AgentOutboundToolErrorCode.INVALID_ARGUMENTS
             if "maximum" in prop and val > int(prop["maximum"]):

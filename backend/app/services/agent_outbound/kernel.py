@@ -1,12 +1,11 @@
 """
-Jalon M1 — Exécution des outils du noyau agent (syscall layer).
+Jalon M1 / M4 — Exécution des outils du noyau agent (syscall layer).
 
 - Politique : seuls les noms dans ``allowed_tools`` ∩ lecture v1 sont exécutés.
-- Validation des arguments via ``validate_agent_kernel_v1_args``.
-- Dispatch : réutilise ``playground_skills.execute_skill`` **sans** runtime Axelia
+- M4 : slugs normalisés (``coerce_kernel_tool_slug``), plafond d’appels par tour,
+  validation args (forme + schéma) avant dispatch.
+- Dispatch : réutilise ``playground_skills.execute_skill`` sans runtime Axelia
   (pas de ``AxeliaSkillsRuntime`` : les skills restent mono-ligne / primary).
-
-La boucle Gemini (proposition d’outils + synthèse) est branchée au jalon M2.
 """
 from __future__ import annotations
 
@@ -23,10 +22,12 @@ from app.services.agent_outbound.registry import (
     build_effective_kernel_v1_allowlist,
     validate_agent_kernel_v1_args,
 )
+from app.services.agent_outbound.security import coerce_kernel_tool_slug
 
 logger = logging.getLogger("uvicorn.error").getChild("agent_outbound.kernel")
 
 _PARALLEL_TOOL_CALLS = 5
+_MAX_TOOL_CALLS_PER_ROUND = 8
 
 
 async def _invoke_playground_skill(
@@ -70,15 +71,23 @@ async def _run_one_tool_call(
     effective: frozenset[str],
     tc: Dict[str, Any],
 ) -> Dict[str, Any]:
-    name = (tc.get("skill") or tc.get("name") or "").strip()
+    name_raw = (tc.get("skill") or tc.get("name") or "").strip()
+    name = coerce_kernel_tool_slug(name_raw) or ""
     raw_args = tc.get("args") if tc.get("args") is not None else tc.get("arguments")
     args = dict(raw_args) if isinstance(raw_args, dict) else {}
 
-    if not name:
+    if not name_raw:
         return _failed_skill(
             "",
             AgentOutboundToolErrorCode.UNKNOWN_TOOL,
             detail="missing_tool_name",
+        )
+
+    if not name:
+        return _failed_skill(
+            name_raw[:120],
+            AgentOutboundToolErrorCode.UNKNOWN_TOOL,
+            detail="malformed_tool_name",
         )
 
     if name not in effective:
@@ -119,6 +128,14 @@ async def run_agent_kernel_v1_tool_calls(
     effective = build_effective_kernel_v1_allowlist(allowed_tools)
     if not tool_calls:
         return []
+
+    if len(tool_calls) > _MAX_TOOL_CALLS_PER_ROUND:
+        logger.warning(
+            "agent kernel v1: truncating tool_calls from %d to %d",
+            len(tool_calls),
+            _MAX_TOOL_CALLS_PER_ROUND,
+        )
+        tool_calls = tool_calls[:_MAX_TOOL_CALLS_PER_ROUND]
 
     out: List[Dict[str, Any]] = []
     for off in range(0, len(tool_calls), _PARALLEL_TOOL_CALLS):
