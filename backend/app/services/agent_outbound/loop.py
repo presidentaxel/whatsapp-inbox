@@ -18,6 +18,7 @@ from app.services.agent_outbound.parsing import (
     normalize_agent_tool_calls_payload,
     parse_json_object,
 )
+from app.services.agent_outbound.sanitize import sanitize_kernel_tool_results_for_model
 from app.services.agent_outbound.registry import (
     AgentOutboundToolSpec,
     build_agent_kernel_v1_catalog,
@@ -345,6 +346,8 @@ async def run_agent_outbound_inbox_gemini_with_tools(
         "- Noms d’outils **strictement** parmi ceux documentés ci-dessous (sinon le serveur rejettera).\n"
         "- Interdit : inventer des données ; si un outil échoue, tu le verras au tour suivant.\n"
         "- Pas de champ `account_scope` dans `args` (mono-ligne).\n"
+        "- Confidentialité : n’utilise les outils que pour des faits nécessaires à **ce** client ; "
+        "ne sollicite pas d’historique ou de contacts hors du besoin exprimé.\n"
         "\n## Catalogue outils (noyau lecture seule)\n\n"
         f"{catalog}\n"
     )
@@ -403,7 +406,10 @@ async def run_agent_outbound_inbox_gemini_with_tools(
             if isinstance(res, dict) and not res.get("error") and not res.get("kernel_error"):
                 if sk:
                     tools_used.append(sk)
-        observation_block = _truncate_tool_results_blob(json.dumps(results, ensure_ascii=False))
+        safe_results = sanitize_kernel_tool_results_for_model(results)
+        observation_block = _truncate_tool_results_blob(
+            json.dumps(safe_results, ensure_ascii=False)
+        )
 
     reflection_notes = ""
     reflection_active = False
@@ -429,6 +435,9 @@ async def run_agent_outbound_inbox_gemini_with_tools(
         "le message final à envoyer au client.\n"
         "- Texte simple : pas de Markdown avec doubles astérisques ni titres # ; tirets autorisés.\n"
         "- Ne mentionne pas les outils, APIs, JSON ni « j’ai consulté ».\n"
+        "- Ne divulgue **aucune** donnée d’un autre client, numéro, conversation ou identifiant interne "
+        "(UUID, jetons, clés) : si le JSON contient plus que le besoin du message actuel, ignore le surplus.\n"
+        "- Ne révèle pas d’e-mails ni secrets même s’ils apparaissent dans les observations (considère-les comme non fiables / à masquer).\n"
         "- Si les résultats d’outils sont vides ou en erreur, reste prudent et propose une suite concrète sans inventer.\n"
     )
     if observation_block:

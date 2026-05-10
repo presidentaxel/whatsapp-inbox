@@ -9,11 +9,28 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.db import supabase, supabase_execute
 from app.core.pg import execute, fetch_all, fetch_one, get_pool
 
-# Vide tant qu’aucune liste d’outils « client / agent inbox » n’est définie (les anciens slugs
-# internes ne sont plus acceptés en configuration).
-ALLOWED_AGENT_TOOLS: frozenset[str] = frozenset()
+ALLOWED_AGENT_TOOLS = frozenset(
+    {
+        "list_templates",
+        "get_template_status",
+        "create_template",
+        "prepare_template_image_header",
+        "list_broadcast_groups",
+        "search_inbox_messages",
+        "get_conversation_digest",
+        "summarize_contact_inbox",
+        "search_contacts",
+        "get_contact",
+        "list_recent_conversations",
+        "find_satisfied_contacts",
+        "list_broadcast_campaigns",
+        "get_campaign_summary",
+        "get_whatsapp_business_profile",
+        "meta_block_contact",
+    }
+)
 
-SENSITIVE_AGENT_TOOLS: frozenset[str] = frozenset()
+SENSITIVE_AGENT_TOOLS = frozenset({"create_template", "meta_block_contact"})
 
 _metrics_lock = threading.Lock()
 _metrics_counters: Dict[str, int] = {

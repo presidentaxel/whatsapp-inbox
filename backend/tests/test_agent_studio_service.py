@@ -98,7 +98,7 @@ def test_validate_agent_config_rejects_unknown_tools():
             "objective": {"primary_goal": "Répondre clients"},
             "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
             "capabilities": {
-                "allowed_tools": ["legacy_list_templates", "unknown_tool_x"],
+                "allowed_tools": ["search_contacts", "unknown_tool_x"],
                 "require_approval_for": [],
             },
         }
@@ -106,36 +106,32 @@ def test_validate_agent_config_rejects_unknown_tools():
     assert any(i["message"] == "unknown_allowed_tools" for i in issues)
 
 
-def test_validate_agent_config_rejects_unknown_require_approval_slugs():
+def test_validate_agent_config_rejects_approval_outside_allowlist():
     issues = validate_agent_config(
         {
             "objective": {"primary_goal": "Répondre clients"},
             "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
             "capabilities": {
-                "allowed_tools": [],
-                "require_approval_for": ["create_template"],
+                "allowed_tools": ["search_contacts"],
+                "require_approval_for": ["meta_block_contact"],
             },
         }
     )
-    assert any(i["message"] == "unknown_require_approval_tools" for i in issues)
+    assert any(i["message"] == "require_approval_not_in_allowed_tools" for i in issues)
 
 
-def test_normalize_strips_legacy_tools_from_capabilities():
-    from app.services.agent_studio_service import normalize_agent_config
-
-    cfg = normalize_agent_config(
+def test_validate_agent_config_requires_approval_for_sensitive_tools():
+    issues = validate_agent_config(
         {
-            "name": "X",
-            "objective": {"primary_goal": "ok"},
+            "objective": {"primary_goal": "Répondre clients"},
             "routing": {"confidence_threshold": 0.8, "fallback": "human", "intents": []},
             "capabilities": {
-                "allowed_tools": ["list_templates", "search_contacts"],
-                "require_approval_for": ["create_template"],
+                "allowed_tools": ["create_template"],
+                "require_approval_for": [],
             },
         }
     )
-    assert cfg["capabilities"]["allowed_tools"] == []
-    assert cfg["capabilities"]["require_approval_for"] == []
+    assert any(i["message"] == "sensitive_tools_must_require_approval" for i in issues)
 
 
 def test_can_deploy_agent_config_blocks_on_errors():

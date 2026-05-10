@@ -37,11 +37,11 @@ Si `AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED` est **vrai** et que la politique d’ou
 
 Timeouts configurables : `AGENT_OUTBOUND_GEMINI_READ_TIMEOUT_S`, `AGENT_OUTBOUND_REFLECTION_READ_TIMEOUT_S`.
 
-## 4. Politique d’outils (M0 / M4)
+## 4. Politique d’outils (M0 / M4) et anti-fuite
 
-- **État actuel (gel produit)** : `ALLOWED_AGENT_TOOLS` dans `agent_studio_service.py` et les constantes miroir dans `agent_outbound/registry.py` (`AGENT_STUDIO_ALLOWLIST_SLUGS`, `AGENT_KERNEL_V1_READ_TOOLS`, catalogue de schémas) sont **vides**. Aucun ancien outil interne (templates, inbox, Meta, etc.) n’est exposé au modèle ni accepté dans une fiche agent ; les JSON existants en base sont **nettoyés à la normalisation** (`normalize_agent_config`).
-- La **validation** (`validate_agent_config`) rejette encore toute entrée **brute** inconnue dans `allowed_tools` / `require_approval_for` pour éviter de réintroduire des slugs obsolètes via API sans migration explicite.
-- Quand une nouvelle liste d’outils « agent inbox » sera définie : réalimenter `ALLOWED_AGENT_TOOLS`, aligner `AGENT_STUDIO_ALLOWLIST_SLUGS`, puis `AGENT_KERNEL_V1_READ_TOOLS` (lecture seule) et les entrées `_TOOL_SPECS_V1` ; conserver **M4** (validation args, slugs coercés, `AgentOutboundToolErrorCode`).
+- **`ALLOWED_AGENT_TOOLS`** (`agent_studio_service.py`) : catalogue produit des slugs autorisés sur la fiche. **`AGENT_STUDIO_ALLOWLIST_SLUGS`** et **`AGENT_KERNEL_V1_READ_TOOLS`** dans `registry.py` restent alignés ; seul le **sous-ensemble lecture seule** (`AGENT_KERNEL_V1_READ_TOOLS`) est exécutable dans la boucle outbound WhatsApp (pas `create_template`, `prepare_template_image_header`, `meta_block_contact`).
+- **`normalize_agent_config`** retire tout slug inconnu ; **`validate_agent_config`** contrôle aussi les listes **brutes** avant normalisation pour rejeter les typos / slugs obsolètes.
+- **Anti-fuite** : après exécution des outils, `sanitize_kernel_tool_results_for_model` (`agent_outbound/sanitize.py`) masque clés sensibles (`*token*`, `password`, `api_key`, etc.), e-mails et chaînes type JWT dans le JSON injecté au **second** passage Gemini ; le prompt de synthèse rappelle de ne pas divulguer d’autres clients ni d’identifiants internes. Cela **complète** le cloisonnement par `account_id` côté services, mais ne remplace pas une politique métier stricte sur la fiche agent.
 
 ## 5. Variables d’environnement (backend)
 
@@ -59,13 +59,14 @@ Documentées dans `backend/.env.example` :
 | Chemin | Rôle |
 | ------ | ---- |
 | `backend/app/services/agent_studio_service.py` | Config agent, outils autorisés côté produit, simulation de route. |
-| `backend/app/services/agent_outbound/` | Catalogue, parsing JSON, noyau d’exécution, boucle Gemini. |
+| `backend/app/services/agent_outbound/` | Catalogue, parsing JSON, noyau d’exécution, boucle Gemini, **sanitation** des résultats. |
 | `backend/app/services/bot_service.py` | `generate_agent_studio_inbox_reply_with_confidence`, formatage playbook. |
 | `backend/app/api/routes_agent_studio.py` | API REST Agent Studio. |
 
 ## 7. Tests
 
 - `backend/tests/test_agent_outbound_m0.py` … `m4.py` : jalons noyau, parsing, boucle mockée, sécurité args.
+- `backend/tests/test_agent_outbound_sanitize.py` : masquage des champs sensibles avant prompt synthèse.
 - `backend/tests/test_agent_studio_service.py` : alignement allowlist / `ALLOWED_AGENT_TOOLS`.
 
 En CI (`pytest`), l’environnement inclut `python-dotenv` : le test d’intégration minimal de `test_agent_outbound_m2.py` ne doit pas être ignoré pour cette raison. Si vous lancez les tests dans un environnement minimal sans dépendances du `requirements.txt`, un skip peut s’appliquer (import `settings`).

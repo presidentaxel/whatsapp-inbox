@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock, patch
 
 from app.services.agent_outbound import kernel as agent_kernel
 from app.services.agent_outbound.kernel import run_agent_kernel_v1_tool_calls
-from app.services.agent_outbound.registry import AgentOutboundToolErrorCode, build_effective_kernel_v1_allowlist
+from app.services.agent_outbound.registry import (
+    AgentOutboundToolErrorCode,
+    build_effective_kernel_v1_allowlist,
+)
 
 
 def test_run_kernel_empty_tool_calls():
@@ -23,7 +26,7 @@ def test_build_effective_kernel_v1_allowlist_intersection():
     eff = build_effective_kernel_v1_allowlist(
         ["search_inbox_messages", "create_template", "list_templates"]
     )
-    assert eff == frozenset()
+    assert eff == frozenset({"search_inbox_messages", "list_templates"})
 
 
 def test_run_kernel_rejects_tool_not_in_allowlist():
@@ -38,7 +41,7 @@ def test_run_kernel_rejects_tool_not_in_allowlist():
     assert len(out) == 1
     assert out[0]["skill"] == "search_inbox_messages"
     assert "error" in out[0]["result"]
-    assert out[0]["result"]["kernel_error"]["code"] == AgentOutboundToolErrorCode.UNKNOWN_TOOL.value
+    assert out[0]["result"]["kernel_error"]["code"] == AgentOutboundToolErrorCode.NOT_ALLOWED_BY_POLICY.value
 
 
 def test_run_kernel_rejects_unknown_tool():
@@ -69,7 +72,7 @@ def test_run_kernel_validation_before_invoke():
 
     out, mock_ex = asyncio.run(_go())
     mock_ex.assert_not_called()
-    assert out[0]["result"]["kernel_error"]["code"] == AgentOutboundToolErrorCode.UNKNOWN_TOOL.value
+    assert out[0]["result"]["kernel_error"]["code"] == AgentOutboundToolErrorCode.INVALID_ARGUMENTS.value
 
 
 def test_run_kernel_dispatches_invoke():
@@ -88,8 +91,9 @@ def test_run_kernel_dispatches_invoke():
         return out, mock_ex
 
     out, mock_ex = asyncio.run(_go())
-    mock_ex.assert_not_called()
-    assert out[0]["result"]["kernel_error"]["code"] == AgentOutboundToolErrorCode.UNKNOWN_TOOL.value
+    mock_ex.assert_awaited_once()
+    assert out[0]["skill"] == "search_inbox_messages"
+    assert out[0]["result"] == {"items": [1]}
 
 
 def test_run_kernel_parallel_chunk_order():
@@ -110,4 +114,4 @@ def test_run_kernel_parallel_chunk_order():
             )
 
     out = asyncio.run(_go())
-    assert [x["result"]["kernel_error"]["code"] for x in out] == ["unknown_tool", "unknown_tool"]
+    assert [x["skill"] for x in out] == ["list_templates", "get_whatsapp_business_profile"]
