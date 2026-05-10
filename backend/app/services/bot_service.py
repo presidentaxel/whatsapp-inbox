@@ -638,7 +638,7 @@ def _format_agent_studio_inbox_playbook(
     tool_lines = [f"- {x}" for x in tools if str(x).strip()][:30]
 
     parts: List[str] = [
-        f"## AGENT STUDIO — {name}",
+        f"## AGENT STUDIO - {name}",
         "",
         "### Objectif",
         primary or "(non renseigné)",
@@ -666,7 +666,7 @@ def _format_agent_studio_inbox_playbook(
                 "### Outils autorisés (tu peux les demander en JSON tool_calls ; le serveur les exécute)"
             )
         else:
-            parts.append("### Outils (référence métier — ne pas invoquer depuis WhatsApp)")
+            parts.append("### Outils (référence métier - ne pas invoquer depuis WhatsApp)")
         parts.extend(tool_lines)
         parts.append("")
     return "\n".join(parts).strip()

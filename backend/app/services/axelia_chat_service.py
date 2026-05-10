@@ -1121,7 +1121,7 @@ def format_perimeter_context_prompt(
             "**ne dis pas** que tu ne peux pas consulter les agents tant que ces permissions sont en place.\n"
             "Pour toute question sur l’historique, les résumés ou « qui a dit quoi », tu DOIS utiliser les outils "
             "`search_inbox_messages`, `get_conversation_digest`, `summarize_contact_inbox` et, pour les "
-            "**questions les plus posées / thèmes récurrents sans mot-clé**, `analyze_inbound_question_themes` — "
+            "**questions les plus posées / thèmes récurrents sans mot-clé**, `analyze_inbound_question_themes` - "
             "**ne dis pas** que tu n’as pas accès au CRM lorsque ce bloc est présent.\n"
             "Si l’utilisateur demande « sur quel WABA » ou « quel compte », réponds avec le nom et le téléphone ci‑dessus."
             f"{hint_line}\n"

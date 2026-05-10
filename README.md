@@ -80,7 +80,7 @@ Un **mode bot** par conversation peut suggérer des réponses alignées sur votr
 | **Équipe**           | Rôles et permissions (visibilité, envoi)                                                       |
 | **API étendue**      | Médias, templates, profil business, webhooks - exposés côté backend pour aller au-delà de l’UI |
 | **Axelia (IA)**      | Profondeur de réponse configurable (`brief` / `standard` / `expert`) selon le niveau de détail attendu |
-| **Agent Studio**     | Fiches agent par compte (déploiement, outils) ; inbox auto optionnelle avec boucle Gemini + outils — voir [`docs/AGENT_STUDIO_RUNBOOK.md`](docs/AGENT_STUDIO_RUNBOOK.md) |
+| **Agent Studio**     | Fiches agent par compte (déploiement, outils) ; inbox auto optionnelle avec boucle Gemini + outils - voir [`docs/AGENT_STUDIO_RUNBOOK.md`](docs/AGENT_STUDIO_RUNBOOK.md) |
 | **Observabilité**    | Instrumentation **Prometheus** (FastAPI), stack **Docker** avec **Grafana** en option          |
 
 ---

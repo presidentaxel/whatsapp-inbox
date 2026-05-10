@@ -1,5 +1,5 @@
 """
-Jalon M4 — Garde-fous défensifs pour le noyau agent outbound.
+Jalon M4 - Garde-fous défensifs pour le noyau agent outbound.
 
 Réduit la surface d’abus (noms d’outils mal formés, clés d’arguments suspectes, chaînes énormes).
 La cohérence multi-tenant reste assurée par les services sous-jacents (account_id, RLS côté API).

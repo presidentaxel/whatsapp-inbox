@@ -1,5 +1,5 @@
 """
-Jalon M1 / M4 — Exécution des outils du noyau agent (syscall layer).
+Jalon M1 / M4 - Exécution des outils du noyau agent (syscall layer).
 
 - Politique : seuls les noms dans ``allowed_tools`` ∩ lecture v1 sont exécutés.
 - M4 : slugs normalisés (``coerce_kernel_tool_slug``), plafond d’appels par tour,
@@ -35,7 +35,7 @@ async def _invoke_playground_skill(
     args: Dict[str, Any],
     account: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Point d’extension testable (patch) — import paresseux pour éviter cycles au chargement."""
+    """Point d’extension testable (patch) - import paresseux pour éviter cycles au chargement."""
     from app.services.playground_skills import execute_skill
 
     return await execute_skill(skill_name, args, account)

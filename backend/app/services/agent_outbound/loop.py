@@ -1,8 +1,8 @@
 """
-Jalon M2–M3 — Boucle Gemini outbound (1 tour d’outils max) pour l’inbox Agent Studio.
+Jalon M2–M3 - Boucle Gemini outbound (1 tour d’outils max) pour l’inbox Agent Studio.
 
-- M2 : ``AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED`` — JSON ``reply`` + ``tool_calls``, exécution noyau, synthèse.
-- M3 : ``AGENT_OUTBOUND_REFLECTION_ENABLED`` — après résultats d’outils, un court passage JSON « qualité »
+- M2 : ``AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED`` - JSON ``reply`` + ``tool_calls``, exécution noyau, synthèse.
+- M3 : ``AGENT_OUTBOUND_REFLECTION_ENABLED`` - après résultats d’outils, un court passage JSON « qualité »
   injecté dans le prompt de synthèse (un seul appel, tokens plafonnés).
 - Réutilise ``_call_gemini_api`` (retry Tenacity + circuit breaker via l’appelant).
 """
@@ -441,7 +441,7 @@ async def run_agent_outbound_inbox_gemini_with_tools(
         if reflection_notes:
             parts_r2.extend(
                 [
-                    "\n\n---\n## Réflexion qualité (interne — ne jamais citer au client)\n\n",
+                    "\n\n---\n## Réflexion qualité (interne - ne jamais citer au client)\n\n",
                     reflection_notes,
                 ]
             )

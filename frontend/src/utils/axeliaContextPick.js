@@ -1,5 +1,5 @@
 /**
- * Périmètre « tous les comptes » côté Axelia — doit rester identique à
+ * Périmètre « tous les comptes » côté Axelia - doit rester identique à
  * `AXELIA_CONTEXT_ALL` dans `components/axelia/axeliaChatConstants.js`.
  */
 export const AXELIA_ACCOUNT_SCOPE_ALL = "__all__";

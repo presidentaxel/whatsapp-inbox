@@ -1,4 +1,4 @@
-/** Périmètre « tous les comptes » — aligné avec `AXELIA_ACCOUNT_SCOPE_ALL` dans `axeliaContextPick.js`. */
+/** Périmètre « tous les comptes » - aligné avec `AXELIA_ACCOUNT_SCOPE_ALL` dans `axeliaContextPick.js`. */
 export const AXELIA_CONTEXT_ALL = "__all__";
 
 /** Aligné sur `_AXELIA_SECTOR_FOCUS` (backend). */

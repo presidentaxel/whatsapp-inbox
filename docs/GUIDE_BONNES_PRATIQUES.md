@@ -13,7 +13,7 @@ En cas de doute, ce guide prime sur les habitudes legacy. Si un dossier ancien n
 | ---------------------- | -------------------------------------------------------------------------------- |
 | `frontend/`            | SPA React 18 + Vite 6, appels HTTP via Axios, client Supabase (anon), temps réel |
 | `backend/`             | API FastAPI, logique métier, webhooks Meta, clé **service_role** (hors RLS)      |
-| `backend/app/services/agent_outbound/` | Noyau **inbox Agent Studio** (boucle Gemini + outils lecture v1, séparé d’Axelia) — voir `docs/AGENT_STUDIO_RUNBOOK.md` |
+| `backend/app/services/agent_outbound/` | Noyau **inbox Agent Studio** (boucle Gemini + outils lecture v1, séparé d’Axelia) - voir `docs/AGENT_STUDIO_RUNBOOK.md` |
 | `supabase/migrations/` | Source de vérité du schéma Postgres et des politiques RLS                        |
 | `supabase/functions/`  | Edge Functions (Deno), ex. webhook WhatsApp                                      |
 | `supabase/archive/`    | Anciens scripts conservés pour mémoire - **ne plus exécuter**                    |

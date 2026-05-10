@@ -1000,7 +1000,7 @@ async def sample_inbound_customer_messages_for_account(
 ) -> Dict[str, Any]:
     """
     Échantillon des derniers messages **entrants** texte (clients), pour analyse de thèmes / FAQ.
-    Pas de filtre par mot-clé — utile pour ``analyze_inbound_question_themes``.
+    Pas de filtre par mot-clé - utile pour ``analyze_inbound_question_themes``.
     """
     aid = str(account_id or "").strip()
     if not aid:

@@ -14,7 +14,7 @@ La documentation est desormais structuree en **un document par page** dans `docs
 
 ## Agent Studio (inbox, flags backend)
 
-- `docs/AGENT_STUDIO_RUNBOOK.md` — fiche agent, permissions, boucle outbound M2/M3, variables d’environnement, tests.
+- `docs/AGENT_STUDIO_RUNBOOK.md` - fiche agent, permissions, boucle outbound M2/M3, variables d’environnement, tests.
 
 ## Pages desktop
 

@@ -977,7 +977,7 @@ export default function ChatWindow({
                     opt.id === "gemini"
                       ? "Assistant playbook + Q&A (profil bot)"
                       : opt.id === "agent"
-                        ? "Agent Studio — fiche par défaut déployée"
+                        ? "Agent Studio - fiche par défaut déployée"
                         : opt.id === "playground"
                           ? "Scénario Playground"
                           : undefined

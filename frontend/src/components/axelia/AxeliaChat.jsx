@@ -256,7 +256,7 @@ function describePendingToolCalls(calls, accountsById = {}) {
       )
         bits.push("actions interdites");
       const detail = bits.length ? bits.join(", ") : "routage";
-      return `Mettre à jour routage / politiques Studio (config ${cid}) — ${detail}`;
+      return `Mettre à jour routage / politiques Studio (config ${cid}) - ${detail}`;
     }
     return String(name);
   });
@@ -1212,6 +1212,7 @@ export default function AxeliaChat({
 
     let finalAssistantId = null;
     let finalSkills = null;
+    let finalPending = null;
     let serverError = null;
     let cancelled = false;
     let tokensReceived = false;
@@ -1243,6 +1244,10 @@ export default function AxeliaChat({
               finalSkills = Array.isArray(data?.skills_used)
                 ? data.skills_used
                 : null;
+              finalPending = Array.isArray(data?.pending_tool_calls)
+                ? data.pending_tool_calls
+                : null;
+              if (data?.model) setStreamingModel(data.model);
               if (typeof data?.text === "string" && !tokensReceived) {
                 setStreamingText(data.text);
               }
@@ -1292,9 +1297,21 @@ export default function AxeliaChat({
           [finalAssistantId]: depthForThisRequest,
         }));
       }
+      // Comme après un envoi normal : enchaîner les cartes « action sensible » sur le nouveau
+      // message assistant (ex. 2e upsert_agent_studio_config après confirmation du 1er).
       setPendingCreateByAssistId((prev) => {
         const n = { ...prev };
         delete n[assistMessageId];
+        if (
+          finalAssistantId &&
+          Array.isArray(finalPending) &&
+          finalPending.length > 0
+        ) {
+          n[finalAssistantId] = {
+            calls: finalPending,
+            expiresAt: Date.now() + PENDING_TOOLS_TTL_MS,
+          };
+        }
         return n;
       });
       await loadMessages(conversationId);
