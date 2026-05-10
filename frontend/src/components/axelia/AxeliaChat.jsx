@@ -80,8 +80,8 @@ const SKILL_LABELS = {
   get_campaign_summary: "Statistiques campagne",
   get_whatsapp_business_profile: "Profil WhatsApp Business",
   meta_block_contact: "Blocage Meta (confirmation)",
-  upsert_agent_studio_config: "Agent Studio (confirmation)",
-  upsert_agent_studio_routing: "Règles Agent Studio (confirmation)",
+  upsert_agent_studio_config: "Fiche agent Studio (confirmation)",
+  upsert_agent_studio_routing: "Routage et politiques Studio (confirmation)",
 };
 
 /** Libellés affichés pendant la génération (skill courant). */
@@ -102,8 +102,8 @@ const SKILL_RUNNING_LABELS = {
   get_campaign_summary: "Analyse de la campagne…",
   get_whatsapp_business_profile: "Lecture du profil WhatsApp Business…",
   meta_block_contact: "Préparation du blocage Meta…",
-  upsert_agent_studio_config: "Preparation de l'agent Studio…",
-  upsert_agent_studio_routing: "Mise à jour des règles de routage Studio…",
+  upsert_agent_studio_config: "Préparation de la fiche agent Studio…",
+  upsert_agent_studio_routing: "Mise à jour du routage et des politiques Studio…",
 };
 
 const PHASE_LABELS = {
@@ -210,7 +210,7 @@ function describePendingToolCalls(calls, accountsById = {}) {
   if ((hasTpl && hasBlock) || (hasTpl && hasStudio) || (hasBlock && hasStudio)) title = "Actions à confirmer";
   else if (hasTpl) title = "Création de template sur Meta";
   else if (hasBlock) title = "Blocage WhatsApp (Meta)";
-  else if (hasStudio) title = "Modification Agent Studio";
+  else if (hasStudio) title = "Modification fiche ou règles Agent Studio";
   const lines = calls.map((tc) => {
     const name = tc.skill || tc.name || "outil";
     const args = tc.args || tc.arguments || {};
@@ -233,7 +233,10 @@ function describePendingToolCalls(calls, accountsById = {}) {
         ? (acc.name?.trim() || acc.phone_number?.trim() || aid)
         : null;
       const target = accountLabel ? ` pour « ${accountLabel} »` : "";
-      return `${mode} l'agent Studio « ${label} »${target} (mode brouillon)`;
+      const depHint = args.config_id
+        ? " (conserve le déploiement existant)"
+        : " (nouvelle fiche en draft)";
+      return `${mode} la fiche agent Studio « ${label} »${target}${depHint}`;
     }
     if (name === "upsert_agent_studio_routing") {
       const cid = args.config_id || "?";
@@ -253,15 +256,16 @@ function describePendingToolCalls(calls, accountsById = {}) {
       )
         bits.push("actions interdites");
       const detail = bits.length ? bits.join(", ") : "routage";
-      return `Mettre à jour les règles Studio (config ${cid}) - ${detail}`;
+      return `Mettre à jour routage / politiques Studio (config ${cid}) — ${detail}`;
     }
     return String(name);
   });
   let note = null;
   if (hasStudio) {
     note =
-      "L'agent sera enregistré en brouillon (draft). Aucun déploiement automatique : "
-      + "vous pourrez l'activer ensuite depuis Agent Studio.";
+      "Les écritures Axelia n’activent pas l’agent en production : pas de canary ni d’activation "
+      + "automatiques. Finalisez dans Agent Studio (Tests, Valider, Déployer canary / Activer). "
+      + "Une création de fiche démarre en draft ; une modification conserve le statut de déploiement déjà enregistré.";
   }
   return { title, lines, note };
 }

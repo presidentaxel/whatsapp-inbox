@@ -540,9 +540,10 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
     {
         "name": "list_agent_studio_configs",
         "description": (
-            "Liste les configurations Agent Studio du ou des comptes WABA autorisés "
-            "(lecture seule, sans confirmation UI). Retourne pour chaque agent : id, nom, "
-            "statut de déploiement (ex. draft), indicateur agent par défaut, extrait d’objectif. "
+            "Liste les fiches **agents** Agent Studio du ou des comptes WABA autorisés "
+            "(lecture seule, sans confirmation UI). Par agent : id, nom, "
+            "statut de déploiement (`draft`, `canary`, `active`, `paused`), indicateur agent par défaut "
+            "(ligne inbox auto quand déployé), nombre d’intentions, extrait d’objectif. "
             "Avec account_scope=all_accessible, parcourt les lignes où l’utilisateur a à la fois "
             "conversations.view et agent_studio.access."
         ),
@@ -568,27 +569,34 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
     {
         "name": "get_agent_studio_config",
         "description": (
-            "Charge la configuration Agent Studio complète (JSON normalisé) pour un config_id UUID, "
-            "plus les anomalies de validation connues du schéma Studio. Lecture seule, sans confirmation UI."
+            "Charge la **fiche agent** complète (JSON normalisé) pour un `config_id` UUID : "
+            "`objective` (objectif, KPI, audience), `routing` (intents, fallback, seuil de confiance), "
+            "`policies` (ton, actions interdites, règles d’escalade structurées si présentes), "
+            "`capabilities` (outils Meta / inbox autorisés et sous approbation), `tests`, "
+            "`deployment` (statut + canary %). Retourne aussi les anomalies de validation serveur. "
+            "Lecture seule, sans confirmation UI."
         ),
         "parameters": [
             {"name": "config_id", "type": "string", "required": True},
         ],
         "use_when": (
             "après list_agent_studio_configs ou lorsque l’utilisateur fournit un UUID de configuration ; "
-            "pour expliquer en détail objectifs, intents, politiques, outils autorisés."
+            "pour expliquer le comportement attendu, le routage, les politiques, les outils ou le cycle de déploiement."
         ),
     },
     {
         "name": "upsert_agent_studio_routing",
         "description": (
-            "Met à jour la partie **règles / routage** d’un agent Studio existant (brouillon ou non) : "
-            "intentions (`intents` : key, handler, description, min_confidence optionnel), "
-            "stratégie de **fallback** (`human` | `safe_reply` | `ask_clarification`), "
-            "**seuil de confiance**, liste **forbidden_actions**. "
-            "Nécessite un `config_id` existant. "
+            "Met à jour un agent Studio **existant** (`config_id` requis). "
+            "Partie **routage** (`routing`) : intentions (`intents` : key, handler, description, min_confidence optionnel), "
+            "stratégie de **fallback** (`human` | `safe_reply` | `ask_clarification`), **seuil de confiance**. "
+            "Partie **politiques** (`policies`) : liste **forbidden_actions** (consignes métier en texte libre, "
+            "une entrée = une ligne — pas des slugs d’outils). "
+            "Le simulateur Agent Studio (onglet Tests) applique une **correspondance simple** sur le texte client : "
+            "clé d’intention en minuscules dans le message, ou mot (> 3 lettres) issu de la description ; "
+            "sinon résultat `fallback` — ce n’est pas une inférence LLM. "
             "Action sensible : exécution uniquement après confirmation dans l’UI ; "
-            "validation serveur identique à Agent Studio."
+            "validation serveur identique à Agent Studio. Ne modifie pas le déploiement (canary / actif)."
         ),
         "parameters": [
             {"name": "config_id", "type": "string", "required": True},
@@ -613,7 +621,8 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
         ],
         "use_when": (
             "l’utilisateur veut ajouter ou modifier des intentions (« si le client dit X… »), "
-            "le fallback, le seuil de confiance ou les actions interdites ; "
+            "le fallback, le seuil de confiance ou les **actions interdites** (champ `forbidden_actions`, "
+            "stocké sous `policies` côté JSON) ; "
             "après `list_agent_studio_configs` ou `get_agent_studio_config` pour obtenir `config_id`. "
             "`replace_intents` true (défaut) remplace toute la liste ; false fusionne par `key`. "
             "En périmètre multi-comptes, passe `account_id` comme pour upsert_agent_studio_config."
@@ -622,9 +631,12 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
     {
         "name": "upsert_agent_studio_config",
         "description": (
-            "Crée ou met à jour une configuration Agent Studio pour une ligne WABA précise. "
-            "La configuration est sauvegardée en mode **brouillon (draft)** : elle n'est jamais "
-            "déployée sans une activation manuelle dans Agent Studio (statut deployment.status='draft'). "
+            "Crée ou met à jour la **fiche agent** (identité + objectif + capacités outils) pour une ligne WABA précise. "
+            "Champs couverts : `name`, `objective` (via primary_goal, kpi, audience), `capabilities` "
+            "(`allowed_tools`, `require_approval_for`). "
+            "**Création** (sans `config_id`) : nouvelle ligne en base avec déploiement initial **draft**. "
+            "**Mise à jour** (avec `config_id`) : conserve le routage (`routing`), les politiques (`policies`), "
+            "les `tests` et le bloc `deployment` déjà enregistrés — Axelia ne déclenche pas canary, activation ni pause. "
             "Action sensible : exécution uniquement après validation humaine dans l'UI. "
             "ATTENTION : `allowed_tools` et `require_approval_for` n'acceptent QUE des slugs "
             "techniques d'outils (voir liste ci-dessous), jamais des libellés métier en français "
@@ -648,12 +660,11 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             },
         ],
         "use_when": (
-            "l'utilisateur demande de créer ou modifier un agent Studio ; proposer les changements "
-            "puis demander confirmation via la carte d'approbation. "
-            "Pour un **profil brouillon complet** (comportement par défaut attendu) : dans la même "
-            "session, après validation utilisateur, enchaîne avec `upsert_agent_studio_routing` "
+            "l'utilisateur demande de créer ou modifier la **fiche** d'un agent Studio (objectif, audience, outils) ; "
+            "proposer les changements puis demander confirmation via la carte d'approbation. "
+            "Pour une **fiche exploitable** : après validation utilisateur, enchaîne avec `upsert_agent_studio_routing` "
             "(intents représentatifs des scénarios clients, fallback, seuil de confiance, "
-            "forbidden_actions si pertinent) - soit dans le tour suivant après création, soit "
+            "forbidden_actions si pertinent) — soit au tour suivant après création, soit "
             "plusieurs tool_calls si le modèle peut tout préparer d'un coup (chaque écriture sensible "
             "reste soumise à carte de confirmation). "
             "Renseigne aussi `kpi` et une `audience` claire quand tu as le contexte ; choisis "
@@ -662,8 +673,9 @@ AXELIA_ONLY_SKILLS: List[Dict[str, Any]] = [
             "identifiée pendant la conversation (nom, téléphone, UUID dans le bloc périmètre), "
             "**inclus l'`account_id` de cette ligne dans les args** : la carte de validation utilisera "
             "directement ce compte sans demander à l'utilisateur de changer de périmètre. "
-            "Précise toujours dans la `reply` que la configuration sera enregistrée en **brouillon** "
-            "et qu'elle reste à activer manuellement dans Agent Studio. "
+            "Dans la `reply`, précise qu'**aucune mise en prod** (canary / activer) ne se fait depuis Axelia : "
+            "Agent Studio pour Valider, simuler, puis Déployer canary / Activer ; une **création** démarre en draft, "
+            "une **édition** garde le statut de déploiement existant tant qu'on ne passe pas par l'UI Studio. "
             "Si l'utilisateur évoque des cas métier d'escalade (« approbation pour facturation », "
             "« litiges graves » …), ne les place PAS dans `require_approval_for` : intègre-les "
             "à `primary_goal` (ex. « ... escalade vers un humain pour facturation, litiges graves »)."
@@ -698,8 +710,9 @@ def get_axelia_skills_prompt_section() -> str:
         "Pour les actions Meta (templates, blocage) ou pour un résumé volontairement limité à une ligne, "
         "reste sur le compte courant ou demande la précision si l’UI ne l’a pas encore fixée. "
         "Pour upsert_agent_studio_config en mode « Tous les comptes » : ne demande pas à l'utilisateur "
-        "de changer le sélecteur en haut de l'écran ; passe simplement l'`account_id` cible dans les "
-        "args du tool_call et précise dans la reply que l'agent sera créé en **brouillon**.",
+        "de changer le sélecteur en haut de l'écran ; passe l'`account_id` cible dans les args du tool_call. "
+        "Précise dans la reply : **création** = fiche nouvelle en draft en base ; **édition** = conserve le "
+        "statut de déploiement existant ; canary / activer / pause uniquement depuis Agent Studio.",
         "",
     ]
     for sk in [*SKILLS_CATALOG, *AXELIA_ONLY_SKILLS]:
@@ -762,23 +775,26 @@ def get_axelia_skills_prompt_section() -> str:
         "- Résumés : get_conversation_digest une fois conversation_id connu ; "
         "summarize_contact_inbox (all_accessible pour toutes les lignes permises).",
         "- Blocage Meta : meta_block_contact seulement avec contact_id réel ; jamais sans confirmation UI.",
-        "- Profil agent Axelia (comportement par défaut) : pour une création ou refonte, viser un **brouillon "
-        "complet** - objectif + audience + outils dans `upsert_agent_studio_config`, puis règles de routage "
-        "(intents, fallback, seuil, actions interdites si utile) via `upsert_agent_studio_routing` ; "
-        "rappelle l’onglet **Tests** dans Agent Studio avant activation / canary en prod. "
+        "- Profil agent Axelia (comportement par défaut) : pour une création ou refonte, viser une **fiche cohérente** — "
+        "objectif + audience + outils dans `upsert_agent_studio_config`, puis routage et actions interdites "
+        "(intents, fallback, seuil, `forbidden_actions` sous `policies`) via `upsert_agent_studio_routing` ; "
+        "rappelle l’onglet **Tests** (simulation heuristique, pas LLM) et la validation backend dans Agent Studio "
+        "avant **Déployer canary** / **Activer** en prod. "
         "- Agent Studio (lecture, sans carte de confirmation) : `list_agent_studio_configs` pour inventorier "
         "les agents (résumé par ligne ; account_scope=all_accessible ou account_id explicite en mode multi-comptes) ; "
-        "`get_agent_studio_config` pour la fiche complète + anomalies de validation quand tu as un config_id UUID. "
+        "`get_agent_studio_config` pour la fiche complète (objectif, routage, politiques, capacités, tests, déploiement) "
+        "+ anomalies de validation quand tu as un config_id UUID. "
         "**Ne dis pas** que tu ne peux pas lister ou lire les configurations si l'utilisateur a l'accès Studio.",
-        "- Agent Studio (écriture) : upsert_agent_studio_config crée/met à jour l'en-tête (objectif, outils…) en **brouillon** ; "
-            "upsert_agent_studio_routing met à jour les **règles de routage** (intents, fallback, seuil, forbidden_actions) "
-            "sur un config_id existant - même **carte de confirmation**, aucun déploiement auto "
-            "(deployment.status inchangé sauf si déjà défini côté UI). "
+        "- Agent Studio (écriture) : `upsert_agent_studio_config` crée ou met à jour **nom, objectif, capacités outils** "
+        "(nouvelle fiche = draft en base ; édition = conserve `deployment`, `routing`, `policies`, `tests` existants). "
+        "`upsert_agent_studio_routing` met à jour **routing** (intents, fallback, seuil) et optionnellement "
+        "`policies.forbidden_actions` sur un `config_id` existant — même **carte de confirmation**, "
+        "**aucun** passage en canary / actif / pause depuis ces outils (réservé à l’UI Agent Studio : releases). "
         "En mode « Tous les comptes », si une ligne WABA précise est identifiable (nom, UUID dans le bloc périmètre), "
         "passe son `account_id` dans les args : ne demande PAS à l'utilisateur de changer le sélecteur en haut "
         "de l'écran avant de valider, la carte d'approbation utilisera ce `account_id` directement. "
-        "Indique clairement dans la `reply` : « configuration enregistrée en brouillon, à activer ensuite "
-        "depuis Agent Studio » pour rassurer l'utilisateur. "
+        "Dans la `reply`, indique qu’il faut finaliser dans Agent Studio (tests, Valider, déploiement) — "
+        "ne prétends pas qu’Axelia a mis l’agent en production toute seule. "
         "`allowed_tools` et `require_approval_for` n'acceptent QUE les slugs techniques suivants : "
         + ", ".join(sorted(_AGENT_STUDIO_TOOL_SLUGS))
         + " (outils sensibles obligatoires dans `require_approval_for` s'ils sont dans `allowed_tools` : "
@@ -1976,7 +1992,7 @@ async def _skill_upsert_agent_studio_routing(
     args: Dict[str, Any],
     account: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Met à jour routing + forbidden_actions ; exécuté après confirmation UI (comme upsert_agent_studio_config)."""
+    """Met à jour ``routing`` et optionnellement ``policies.forbidden_actions`` ; après confirmation UI."""
     from app.services.agent_studio_service import (
         get_agent_config,
         normalize_agent_config,

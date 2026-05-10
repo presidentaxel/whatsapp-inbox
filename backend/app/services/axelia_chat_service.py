@@ -412,7 +412,10 @@ _AXELIA_AUTO_PLAN_BY_SKILL: Dict[str, tuple[str, str]] = {
     "list_agent_studio_configs": ("Agent Studio", "Je liste les agents configurés sur la ligne…"),
     "get_agent_studio_config": ("Agent Studio", "Je charge la configuration détaillée de l’agent…"),
     "upsert_agent_studio_config": ("Agent Studio", "Je prépare la configuration de l’agent pour validation…"),
-    "upsert_agent_studio_routing": ("Règles Agent Studio", "Je prépare la mise à jour du routage (intents / règles) pour validation…"),
+    "upsert_agent_studio_routing": (
+        "Règles Agent Studio",
+        "Je prépare la mise à jour du routage (intents, fallback, seuil) et des actions interdites pour validation…",
+    ),
 }
 
 
