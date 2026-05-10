@@ -1,9 +1,10 @@
 """
-Jalon M2 — Boucle Gemini outbound (1 tour d’outils max) pour l’inbox Agent Studio.
+Jalon M2–M3 — Boucle Gemini outbound (1 tour d’outils max) pour l’inbox Agent Studio.
 
-- Feature flag : ``settings.AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED``.
+- M2 : ``AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED`` — JSON ``reply`` + ``tool_calls``, exécution noyau, synthèse.
+- M3 : ``AGENT_OUTBOUND_REFLECTION_ENABLED`` — après résultats d’outils, un court passage JSON « qualité »
+  injecté dans le prompt de synthèse (un seul appel, tokens plafonnés).
 - Réutilise ``_call_gemini_api`` (retry Tenacity + circuit breaker via l’appelant).
-- Deux passages modèle : (1) JSON ``reply`` + ``tool_calls`` ; (2) texte final après observations.
 """
 from __future__ import annotations
 
@@ -12,7 +13,11 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.agent_outbound.kernel import run_agent_kernel_v1_tool_calls
-from app.services.agent_outbound.parsing import normalize_agent_tool_calls_payload, parse_json_object
+from app.services.agent_outbound.parsing import (
+    format_reflection_notes,
+    normalize_agent_tool_calls_payload,
+    parse_json_object,
+)
 from app.services.agent_outbound.registry import (
     AgentOutboundToolSpec,
     build_agent_kernel_v1_catalog,
@@ -22,6 +27,7 @@ from app.services.agent_outbound.registry import (
 logger = logging.getLogger("uvicorn.error").getChild("agent_outbound.loop")
 
 _TOOL_RESULTS_MAX_CHARS = 14_000
+_REFLECTION_OBS_SNIP_CHARS = 8000
 
 
 def _compute_reply_confidence(
@@ -70,6 +76,103 @@ def _round1_response_schema() -> Dict[str, Any]:
         },
         "required": ["tool_calls"],
     }
+
+
+def _reflection_response_schema() -> Dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "sufficiency": {
+                "type": "string",
+                "enum": ["sufficient", "partial", "insufficient"],
+            },
+            "brief": {
+                "type": "string",
+                "description": "Analyse interne max ~600 caractères, en français.",
+            },
+            "caveats": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["sufficiency", "brief", "caveats"],
+    }
+
+
+async def _run_reflection_pass(
+    *,
+    conversation_id: str,
+    msg: str,
+    observation_block: str,
+    draft_reply_hint: str,
+    read_timeout: float,
+) -> str:
+    """Un passage Gemini JSON court ; chaîne vide si échec (dégradation silencieuse)."""
+    from app.core.config import settings
+
+    obs = (observation_block or "").strip()
+    if not obs:
+        return ""
+    if len(obs) > _REFLECTION_OBS_SNIP_CHARS:
+        obs = obs[: _REFLECTION_OBS_SNIP_CHARS - 3] + "…"
+
+    reflect_system = (
+        "Tu es un contrôleur qualité interne (le client ne te lit jamais).\n"
+        "Tu reçois le dernier message client et les résultats JSON d’outils déjà exécutés.\n"
+        "Tâche : juger si les données permettent une réponse fiable, signaler lacunes ou erreurs d’outils, "
+        "sans rédiger le message client.\n"
+        "Réponds avec un seul objet JSON (schéma imposé) : sufficiency, brief (≤600 caractères), "
+        "caveats (0 à 6 courtes chaînes).\n"
+        "Rappels : ne pas inventer de faits hors JSON ; si un outil a renvoyé une erreur, cite-la dans caveats.\n"
+        "\n## Résultats d’outils (JSON)\n\n```json\n"
+        + obs
+        + "\n```\n"
+    )
+    user_part = "Analyse par rapport au dernier message client (extrait ci-dessous)."
+    user_text = (msg or "").strip()[:2000]
+    if (draft_reply_hint or "").strip():
+        user_text += (
+            "\n\n---\nBrouillon interne optionnel (tour précédent, ne pas traiter comme vérité) :\n"
+            + (draft_reply_hint.strip()[:800])
+        )
+    contents: List[Dict[str, Any]] = [
+        {"role": "user", "parts": [{"text": f"{user_part}\n\n{user_text}"}]},
+    ]
+
+    gen_reflect: Dict[str, Any] = {
+        "temperature": 0.2,
+        "maxOutputTokens": 384,
+        "responseMimeType": "application/json",
+        "responseSchema": _reflection_response_schema(),
+    }
+    if str(settings.GEMINI_MODEL).startswith("gemini-2.5-"):
+        gen_reflect["thinkingConfig"] = {"thinkingBudget": 256}
+
+    data_r, err_r = await _gemini_generate_once(
+        conv_key=f"agent-outbound-r3-reflect-{conversation_id}",
+        system_instruction=reflect_system,
+        contents=contents,
+        generation_config=gen_reflect,
+        read_timeout=read_timeout,
+    )
+    if err_r or not data_r:
+        logger.info(
+            "agent outbound M3 reflection skipped conversation=%s reason=%s",
+            conversation_id,
+            err_r or "empty",
+        )
+        return ""
+
+    text_r = _extract_text_from_gemini(data_r)
+    parsed_r = parse_json_object(text_r) if text_r else None
+    if not parsed_r:
+        logger.info("agent outbound M3 reflection parse failed conversation=%s", conversation_id)
+        return ""
+
+    notes = format_reflection_notes(parsed_r)
+    if notes:
+        logger.info("agent outbound M3 reflection ok conversation=%s chars=%d", conversation_id, len(notes))
+    return notes
 
 
 def _format_tool_catalog_for_system(specs: List[AgentOutboundToolSpec]) -> str:
@@ -204,11 +307,12 @@ async def run_agent_outbound_inbox_gemini_with_tools(
     qa_matches: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
-    Génère une réponse inbox avec au plus **un** tour d’exécution d’outils puis une synthèse.
+    Génère une réponse inbox avec au plus un tour d’exécution d’outils, optionnellement une réflexion
+    qualité (M3), puis une synthèse destinée au client.
 
     Retour aligné sur ``generate_agent_studio_inbox_reply_with_confidence`` :
     ``reply``, ``confidence``, ``confidence_reasons``, ``qa_queries_used``,
-    et optionnellement ``agent_kernel_tools_used`` (liste de noms d’outils exécutés avec succès côté kernel).
+    optionnellement ``agent_kernel_tools_used``, ``agent_outbound_reflection_used`` (M3).
     """
     from app.core.config import settings
 
@@ -301,6 +405,24 @@ async def run_agent_outbound_inbox_gemini_with_tools(
                     tools_used.append(sk)
         observation_block = _truncate_tool_results_blob(json.dumps(results, ensure_ascii=False))
 
+    reflection_notes = ""
+    reflection_active = False
+    if observation_block and bool(getattr(settings, "AGENT_OUTBOUND_REFLECTION_ENABLED", False)):
+        reflex_to = float(getattr(settings, "AGENT_OUTBOUND_REFLECTION_READ_TIMEOUT_S", 25.0) or 25.0)
+        reflex_to = min(read_timeout, reflex_to)
+        draft_hint = ""
+        dr = parsed.get("reply")
+        if isinstance(dr, str) and dr.strip():
+            draft_hint = dr.strip()
+        reflection_notes = await _run_reflection_pass(
+            conversation_id=conversation_id,
+            msg=msg,
+            observation_block=observation_block,
+            draft_reply_hint=draft_hint,
+            read_timeout=reflex_to,
+        )
+        reflection_active = bool(reflection_notes)
+
     round2_instruction = (
         "Tu es l’agent WhatsApp (conversation client, français).\n"
         "Tu reçois éventuellement des **résultats d’outils internes** (JSON). Rédige **uniquement** "
@@ -310,13 +432,21 @@ async def run_agent_outbound_inbox_gemini_with_tools(
         "- Si les résultats d’outils sont vides ou en erreur, reste prudent et propose une suite concrète sans inventer.\n"
     )
     if observation_block:
-        system_round2 = (
-            round2_instruction
-            + "\n---\n## Observations outils (JSON)\n\n```json\n"
-            + observation_block
-            + "\n```\n\n---\n## Fiche agent\n\n"
-            + agent_playbook
-        ).strip()
+        parts_r2: List[str] = [
+            round2_instruction,
+            "\n---\n## Observations outils (JSON)\n\n```json\n",
+            observation_block,
+            "\n```",
+        ]
+        if reflection_notes:
+            parts_r2.extend(
+                [
+                    "\n\n---\n## Réflexion qualité (interne — ne jamais citer au client)\n\n",
+                    reflection_notes,
+                ]
+            )
+        parts_r2.extend(["\n\n---\n## Fiche agent\n\n", agent_playbook])
+        system_round2 = "".join(parts_r2).strip()
     else:
         system_round2 = (round2_instruction + "\n---\n## Fiche agent\n\n" + agent_playbook).strip()
     if qa_block:
@@ -348,6 +478,8 @@ async def run_agent_outbound_inbox_gemini_with_tools(
     )
     reasons_list = list(reasons)
     reasons_list.insert(0, "Mode Agent Studio + outils noyau (M2).")
+    if reflection_active:
+        reasons_list.insert(1, "Contrôle qualité interne (M3).")
     if tools_used:
         reasons_list.append(f"Outils exécutés: {', '.join(tools_used)}.")
 
@@ -359,10 +491,13 @@ async def run_agent_outbound_inbox_gemini_with_tools(
     }
     if tools_used:
         out["agent_kernel_tools_used"] = tools_used
+    if reflection_active:
+        out["agent_outbound_reflection_used"] = True
     logger.info(
-        "agent outbound M2 done conversation=%s account=%s tools_used=%s",
+        "agent outbound M2+M3 done conversation=%s account=%s tools_used=%s reflection=%s",
         conversation_id,
         account_id,
         tools_used,
+        reflection_active,
     )
     return out

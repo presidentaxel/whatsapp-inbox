@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     # ─── Agent outbound (inbox : boucle Gemini + outils noyau, séparé d’Axelia) ─
     AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED: bool = False
     AGENT_OUTBOUND_GEMINI_READ_TIMEOUT_S: float = 45.0
+    # Réflexion courte (1 appel Gemini) après résultats d’outils, avant synthèse client
+    AGENT_OUTBOUND_REFLECTION_ENABLED: bool = False
+    AGENT_OUTBOUND_REFLECTION_READ_TIMEOUT_S: float = 25.0
 
     # ─── Axelia (hub IA) ───────────────────────────────────────────────────────
     AXELIA_FAST_MODEL: str = ""

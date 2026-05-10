@@ -42,3 +42,37 @@ def parse_json_object(text: str) -> Dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return obj if isinstance(obj, dict) else None
+
+
+_REFLECTION_SUFFICIENCY = frozenset({"sufficient", "partial", "insufficient"})
+
+
+def format_reflection_notes(data: Dict[str, Any], *, max_brief: int = 900) -> str:
+    """
+    Formate la sortie JSON du tour « réflexion » (M3) pour injection dans le prompt de synthèse.
+
+    Ne doit contenir aucune donnée client sensible hors périmètre déjà présent dans les observations.
+    """
+    if not isinstance(data, dict):
+        return ""
+    suff = str(data.get("sufficiency") or "").strip().lower()
+    if suff not in _REFLECTION_SUFFICIENCY:
+        suff = "partial"
+    brief = str(data.get("brief") or "").strip()
+    if len(brief) > max_brief:
+        brief = brief[: max_brief - 1] + "…"
+    caveats_raw = data.get("caveats")
+    caveats: List[str] = []
+    if isinstance(caveats_raw, list):
+        for x in caveats_raw[:6]:
+            s = str(x).strip()
+            if s:
+                caveats.append(s)
+    lines = [
+        f"- Évaluation des données pour répondre : {suff}",
+        f"- Synthèse interne : {brief or '(vide)'}",
+    ]
+    if caveats:
+        lines.append("- Points d’attention :")
+        lines.extend(f"  - {c}" for c in caveats)
+    return "\n".join(lines).strip()
