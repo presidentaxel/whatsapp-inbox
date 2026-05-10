@@ -46,3 +46,12 @@ def test_parse_themes_string_with_braces_does_not_break_balance():
 def test_parse_themes_invalid_returns_none():
     assert _parse_themes_json_blob("") is None
     assert _parse_themes_json_blob("not json") is None
+
+
+def test_parse_themes_repair_invalid_backslash_apostrophe():
+    """Les modèles émettent parfois \\' (invalide en JSON) pour d'affaires."""
+    note = "mot d" + chr(92) + "'" + "affaires"
+    raw = '{"themes":[],"methodology_note":"' + note + '"}'
+    got = _parse_themes_json_blob(raw)
+    assert got is not None
+    assert got["methodology_note"] == "mot d'affaires"

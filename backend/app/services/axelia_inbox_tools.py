@@ -1281,7 +1281,8 @@ def _themes_gemini_generation_base(model_id: str) -> Dict[str, Any]:
     """Réduit le risque de troncation JSON sur les modèles 2.5 (thinking)."""
     gen: Dict[str, Any] = {
         "temperature": 0.25,
-        "maxOutputTokens": 2048,
+        # Plusieurs thèmes + exemples : 2048 coupait souvent au milieu d'une chaîne.
+        "maxOutputTokens": 8192,
     }
     mid = (model_id or "").lower()
     if mid.startswith("gemini-2.5-flash"):
@@ -1289,6 +1290,39 @@ def _themes_gemini_generation_base(model_id: str) -> Dict[str, Any]:
     elif mid.startswith("gemini-2.5-"):
         gen["thinkingConfig"] = {"thinkingBudget": 512}
     return gen
+
+
+def _join_gemini_candidate_text_parts(data: Dict[str, Any]) -> str:
+    """Concatène tous les fragments `text` du premier candidat (réponses JSON longues / multi-parts)."""
+    for cand in (data or {}).get("candidates") or []:
+        if not isinstance(cand, dict):
+            continue
+        content = cand.get("content") or {}
+        chunks: List[str] = []
+        for part in content.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            t = (part.get("text") or "").strip()
+            if t:
+                chunks.append(t)
+        if chunks:
+            return "".join(chunks).strip()
+    return ""
+
+
+def _gemini_first_finish_reason(data: Dict[str, Any]) -> Optional[str]:
+    cands = (data or {}).get("candidates") or []
+    if not cands or not isinstance(cands[0], dict):
+        return None
+    c0 = cands[0]
+    return c0.get("finishReason") or c0.get("finish_reason")
+
+
+def _repair_llm_json_invalid_backslash_apostrophe(s: str) -> str:
+    """
+    JSON standard n'autorise pas `\\'` dans une chaîne ; certains modèles l'émettent pour l'apostrophe française.
+    """
+    return s.replace("\\'", "'")
 
 
 def _parse_themes_json_blob(raw: str) -> Optional[Dict[str, Any]]:
@@ -1312,12 +1346,13 @@ def _parse_themes_json_blob(raw: str) -> Optional[Dict[str, Any]]:
         for cand in (blob, _strip_outer_markdown_fence(blob)):
             if not cand:
                 continue
-            try:
-                data = json.loads(cand)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(data, dict):
-                return data
+            for attempt in (cand, _repair_llm_json_invalid_backslash_apostrophe(cand)):
+                try:
+                    data = json.loads(attempt)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict):
+                    return data
         for base in (blob, _strip_outer_markdown_fence(blob)):
             extracted = _extract_balanced_json_object(base)
             if extracted and extracted not in seen:
@@ -1336,7 +1371,6 @@ async def synthesize_inbound_question_themes_with_gemini(
     """
     from app.core.circuit_breaker import CircuitBreakerOpenError, gemini_circuit_breaker
     from app.core.config import settings
-    from app.services.audio_transcription_service import _extract_text_from_gemini_response
     from app.services.bot_service import _call_gemini_api
 
     if not settings.GEMINI_API_KEY:
@@ -1363,6 +1397,9 @@ async def synthesize_inbound_question_themes_with_gemini(
         "- Les libellés de thèmes sont courts et métier (ex. « Retards / horaires », « Facturation »).\n"
         "- La fréquence est **relative à cet échantillon** (pas une vérité statistique globale).\n"
         "- Sortie : un objet JSON avec les champs `themes` et `methodology_note` (contrainte API).\n"
+        "- Dans les chaînes entre guillemets doubles, **n’utilise pas** `\\'` pour une apostrophe (invalide en JSON) ; "
+        "écris une apostrophe telle quelle, ex. `d'affaires`.\n"
+        "- `description` : une ou deux phrases maximum par thème ; 1 à 2 exemples courts par thème.\n"
         f"{ctx_line}"
         "Schéma JSON attendu :\n"
         "{\n"
@@ -1434,12 +1471,15 @@ async def synthesize_inbound_question_themes_with_gemini(
         logger.exception("Gemini themes failed: %s", exc)
         return {"error": f"Synthèse impossible : {str(exc)[:160]}", "themes": []}
 
-    raw_text = (_extract_text_from_gemini_response(data or {}) or "").strip()
+    raw_text = _join_gemini_candidate_text_parts(data or {})
     parsed = _parse_themes_json_blob(raw_text)
     if not parsed:
+        fr = _gemini_first_finish_reason(data or {})
         logger.warning(
-            "Gemini inbound themes: JSON non exploitable (extrait=%r)",
-            raw_text[:240],
+            "Gemini inbound themes: JSON non exploitable finishReason=%s len=%s extrait=%r",
+            fr,
+            len(raw_text),
+            raw_text[:400] + ("…" if len(raw_text) > 400 else ""),
         )
         return {
             "error": "Réponse IA non JSON exploitable.",
