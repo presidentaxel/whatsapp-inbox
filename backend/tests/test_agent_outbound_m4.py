@@ -43,7 +43,7 @@ def test_validate_agent_kernel_rejects_bool_as_integer():
             "search_inbox_messages",
             {"query": "x", "limit": True},
         )
-        == AgentOutboundToolErrorCode.INVALID_ARGUMENTS
+        == AgentOutboundToolErrorCode.UNKNOWN_TOOL
     )
 
 
@@ -53,20 +53,22 @@ def test_validate_agent_kernel_rejects_prototype_pollution_keys():
             "search_inbox_messages",
             {"query": "x", "__proto__": {}},
         )
-        == AgentOutboundToolErrorCode.INVALID_ARGUMENTS
+        == AgentOutboundToolErrorCode.UNKNOWN_TOOL
     )
 
 
 def test_build_effective_allowlist_coerces_case():
     eff = build_effective_kernel_v1_allowlist(["List_Templates", "search_inbox_messages"])
-    assert eff == frozenset({"list_templates", "search_inbox_messages"})
+    assert eff == frozenset()
 
 
 def test_build_catalog_records_malformed_entries_in_rejected():
     specs, rejected = build_agent_kernel_v1_catalog(
         ["list_templates", "'; DROP--", "search_inbox_messages"]
     )
-    assert {s.name for s in specs} == {"list_templates", "search_inbox_messages"}
+    assert specs == []
+    assert "list_templates" in rejected
+    assert "search_inbox_messages" in rejected
     assert any("DROP" in r for r in rejected)
 
 
@@ -101,4 +103,4 @@ def test_run_kernel_truncates_excess_tool_calls():
 
     out, n = asyncio.run(_go())
     assert len(out) == 8
-    assert n == 8
+    assert n == 0

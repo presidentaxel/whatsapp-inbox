@@ -1,13 +1,8 @@
 """
-Jalon M0 / M4 - Spécification du noyau agent (outils v1 lecture seule).
+Jalon M0 / M4 - Spécification du noyau agent (outils v1).
 
-- Catalogue distinct d’Axelia : seuls les noms listés ici sont exposables au modèle
-  outbound quand la politique le permet.
-- Schémas JSON (arguments) sans ``account_scope=all_accessible`` : le runtime
-  agent reste mono-ligne (M1+).
-- M4 : validation structurelle des args (``validate_args_security_shape``), slugs
-  coercés dans les allowlists, entiers stricts (pas de bool).
-- Codes d’erreur stables pour journalisation et réinjection modèle.
+Catalogue **vide** tant qu’aucune liste d’outils dédiée n’est réintroduite côté produit :
+les anciens outils internes (templates, inbox, Meta…) ne sont plus exposés ni validés ici.
 """
 from __future__ import annotations
 
@@ -22,40 +17,10 @@ from app.services.agent_outbound.security import (
 
 # Doit rester strictement aligné sur ``agent_studio_service.ALLOWED_AGENT_TOOLS``
 # (sans import circulaire / effet de bord DB au chargement du module).
-AGENT_STUDIO_ALLOWLIST_SLUGS: frozenset[str] = frozenset(
-    {
-        "list_templates",
-        "get_template_status",
-        "create_template",
-        "prepare_template_image_header",
-        "list_broadcast_groups",
-        "search_inbox_messages",
-        "get_conversation_digest",
-        "summarize_contact_inbox",
-        "search_contacts",
-        "get_contact",
-        "list_recent_conversations",
-        "find_satisfied_contacts",
-        "list_broadcast_campaigns",
-        "get_campaign_summary",
-        "get_whatsapp_business_profile",
-        "meta_block_contact",
-    }
-)
+AGENT_STUDIO_ALLOWLIST_SLUGS: frozenset[str] = frozenset()
 
-# Outils Agent Studio « sensibles » (écriture / action Meta) - jamais dans le noyau v1 lecture seule.
-_AGENT_WRITE_OR_SENSITIVE = frozenset(
-    {
-        "create_template",
-        "prepare_template_image_header",
-        "meta_block_contact",
-    }
-)
-
-# Sous-ensemble lecture seule du catalogue Agent Studio, pour la boucle outbound (kernel).
-AGENT_KERNEL_V1_READ_TOOLS: frozenset[str] = frozenset(
-    AGENT_STUDIO_ALLOWLIST_SLUGS - _AGENT_WRITE_OR_SENSITIVE
-)
+# Sous-ensemble exécutable en lecture seule pour la boucle outbound (vide = aucun outil).
+AGENT_KERNEL_V1_READ_TOOLS: frozenset[str] = frozenset()
 
 
 class AgentOutboundToolErrorCode(str, Enum):
@@ -137,161 +102,7 @@ def _schema_object(
     }
 
 
-_TOOL_SPECS_V1: Tuple[AgentOutboundToolSpec, ...] = (
-    AgentOutboundToolSpec(
-        name="list_templates",
-        description=(
-            "Liste les templates Meta de la ligne (nom, langue, statut, catégorie, résumé des composants)."
-        ),
-        parameters_json_schema=_schema_object(properties={}, required=[]),
-    ),
-    AgentOutboundToolSpec(
-        name="get_template_status",
-        description="Vérifie le statut d’un template Meta par son nom exact.",
-        parameters_json_schema=_schema_object(
-            properties={
-                "template_name": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Nom du template tel que sur Meta.",
-                },
-            },
-            required=["template_name"],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="list_broadcast_groups",
-        description="Liste les groupes de diffusion (id, nom, taille).",
-        parameters_json_schema=_schema_object(properties={}, required=[]),
-    ),
-    AgentOutboundToolSpec(
-        name="search_inbox_messages",
-        description=(
-            "Recherche dans les messages texte de l’inbox de la ligne (toutes conversations), "
-            "avec filtres temporels optionnels."
-        ),
-        parameters_json_schema=_schema_object(
-            properties={
-                "query": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Texte ou mots-clés à retrouver.",
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "match_mode": {"type": "string", "enum": ["all", "any"]},
-                "since": {
-                    "type": "string",
-                    "description": "Borne basse ISO 8601 (optionnel).",
-                },
-                "until": {
-                    "type": "string",
-                    "description": "Borne haute ISO 8601 (optionnel).",
-                },
-            },
-            required=["query"],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="get_conversation_digest",
-        description="Récupère les derniers messages texte d’une conversation (UUID).",
-        parameters_json_schema=_schema_object(
-            properties={
-                "conversation_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "UUID de la conversation inbox.",
-                },
-                "max_messages": {"type": "integer", "minimum": 1, "maximum": 200},
-            },
-            required=["conversation_id"],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="summarize_contact_inbox",
-        description=(
-            "Agrège les derniers messages des fils liés à un contact (nom affiché, profil WhatsApp ou numéro)."
-        ),
-        parameters_json_schema=_schema_object(
-            properties={
-                "contact_search": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Identifiant textuel du contact à résumer.",
-                },
-                "max_threads": {"type": "integer", "minimum": 1, "maximum": 50},
-                "max_messages_per_thread": {"type": "integer", "minimum": 1, "maximum": 100},
-            },
-            required=["contact_search"],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="search_contacts",
-        description="Recherche des contacts CRM liés à des conversations sur la ligne.",
-        parameters_json_schema=_schema_object(
-            properties={
-                "query": {"type": "string", "minLength": 1},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            },
-            required=["query"],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="get_contact",
-        description="Détails d’un contact CRM par UUID (ligne courante).",
-        parameters_json_schema=_schema_object(
-            properties={
-                "contact_id": {"type": "string", "minLength": 1},
-            },
-            required=["contact_id"],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="list_recent_conversations",
-        description="Liste les conversations inbox récentes (métadonnées + extrait).",
-        parameters_json_schema=_schema_object(
-            properties={
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            },
-            required=[],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="find_satisfied_contacts",
-        description="Contacts ayant exprimé une satisfaction récente (signaux dans messages entrants).",
-        parameters_json_schema=_schema_object(
-            properties={
-                "days": {"type": "integer", "minimum": 1, "maximum": 365},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            },
-            required=[],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="list_broadcast_campaigns",
-        description="Liste les campagnes de diffusion récentes (statut, compteurs).",
-        parameters_json_schema=_schema_object(
-            properties={
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            },
-            required=[],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="get_campaign_summary",
-        description="Statistiques détaillées d’une campagne par UUID.",
-        parameters_json_schema=_schema_object(
-            properties={
-                "campaign_id": {"type": "string", "minLength": 1},
-            },
-            required=["campaign_id"],
-        ),
-    ),
-    AgentOutboundToolSpec(
-        name="get_whatsapp_business_profile",
-        description="Lit le profil business WhatsApp public de la ligne (about, sites, vertical…).",
-        parameters_json_schema=_schema_object(properties={}, required=[]),
-    ),
-)
+_TOOL_SPECS_V1: Tuple[AgentOutboundToolSpec, ...] = ()
 
 
 def _spec_index() -> Dict[str, AgentOutboundToolSpec]:

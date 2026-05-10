@@ -2,7 +2,6 @@
 
 import asyncio
 import importlib.util
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -38,29 +37,18 @@ def test_normalize_agent_tool_calls_payload_aliases_and_cap():
     ]
 
 
-def test_run_agent_outbound_loop_minimal_mocked():
-    """Deux appels Gemini mockés, sans outils exécutés."""
+def test_run_agent_outbound_loop_returns_empty_when_no_kernel_tools():
+    """Catalogue noyau vide : la boucle sort avant tout appel Gemini."""
     if importlib.util.find_spec("dotenv") is None:
         pytest.skip("python-dotenv requis (import de app.core.config.settings)")
-
-    def _cand(text: str) -> dict:
-        return {"candidates": [{"content": {"parts": [{"text": text}]}}]}
-
-    round1 = json.dumps({"reply": "", "tool_calls": []})
-    round2 = "Message final pour le client."
 
     async def _go():
         with patch.object(
             agent_loop,
             "_gemini_generate_once",
             new_callable=AsyncMock,
-            side_effect=[(_cand(round1), None), (_cand(round2), None)],
-        ), patch.object(
-            agent_loop,
-            "_compute_reply_confidence",
-            return_value=(0.85, ["score_ok"]),
-        ):
-            return await run_agent_outbound_inbox_gemini_with_tools(
+        ) as mock_gen:
+            out = await run_agent_outbound_inbox_gemini_with_tools(
                 conversation_id="conv-1",
                 account_id="acc-1",
                 account={"id": "acc-1"},
@@ -72,8 +60,9 @@ def test_run_agent_outbound_loop_minimal_mocked():
                 qa_queries_used=[],
                 qa_matches=[],
             )
+        return out, mock_gen
 
-    out = asyncio.run(_go())
-    assert out.get("reply") == "Message final pour le client."
-    assert out.get("confidence") == 0.85
-    assert "Mode Agent Studio + outils noyau (M2)." in (out.get("confidence_reasons") or [""])[0]
+    out, mock_gen = asyncio.run(_go())
+    mock_gen.assert_not_called()
+    assert out.get("reply") is None
+    assert any("Aucun outil noyau v1" in r for r in (out.get("confidence_reasons") or []))

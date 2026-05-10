@@ -9,28 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from app.core.db import supabase, supabase_execute
 from app.core.pg import execute, fetch_all, fetch_one, get_pool
 
-ALLOWED_AGENT_TOOLS = frozenset(
-    {
-        "list_templates",
-        "get_template_status",
-        "create_template",
-        "prepare_template_image_header",
-        "list_broadcast_groups",
-        "search_inbox_messages",
-        "get_conversation_digest",
-        "summarize_contact_inbox",
-        "search_contacts",
-        "get_contact",
-        "list_recent_conversations",
-        "find_satisfied_contacts",
-        "list_broadcast_campaigns",
-        "get_campaign_summary",
-        "get_whatsapp_business_profile",
-        "meta_block_contact",
-    }
-)
+# Vide tant qu’aucune liste d’outils « client / agent inbox » n’est définie (les anciens slugs
+# internes ne sont plus acceptés en configuration).
+ALLOWED_AGENT_TOOLS: frozenset[str] = frozenset()
 
-SENSITIVE_AGENT_TOOLS = frozenset({"create_template", "meta_block_contact"})
+SENSITIVE_AGENT_TOOLS: frozenset[str] = frozenset()
 
 _metrics_lock = threading.Lock()
 _metrics_counters: Dict[str, int] = {
@@ -141,6 +124,13 @@ def normalize_agent_config(raw: Any) -> Dict[str, Any]:
             out[key] = merged if not isinstance(incoming, dict) else incoming
     tests_raw = raw.get("tests")
     out["tests"] = tests_raw if isinstance(tests_raw, list) else []
+    caps = out.get("capabilities")
+    if isinstance(caps, dict):
+        allowed = [str(x).strip() for x in (caps.get("allowed_tools") or []) if str(x).strip()]
+        appr = [str(x).strip() for x in (caps.get("require_approval_for") or []) if str(x).strip()]
+        allowed_f = [x for x in allowed if x in ALLOWED_AGENT_TOOLS]
+        appr_f = [x for x in appr if x in allowed_f]
+        out["capabilities"] = {**caps, "allowed_tools": allowed_f, "require_approval_for": appr_f}
     return out
 
 
@@ -154,10 +144,20 @@ def finalize_agent_config_row(row: Dict[str, Any]) -> Dict[str, Any]:
 def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
     metrics_record("validate_calls")
     issues: List[Dict[str, str]] = []
+    raw_caps = config.get("capabilities") if isinstance(config.get("capabilities"), dict) else {}
+    raw_allowed_tools = {
+        str(x).strip()
+        for x in (raw_caps.get("allowed_tools") or [])
+        if str(x).strip()
+    }
+    raw_approvals_tools = {
+        str(x).strip()
+        for x in (raw_caps.get("require_approval_for") or [])
+        if str(x).strip()
+    }
     cfg = normalize_agent_config(config)
     routing = cfg.get("routing") or {}
     policies = cfg.get("policies") or {}
-    capabilities = cfg.get("capabilities") or {}
     objective = cfg.get("objective") or {}
     tests = cfg.get("tests") or []
     deployment = cfg.get("deployment") or {}
@@ -188,20 +188,10 @@ def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
         for x in (policies.get("forbidden_actions") or [])
         if str(x).strip()
     }
-    approvals = {
-        str(x).strip()
-        for x in (capabilities.get("require_approval_for") or [])
-        if str(x).strip()
-    }
-    if forbidden & approvals:
+    if forbidden & raw_approvals_tools:
         issues.append({"severity": "warning", "message": "forbidden_actions_overlap_require_approval"})
 
-    allowed_tools = {
-        str(x).strip()
-        for x in (capabilities.get("allowed_tools") or [])
-        if str(x).strip()
-    }
-    unknown_allowed = sorted(x for x in allowed_tools if x not in ALLOWED_AGENT_TOOLS)
+    unknown_allowed = sorted(x for x in raw_allowed_tools if x not in ALLOWED_AGENT_TOOLS)
     if unknown_allowed:
         issues.append(
             {
@@ -210,7 +200,7 @@ def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
                 "details": ",".join(unknown_allowed),
             }
         )
-    unknown_approvals = sorted(x for x in approvals if x not in ALLOWED_AGENT_TOOLS)
+    unknown_approvals = sorted(x for x in raw_approvals_tools if x not in ALLOWED_AGENT_TOOLS)
     if unknown_approvals:
         issues.append(
             {
@@ -219,7 +209,7 @@ def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
                 "details": ",".join(unknown_approvals),
             }
         )
-    missing_allowlist_for_approval = sorted(x for x in approvals if x not in allowed_tools)
+    missing_allowlist_for_approval = sorted(x for x in raw_approvals_tools if x not in raw_allowed_tools)
     if missing_allowlist_for_approval:
         issues.append(
             {
@@ -229,7 +219,7 @@ def validate_agent_config(config: Dict[str, Any]) -> List[Dict[str, str]]:
             }
         )
     sensitive_without_approval = sorted(
-        x for x in allowed_tools if x in SENSITIVE_AGENT_TOOLS and x not in approvals
+        x for x in raw_allowed_tools if x in SENSITIVE_AGENT_TOOLS and x not in raw_approvals_tools
     )
     if sensitive_without_approval:
         issues.append(

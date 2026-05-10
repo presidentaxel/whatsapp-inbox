@@ -37,13 +37,11 @@ Si `AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED` est **vrai** et que la politique d’ou
 
 Timeouts configurables : `AGENT_OUTBOUND_GEMINI_READ_TIMEOUT_S`, `AGENT_OUTBOUND_REFLECTION_READ_TIMEOUT_S`.
 
-## 4. Politique d’outils (alignement M0 / M4)
+## 4. Politique d’outils (M0 / M4)
 
-- Le fichier `backend/app/services/agent_outbound/registry.py` définit **`AGENT_STUDIO_ALLOWLIST_SLUGS`**, qui doit rester **strictement aligné** sur `ALLOWED_AGENT_TOOLS` dans `agent_studio_service.py` (test de non-régression : `test_agent_outbound_allowlist_matches_agent_studio_allowed_tools`).
-- **`AGENT_KERNEL_V1_READ_TOOLS`** : sous-ensemble **lecture seule** (exclut création de template, préparation d’en-tête image, blocage Meta, etc.). L’intersection avec `capabilities.allowed_tools` de la fiche donne la **liste effective** exposée au modèle en mode outils.
-- **M4** : validation des arguments (forme, entiers stricts, slugs coercés), codes d’erreur stables `AgentOutboundToolErrorCode` pour logs et réinjection modèle.
-
-Les outils sensibles côté métier (`SENSITIVE_AGENT_TOOLS` dans `agent_studio_service`) restent pertinents pour la **simulation / validation** Agent Studio ; le noyau outbound ne les exécute pas dans le périmètre lecture v1.
+- **État actuel (gel produit)** : `ALLOWED_AGENT_TOOLS` dans `agent_studio_service.py` et les constantes miroir dans `agent_outbound/registry.py` (`AGENT_STUDIO_ALLOWLIST_SLUGS`, `AGENT_KERNEL_V1_READ_TOOLS`, catalogue de schémas) sont **vides**. Aucun ancien outil interne (templates, inbox, Meta, etc.) n’est exposé au modèle ni accepté dans une fiche agent ; les JSON existants en base sont **nettoyés à la normalisation** (`normalize_agent_config`).
+- La **validation** (`validate_agent_config`) rejette encore toute entrée **brute** inconnue dans `allowed_tools` / `require_approval_for` pour éviter de réintroduire des slugs obsolètes via API sans migration explicite.
+- Quand une nouvelle liste d’outils « agent inbox » sera définie : réalimenter `ALLOWED_AGENT_TOOLS`, aligner `AGENT_STUDIO_ALLOWLIST_SLUGS`, puis `AGENT_KERNEL_V1_READ_TOOLS` (lecture seule) et les entrées `_TOOL_SPECS_V1` ; conserver **M4** (validation args, slugs coercés, `AgentOutboundToolErrorCode`).
 
 ## 5. Variables d’environnement (backend)
 
