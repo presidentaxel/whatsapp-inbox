@@ -1211,18 +1211,118 @@ async def sample_inbound_customer_messages_all_accessible(
     }
 
 
+def _strip_outer_markdown_fence(s: str) -> str:
+    t = (s or "").strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", t)
+        t = re.sub(r"\s*```\s*$", "", t).strip()
+    return t
+
+
+def _extract_balanced_json_object(s: str) -> Optional[str]:
+    """Premier objet JSON `{ ... }` équilibré (hors des chaînes)."""
+    start = s.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(s)):
+        c = s[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+        else:
+            if c == '"':
+                in_string = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return s[start : i + 1]
+    return None
+
+
+def _inbound_themes_gemini_response_schema() -> Dict[str, Any]:
+    """Schéma Gemini (responseSchema) aligné sur la consigne système des thèmes."""
+    theme = {
+        "type": "object",
+        "properties": {
+            "rank": {"type": "integer"},
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "relative_frequency": {"type": "string"},
+            "example_customer_messages": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "rank",
+            "title",
+            "description",
+            "relative_frequency",
+            "example_customer_messages",
+        ],
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "themes": {"type": "array", "items": theme},
+            "methodology_note": {"type": "string"},
+        },
+        "required": ["themes", "methodology_note"],
+    }
+
+
+def _themes_gemini_generation_base(model_id: str) -> Dict[str, Any]:
+    """Réduit le risque de troncation JSON sur les modèles 2.5 (thinking)."""
+    gen: Dict[str, Any] = {
+        "temperature": 0.25,
+        "maxOutputTokens": 2048,
+    }
+    mid = (model_id or "").lower()
+    if mid.startswith("gemini-2.5-flash"):
+        gen["thinkingConfig"] = {"thinkingBudget": 0}
+    elif mid.startswith("gemini-2.5-"):
+        gen["thinkingConfig"] = {"thinkingBudget": 512}
+    return gen
+
+
 def _parse_themes_json_blob(raw: str) -> Optional[Dict[str, Any]]:
-    s = (raw or "").strip()
+    s = (raw or "").strip().lstrip("\ufeff")
     if not s:
         return None
-    if s.startswith("```"):
-        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
-        s = re.sub(r"\s*```$", "", s).strip()
-    try:
-        data = json.loads(s)
-    except json.JSONDecodeError:
-        return None
-    return data if isinstance(data, dict) else None
+    queue: List[str] = [s]
+    seen: set[str] = set()
+    for m in re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", s, re.IGNORECASE):
+        inner = (m.group(1) or "").strip()
+        if inner:
+            queue.append(inner)
+    balanced = _extract_balanced_json_object(s)
+    if balanced:
+        queue.append(balanced)
+    while queue:
+        blob = queue.pop(0).strip()
+        if not blob or blob in seen:
+            continue
+        seen.add(blob)
+        for cand in (blob, _strip_outer_markdown_fence(blob)):
+            if not cand:
+                continue
+            try:
+                data = json.loads(cand)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(data, dict):
+                return data
+        for base in (blob, _strip_outer_markdown_fence(blob)):
+            extracted = _extract_balanced_json_object(base)
+            if extracted and extracted not in seen:
+                queue.append(extracted)
+    return None
 
 
 async def synthesize_inbound_question_themes_with_gemini(
@@ -1262,7 +1362,7 @@ async def synthesize_inbound_question_themes_with_gemini(
         "- Tu ne cites pas de données personnelles identifiables (pas de numéros complets, emails).\n"
         "- Les libellés de thèmes sont courts et métier (ex. « Retards / horaires », « Facturation »).\n"
         "- La fréquence est **relative à cet échantillon** (pas une vérité statistique globale).\n"
-        "- Réponds **uniquement** avec un objet JSON valide, sans markdown ni texte autour.\n"
+        "- Sortie : un objet JSON avec les champs `themes` et `methodology_note` (contrainte API).\n"
         f"{ctx_line}"
         "Schéma JSON attendu :\n"
         "{\n"
@@ -1280,27 +1380,51 @@ async def synthesize_inbound_question_themes_with_gemini(
         f"Nombre maximal de thèmes : {mt}.\n"
     )
 
-    payload = {
+    model = settings.GEMINI_MODEL
+    base_gen = _themes_gemini_generation_base(model)
+    gen_structured = {
+        **base_gen,
+        "responseMimeType": "application/json",
+        "responseSchema": _inbound_themes_gemini_response_schema(),
+    }
+    payload_structured = {
         "system_instruction": {"role": "system", "parts": [{"text": instruction}]},
         "contents": [{"role": "user", "parts": [{"text": numbered}]}],
-        "generationConfig": {
-            "temperature": 0.25,
-            "maxOutputTokens": 2048,
-        },
+        "generationConfig": gen_structured,
+    }
+    payload_plain = {
+        **payload_structured,
+        "generationConfig": base_gen,
     }
     endpoint = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.GEMINI_MODEL}:generateContent"
+        f"{model}:generateContent"
     )
 
     try:
-        data = await gemini_circuit_breaker.call_async(
-            _call_gemini_api,
-            endpoint,
-            payload,
-            "axelia-inbound-themes",
-            read_timeout=55.0,
-        )
+        try:
+            data = await gemini_circuit_breaker.call_async(
+                _call_gemini_api,
+                endpoint,
+                payload_structured,
+                "axelia-inbound-themes",
+                read_timeout=55.0,
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in (400, 404):
+                logger.warning(
+                    "Gemini inbound themes: JSON structuré rejeté (%s), repli sans responseMimeType",
+                    exc.response.status_code,
+                )
+                data = await gemini_circuit_breaker.call_async(
+                    _call_gemini_api,
+                    endpoint,
+                    payload_plain,
+                    "axelia-inbound-themes",
+                    read_timeout=55.0,
+                )
+            else:
+                raise
     except CircuitBreakerOpenError:
         return {"error": "Service IA temporairement indisponible (circuit ouvert).", "themes": []}
     except httpx.HTTPStatusError as exc:
@@ -1313,6 +1437,10 @@ async def synthesize_inbound_question_themes_with_gemini(
     raw_text = (_extract_text_from_gemini_response(data or {}) or "").strip()
     parsed = _parse_themes_json_blob(raw_text)
     if not parsed:
+        logger.warning(
+            "Gemini inbound themes: JSON non exploitable (extrait=%r)",
+            raw_text[:240],
+        )
         return {
             "error": "Réponse IA non JSON exploitable.",
             "raw_excerpt": raw_text[:800],
