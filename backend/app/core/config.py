@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     GEMINI_CONVERSATION_HISTORY_MAX_CHARS: int = 0
     GEMINI_FLOW_RECENT_CONTEXT_CHARS: int = 32000
 
+    # ─── Agent outbound (inbox : boucle Gemini + outils noyau, séparé d’Axelia) ─
+    AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED: bool = False
+    AGENT_OUTBOUND_GEMINI_READ_TIMEOUT_S: float = 45.0
+
     # ─── Axelia (hub IA) ───────────────────────────────────────────────────────
     AXELIA_FAST_MODEL: str = ""
     AXELIA_PRO_MODEL: str = "gemini-2.5-pro"

@@ -599,7 +599,12 @@ async def generate_bot_reply_with_confidence(
     }
 
 
-def _format_agent_studio_inbox_playbook(cfg: Dict[str, Any], route_hint: Dict[str, Any]) -> str:
+def _format_agent_studio_inbox_playbook(
+    cfg: Dict[str, Any],
+    route_hint: Dict[str, Any],
+    *,
+    tools_execution_mode: bool = False,
+) -> str:
     """Bloc texte Agent Studio pour prompt + scoring de confiance (inbox, séparé du playbook bot_profiles)."""
     name = str(cfg.get("name") or "Agent").strip()
     obj = cfg.get("objective") or {}
@@ -656,7 +661,12 @@ def _format_agent_studio_inbox_playbook(cfg: Dict[str, Any], route_hint: Dict[st
         parts.extend(forb_lines)
         parts.append("")
     if tool_lines:
-        parts.append("### Outils (référence métier — ne pas invoquer depuis WhatsApp)")
+        if tools_execution_mode:
+            parts.append(
+                "### Outils autorisés (tu peux les demander en JSON tool_calls ; le serveur les exécute)"
+            )
+        else:
+            parts.append("### Outils (référence métier — ne pas invoquer depuis WhatsApp)")
         parts.extend(tool_lines)
         parts.append("")
     return "\n".join(parts).strip()
@@ -671,6 +681,7 @@ async def generate_agent_studio_inbox_reply_with_confidence(
     """
     Réponse inbox pilotée par la fiche Agent Studio par défaut du compte (pas le playbook bot_profiles).
     """
+    from app.services.agent_outbound.registry import build_effective_kernel_v1_allowlist
     from app.services.agent_studio_service import (
         get_default_agent_config_for_account,
         simulate_agent_route,
@@ -708,14 +719,25 @@ async def generate_agent_studio_inbox_reply_with_confidence(
         return empty
 
     route_hint = simulate_agent_route(cfg, msg)
-    agent_playbook = _format_agent_studio_inbox_playbook(cfg, route_hint)
+    caps_pre = cfg.get("capabilities") or {}
+    allowed_tools_list = [
+        str(x).strip() for x in (caps_pre.get("allowed_tools") or []) if str(x).strip()
+    ]
+    effective_kernel = build_effective_kernel_v1_allowlist(allowed_tools_list)
+    use_tool_loop = bool(settings.AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED) and bool(effective_kernel)
+
+    agent_playbook = _format_agent_studio_inbox_playbook(
+        cfg, route_hint, tools_execution_mode=use_tool_loop
+    )
 
     logger.info(
-        "Agent Studio inbox context for conversation %s: account=%s, message_len=%d, agent_sheet_len=%d",
+        "Agent Studio inbox context for conversation %s: account=%s, message_len=%d, agent_sheet_len=%d, "
+        "agent_outbound_tools=%s",
         conversation_id,
         account_id,
         len(msg),
         len(agent_playbook),
+        use_tool_loop,
     )
 
     qa_block = ""
@@ -759,6 +781,31 @@ async def generate_agent_studio_inbox_reply_with_confidence(
         conversation_parts[-1] = {"role": "user", "parts": [{"text": msg}]}
     else:
         conversation_parts.append({"role": "user", "parts": [{"text": msg}]})
+
+    if use_tool_loop:
+        from app.services.account_service import get_account_by_id
+        from app.services.agent_outbound.loop import run_agent_outbound_inbox_gemini_with_tools
+
+        account_row = await get_account_by_id(account_id)
+        if not account_row:
+            return {
+                "reply": None,
+                "confidence": 0.0,
+                "confidence_reasons": ["Compte introuvable pour l'exécution des outils agent."],
+                "qa_queries_used": qa_queries_used,
+            }
+        return await run_agent_outbound_inbox_gemini_with_tools(
+            conversation_id=conversation_id,
+            account_id=account_id,
+            account=account_row,
+            allowed_tools=allowed_tools_list,
+            agent_playbook=agent_playbook,
+            qa_block=qa_block,
+            msg=msg,
+            conversation_parts=conversation_parts,
+            qa_queries_used=qa_queries_used,
+            qa_matches=qa_matches,
+        )
 
     generation_config: Dict[str, Any] = {
         "temperature": 0.4,
