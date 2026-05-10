@@ -149,6 +149,14 @@ def test_can_deploy_agent_config_blocks_on_errors():
     assert any(i["message"] == "primary_goal_required" for i in issues)
 
 
+def test_agent_outbound_allowlist_matches_agent_studio_allowed_tools():
+    """Le noyau agent (M0) duplique la liste blanche Agent Studio sans import DB au chargement."""
+    from app.services.agent_outbound.registry import AGENT_STUDIO_ALLOWLIST_SLUGS
+    from app.services.agent_studio_service import ALLOWED_AGENT_TOOLS
+
+    assert AGENT_STUDIO_ALLOWLIST_SLUGS == ALLOWED_AGENT_TOOLS
+
+
 def test_agent_studio_metrics_validate_and_simulate():
     metrics_reset_for_tests()
     _ = validate_agent_config(
