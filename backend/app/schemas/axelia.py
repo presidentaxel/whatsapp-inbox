@@ -49,6 +49,8 @@ class AxeliaConversationPatch(BaseModel):
     title: Optional[str] = None
     pinned: Optional[bool] = None
     hidden: Optional[bool] = None
+    """Avant le premier message uniquement (sinon 400 côté API)."""
+    account_context: Optional[str] = None
 
 
 class AxeliaMessageRating(BaseModel):

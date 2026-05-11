@@ -8,6 +8,9 @@ from uuid import UUID
 
 from app.core.db import supabase, supabase_execute
 
+# Sentinelle : ne pas modifier `account_context` dans `conv_update`.
+CONV_ACCOUNT_CONTEXT_UNCHANGED = object()
+
 
 def _is_uuid(val: str) -> bool:
     try:
@@ -170,6 +173,7 @@ async def conv_update(
     title=None,
     pinned=None,
     hidden: Optional[bool] = None,
+    account_context: Any = CONV_ACCOUNT_CONTEXT_UNCHANGED,
 ):
     if not await conv_get_owned(user_id, conversation_id):
         return None
@@ -182,6 +186,9 @@ async def conv_update(
         patch["hidden_at"] = datetime.utcnow().isoformat() + "+00:00"
     elif hidden is False:
         patch["hidden_at"] = None
+    if account_context is not CONV_ACCOUNT_CONTEXT_UNCHANGED:
+        ac = (account_context or "").strip() or "__all__"
+        patch["account_context"] = ac
     res = await supabase_execute(
         supabase.table("axelia_conversations")
         .update(patch)

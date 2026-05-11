@@ -913,11 +913,25 @@ export default function AxeliaChat({
     const threadStarted =
       messages.length > 0 || loading || optimisticOutgoing != null;
     if (threadStarted) return;
+    const prevCtx = selectedContext;
     try {
       setError(null);
       setSelectedContext(next);
-      await bootstrapNewConversation(next);
+      if (conversationId) {
+        const res = await patchAxeliaConversation(conversationId, {
+          account_context: next,
+        });
+        const row = res?.data;
+        if (row && typeof row === "object") {
+          setConversations((prev) =>
+            prev.map((c) => (c.id === conversationId ? { ...c, ...row } : c)),
+          );
+        }
+      } else {
+        await bootstrapNewConversation(next);
+      }
     } catch {
+      setSelectedContext(prevCtx);
       setError("Impossible de changer de périmètre.");
     }
   };

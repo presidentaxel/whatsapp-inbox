@@ -29,6 +29,7 @@ from app.services.axelia_chat_service import (
     stream_axelia_chat,
 )
 from app.services.axelia_conv_service import (
+    CONV_ACCOUNT_CONTEXT_UNCHANGED,
     conversation_share_create,
     conversation_shares_list,
     conv_create,
@@ -334,12 +335,32 @@ async def patch_axelia_conversation(
     body: AxeliaConversationPatch,
     current_user: CurrentUser = Depends(get_current_user),
 ):
+    conv = await conv_get_accessible(current_user.id, conversation_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    if conv.get("read_only"):
+        raise HTTPException(status_code=403, detail="conversation_read_only")
+
+    patch_fields = body.model_dump(exclude_unset=True)
+    account_ctx_token: Any = CONV_ACCOUNT_CONTEXT_UNCHANGED
+    if "account_context" in patch_fields:
+        new_ctx = (patch_fields["account_context"] or "").strip() or _AXELIA_CONTEXT_ALL
+        msgs = await messages_list(conversation_id)
+        if msgs:
+            raise HTTPException(
+                status_code=400,
+                detail="account_context_locked_after_first_message",
+            )
+        await _check_account_access(current_user, new_ctx)
+        account_ctx_token = new_ctx
+
     row = await conv_update(
         current_user.id,
         conversation_id,
         title=body.title,
         pinned=body.pinned,
         hidden=body.hidden,
+        account_context=account_ctx_token,
     )
     if not row:
         raise HTTPException(status_code=404, detail="conversation_not_found")
