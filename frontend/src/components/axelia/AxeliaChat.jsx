@@ -745,7 +745,13 @@ export default function AxeliaChat({
     const ta = textareaRef.current;
     if (!ta) return;
     ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 240)}px`;
+    const maxPx = parseFloat(getComputedStyle(ta).maxHeight);
+    const fs = parseFloat(getComputedStyle(ta).fontSize) || 16;
+    const cap =
+      Number.isFinite(maxPx) && maxPx > 0
+        ? maxPx
+        : 7 * 1.45 * fs;
+    ta.style.height = `${Math.min(ta.scrollHeight, cap)}px`;
   };
 
   useEffect(() => {
