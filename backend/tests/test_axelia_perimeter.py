@@ -1,6 +1,9 @@
 """Tests légers : prompt périmètre Axelia (sans appel Gemini)."""
 
-from app.services.axelia_chat_service import format_perimeter_context_prompt
+from app.services.axelia_chat_service import (
+    augment_axelia_perimeter_with_agent_studio_guide,
+    format_perimeter_context_prompt,
+)
 
 
 def test_perimeter_single_contains_name_and_phone():
@@ -39,3 +42,11 @@ def test_perimeter_all_lists_accounts():
 def test_perimeter_empty():
     assert format_perimeter_context_prompt(None) == ""
     assert format_perimeter_context_prompt({}) == ""
+
+
+def test_augment_agent_studio_guide_idempotent():
+    a = augment_axelia_perimeter_with_agent_studio_guide("")
+    assert "agent_studio_clients_whatsapp" in a
+    assert "simulate_agent_route" in a
+    b = augment_axelia_perimeter_with_agent_studio_guide(a)
+    assert a == b

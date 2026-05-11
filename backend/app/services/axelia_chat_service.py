@@ -72,6 +72,38 @@ _AXEL_META_HINT = """RAPPEL META / WHATSAPP (concis) :
 - Templates : catégories MARKETING / UTILITY, variables {{1}}, {{first_name}}, etc., statuts APPROVED / PENDING / REJECTED.
 """
 
+# Injecté dans le prompt Axelia (une fois) pour aligner la configuration des fiches sur le comportement réel WhatsApp.
+_AXELIA_REF_AGENT_STUDIO_CLIENTS = "[[ref:agent_studio_clients_whatsapp]]"
+_AXELIA_AGENT_STUDIO_CLIENTS_GUIDE = f"""
+=== RÉFÉRENCE TECHNIQUE — Agent Studio / IA clients WhatsApp ({_AXELIA_REF_AGENT_STUDIO_CLIENTS}) ===
+Contexte : ce bloc décrit ce que le **serveur** fait quand une conversation est en **mode agent** (fiche Agent Studio **par défaut**, déploiement **active** ou **canary**). À distinguer d’Axelia (hub interne CRM).
+
+**Pipeline** : message entrant → `generate_agent_studio_inbox_reply_with_confidence` → playbook texte (objectif, intents, politiques, outils éventuels) + **indication de route** `simulate_agent_route` (heuristique identique à l’onglet Tests : mots du `key` ou mots > 3 lettres de la `description` dans le **message client**). Un **skill natif transfert** est **toujours** ajouté en fin de playbook côté serveur (le modèle client n’appelle **aucun** tool « handoff »).
+
+**Escalade humaine réelle** (après envoi réussi de la réponse au client) si **l’une** des conditions :
+1) intent heuristique **autre que** `fallback` avec `handler: human` ; **pas** d’escalade systématique sur `route=fallback` même si fallback=`human` (évite de notifier à chaque « bonjour »).
+2) **ou** le texte **envoyé** au client contient une **promesse explicite** de transfert (détection serveur sur des formulations type transfert / collègue / relais — voir code `agent_reply_suggests_human_handoff`).
+
+**Conséquences pour toi (conseils configuration)** :
+- Rédiger des **descriptions d’intent riches** (synonymes, sujets courts, mots du langage client) pour que l’heuristique et le modèle restent alignés.
+- Pour tout sujet réservé à l’humain : `handler: human` + objectif / actions interdites **cohérents** ; rappeler au client une formulation **nette** de transfert si l’humain doit être prévenu (sinon le modèle peut être prudent sans déclencher la détection texte).
+- `capabilities.allowed_tools` : **optionnel** ; sert surtout à la boucle Gemini + outils **lecture** (flag `AGENT_OUTBOUND_GEMINI_TOOLS_ENABLED`). Ce n’est **pas** la liste qui « active » le handoff.
+- **Notification** humaine backup : variable d’environnement `HUMAN_BACKUP_NUMBER` ; à défaut, escalade = désactivation bot sur la conversation + trace logs.
+- L’**aperçu graphe** runtime (nœuds / arêtes) est une **vue** ; l’inbox n’exécute pas un moteur de flow Playground.
+
+**Outils Axelia** : `list_agent_studio_configs`, `get_agent_studio_config`, `upsert_agent_studio_config`, `upsert_agent_studio_routing` — après modification, rappeler **valider / déployer** selon le workflow produit. Doc interne : `docs/AGENT_STUDIO_RUNBOOK.md`.
+=== FIN RÉFÉRENCE Agent Studio clients ===
+""".strip()
+
+
+def augment_axelia_perimeter_with_agent_studio_guide(block: str) -> str:
+    """Évite les doublons si le bloc est concaténé plusieurs fois."""
+    b = block or ""
+    if _AXELIA_REF_AGENT_STUDIO_CLIENTS in b:
+        return b
+    return (b + "\n\n" + _AXELIA_AGENT_STUDIO_CLIENTS_GUIDE).strip() + "\n"
+
+
 _FRENCH_WEEKDAYS = (
     "lundi",
     "mardi",
@@ -2023,7 +2055,9 @@ async def run_axelia_chat(
     if not contents:
         raise ValueError("empty_messages")
 
-    perimeter_text = format_perimeter_context_prompt(perimeter_context)
+    perimeter_text = augment_axelia_perimeter_with_agent_studio_guide(
+        format_perimeter_context_prompt(perimeter_context)
+    )
 
     perimeter_mode = (
         str((perimeter_context or {}).get("mode") or "").strip()
@@ -2319,7 +2353,9 @@ async def stream_axelia_chat(
         except Exception:
             pass
 
-    perimeter_text = format_perimeter_context_prompt(perimeter_context)
+    perimeter_text = augment_axelia_perimeter_with_agent_studio_guide(
+        format_perimeter_context_prompt(perimeter_context)
+    )
     perimeter_mode = (
         str((perimeter_context or {}).get("mode") or "").strip()
         if perimeter_context
