@@ -34,8 +34,8 @@ class AxeliaPendingAttachment:
 
     Utilisé pour les flux multi-étapes (ex. créer un template avec un en-tête image :
     le skill ``prepare_template_image_header`` lit ces bytes pour les uploader
-    vers Meta et obtenir un ``media_id``, sans demander à l'utilisateur de re-fournir
-    le fichier).
+    vers Meta (Resumable Upload) et obtenir un ``header_handle``, sans demander à
+    l'utilisateur de re-fournir le fichier).
     """
 
     mime_type: str
@@ -207,17 +207,16 @@ SKILLS_CATALOG: List[Dict[str, Any]] = [
     {
         "name": "prepare_template_image_header",
         "description": (
-            "Upload l'image jointe au message courant vers WhatsApp Business pour obtenir un "
-            "media_id (string) à utiliser comme header_handle d'un template avec en-tête image. "
-            "Aucun paramètre : on lit la PJ vivante du tour courant. "
-            "Étape PRÉPARATOIRE : rien n'est encore poussé côté template - pas de carte de "
-            "confirmation, c'est un appel direct dans tool_calls."
+            "Upload l'image jointe au message courant via l'API Graph Resumable Upload pour obtenir "
+            "un header_handle (chaîne type « 2:… ») à mettre dans example.header_handle d'un "
+            "template HEADER IMAGE. N'utilise pas l'id renvoyé par /media — Meta le rejette. "
+            "Aucun paramètre : PJ vivante du tour. Étape préparatoire (pas de carte de confirmation)."
         ),
         "parameters": [],
         "use_when": (
             "l'utilisateur a joint une image (PNG ou JPEG, ≤ 5 Mo) et veut un template avec "
-            "en-tête IMAGE. À appeler AVANT create_template ; le media_id retourné sert de "
-            "header_handle dans components[0].example.header_handle."
+            "en-tête IMAGE. À appeler AVANT create_template ; utilise le champ header_handle "
+            "retourné dans components[0].example.header_handle (tableau d'un élément)."
         ),
     },
     {
@@ -754,10 +753,10 @@ def get_axelia_skills_prompt_section() -> str:
         "- Templates avec en-tête IMAGE (PNG/JPEG ≤ 5 Mo) :",
         "  a) Si l'utilisateur a joint une image au tour courant ET qu'il veut un en-tête image : "
         "appelle d'abord prepare_template_image_header (sans args) dans tool_calls - c'est un appel "
-        "non-sensible, exécuté directement, qui retourne {success, media_id}.",
-        "  b) Au tour suivant, utilise ce media_id dans le spec components du create_template : "
-        "components = [{type:'HEADER', format:'IMAGE', example:{header_handle:[<media_id>]}}, "
-        "{type:'BODY', text:'...'}]. Ne tente JAMAIS d'inventer un media_id.",
+        "non-sensible, exécuté directement, qui retourne {success, header_handle} (upload Resumable Graph).",
+        "  b) Au tour suivant, mets ce header_handle dans create_template : "
+        "components = [{type:'HEADER', format:'IMAGE', example:{header_handle:[<header_handle>]}}, "
+        "{type:'BODY', text:'...'}]. N'utilise PAS un id numérique issu de /media — Meta le rejette (131009).",
         "  c) Si l'utilisateur veut un en-tête image MAIS n'a pas joint de fichier : demande-lui "
         "de joindre une image PNG ou JPEG (≤ 5 Mo) avant d'appeler prepare_template_image_header.",
         "  d) Si prepare_template_image_header échoue (PJ manquante, format invalide, taille…), "
@@ -960,6 +959,34 @@ def _validate_template_components_for_meta(components: List[Dict[str, Any]]) -> 
             return "Chaque body_text_named_params doit inclure un champ example non vide."
     if example.get("body_text"):
         return "Ne combine pas body_text et body_text_named_params pour un BODY nommé."
+    return None
+
+
+def _reject_image_header_legacy_media_id(components: List[Dict[str, Any]]) -> Optional[str]:
+    """
+    Meta rejette les ids numériques du endpoint /{phone_number_id}/media dans
+    example.header_handle (erreur 131009 / 2494102). Il faut un handle Resumable Upload.
+    """
+    for c in components or []:
+        if not isinstance(c, dict):
+            continue
+        if str(c.get("type") or "").upper() != "HEADER":
+            continue
+        if str(c.get("format") or "").upper() != "IMAGE":
+            continue
+        ex = c.get("example")
+        if not isinstance(ex, dict):
+            continue
+        handles = ex.get("header_handle")
+        if not isinstance(handles, list) or not handles:
+            continue
+        h0 = str(handles[0] or "").strip()
+        if h0.isdigit():
+            return (
+                "HEADER IMAGE : example.header_handle[0] ressemble à un media_id « /media » ; "
+                "Meta exige un handle Resumable Upload (retour du skill prepare_template_image_header, "
+                "champ header_handle, souvent du type « 2:… »). Ré-exécute prepare avec l'image jointe."
+            )
     return None
 
 
@@ -1272,6 +1299,9 @@ async def _skill_create_template(
                 + meta_validation_error
             )
         }
+    legacy_handle = _reject_image_header_legacy_media_id(components)
+    if legacy_handle:
+        return {"error": legacy_handle}
 
     try:
         result = await create_message_template(
@@ -1310,9 +1340,8 @@ async def _skill_prepare_template_image_header(
     args: Dict[str, Any],
     account: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Upload l'image jointe au tour courant vers l'API WhatsApp Business pour
-    obtenir un ``media_id`` réutilisable comme ``header_handle`` lors de la
-    création d'un template Meta avec en-tête image.
+    """Upload l'image jointe au tour courant via l'API Graph Resumable Upload pour
+    obtenir un ``header_handle`` utilisable dans ``create_template`` (HEADER IMAGE).
 
     Le skill ne prend aucun paramètre : il lit la pièce jointe vivante via
     ``AxeliaSkillsRuntime.pending_attachment``. Le modèle l'appelle juste avant
@@ -1321,7 +1350,7 @@ async def _skill_prepare_template_image_header(
     technique préparatoire (rien n'est encore poussé sur Meta côté template).
     """
     _ = args  # paramètres ignorés pour ce skill
-    from app.services.whatsapp_api_service import upload_media_from_bytes
+    from app.services.whatsapp_api_service import upload_template_header_resumable_handle
 
     rt = _axelia_rt()
     if not rt or rt.pending_attachment is None:
@@ -1358,24 +1387,17 @@ async def _skill_prepare_template_image_header(
     waba_id, token = _resolve_waba_credentials(account)
     if not waba_id or not token:
         return {"error": "Compte sans waba_id ou access_token configuré."}
-    phone_number_id = (account.get("phone_number_id") or "").strip()
-    if not phone_number_id:
-        return {
-            "error": (
-                "phone_number_id manquant sur la ligne sélectionnée - impossible "
-                "d'uploader le média vers WhatsApp Business."
-            ),
-        }
 
     filename = pa.filename or ("template_header.png" if mime == "image/png" else "template_header.jpg")
     try:
-        result = await upload_media_from_bytes(
-            phone_number_id=phone_number_id,
+        header_handle = await upload_template_header_resumable_handle(
             access_token=token,
             file_content=pa.raw_bytes,
             filename=filename,
             mime_type=mime,
         )
+    except ValueError as exc:
+        return {"error": str(exc)}
     except Exception as exc:
         error_msg = str(exc)
         try:
@@ -1384,21 +1406,18 @@ async def _skill_prepare_template_image_header(
         except Exception:
             pass
         logger.error("skill prepare_template_image_header failed: %s", error_msg, exc_info=True)
-        return {"error": f"Échec upload image vers Meta: {error_msg[:300]}"}
-
-    media_id = (result or {}).get("id")
-    if not media_id:
-        return {"error": "Meta n'a pas renvoyé de media_id pour cette image."}
+        return {"error": f"Échec upload image (Resumable) vers Meta: {error_msg[:300]}"}
 
     return {
         "success": True,
-        "media_id": str(media_id),
+        "header_handle": header_handle,
         "mime_type": mime,
         "size_bytes": len(pa.raw_bytes),
         "usage_hint": (
-            "Utilise ce media_id comme valeur de `components[0].example.header_handle[0]` "
-            "dans l'appel suivant à `create_template` (avec components[0]={type:'HEADER', "
-            "format:'IMAGE', example:{header_handle:[<media_id>]}})."
+            "Copie le champ `header_handle` ci-dessus dans create_template : "
+            "components[0] = { type: 'HEADER', format: 'IMAGE', "
+            "example: { header_handle: [<header_handle>] } } (tableau d'un seul string). "
+            "Ne pas utiliser un id numérique issu de l'endpoint /media."
         ),
     }
 

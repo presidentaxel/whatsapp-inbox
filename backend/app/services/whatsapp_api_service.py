@@ -5,6 +5,7 @@ Implémente tous les endpoints de l'API Meta WhatsApp
 import json
 import logging
 import time
+import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
@@ -475,6 +476,109 @@ async def upload_media_from_bytes(
     
     response.raise_for_status()
     return response.json()
+
+
+@retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=8.0)
+async def upload_template_header_resumable_handle(
+    access_token: str,
+    file_content: bytes,
+    filename: str,
+    mime_type: str,
+) -> str:
+    """
+    Obtient le handle d'exemple pour un HEADER IMAGE de message template Meta.
+
+    Meta n'accepte pas le ``id`` renvoyé par ``POST /{phone_number_id}/media`` dans
+    ``example.header_handle`` : il faut l'upload Resumable Graph
+    (``POST /{app-id}/uploads`` puis ``POST /upload:{session}``), qui renvoie ``h``.
+
+    Voir https://developers.facebook.com/docs/graph-api/guides/upload
+    """
+    app_id = (settings.META_APP_ID or "").strip()
+    if not app_id:
+        raise ValueError(
+            "META_APP_ID manquant en configuration : requis pour l'upload Resumable "
+            "des exemples d'en-tête IMAGE (message templates)."
+        )
+
+    mt = (mime_type or "").strip().lower()
+    if mt == "image/jpeg":
+        file_type = "image/jpeg"
+    elif mt == "image/jpg":
+        file_type = "image/jpg"
+    elif mt == "image/png":
+        file_type = "image/png"
+    else:
+        raise ValueError(
+            f"Mime non supporté pour template HEADER IMAGE resumable: {mime_type!r} "
+            "(Meta : image/jpeg, image/jpg, image/png)."
+        )
+
+    safe_name = (filename or "header.png").replace("\r", "").replace("\n", "")[:200] or "header.png"
+    client = await get_http_client_for_media()
+
+    q = urllib.parse.urlencode(
+        {
+            "file_name": safe_name,
+            "file_length": str(len(file_content)),
+            "file_type": file_type,
+            "access_token": access_token,
+        }
+    )
+    start_url = f"{GRAPH_API_BASE}/{app_id}/uploads?{q}"
+    r1 = await client.post(start_url, timeout=httpx.Timeout(connect=15.0, read=60.0, write=60.0, pool=10.0))
+    if r1.status_code >= 400:
+        logger.error(
+            "Resumable upload session failed: status=%s body=%s",
+            r1.status_code,
+            r1.text[:1200],
+        )
+        raise parse_whatsapp_error(r1)
+
+    data1 = r1.json()
+    session_id = (data1 or {}).get("id")
+    if not session_id or not isinstance(session_id, str):
+        raise ValueError(f"Réponse Meta uploads invalide (id manquant): {data1!r}")
+
+    upload_url = f"{GRAPH_API_BASE}/{session_id}"
+    timeout_bin = httpx.Timeout(connect=15.0, read=120.0, write=120.0, pool=10.0)
+    r2 = await client.post(
+        upload_url,
+        headers={
+            "Authorization": f"OAuth {access_token}",
+            "file_offset": "0",
+        },
+        content=file_content,
+        timeout=timeout_bin,
+    )
+    if r2.status_code >= 400:
+        # Certains jetons Cloud API n'acceptent que Bearer sur l'étape binaire.
+        logger.warning(
+            "Resumable upload step2 OAuth failed (status=%s), retrying with Bearer",
+            r2.status_code,
+        )
+        r2 = await client.post(
+            upload_url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "file_offset": "0",
+            },
+            content=file_content,
+            timeout=timeout_bin,
+        )
+    if r2.status_code >= 400:
+        logger.error(
+            "Resumable upload binary failed: status=%s body=%s",
+            r2.status_code,
+            r2.text[:1200],
+        )
+        raise parse_whatsapp_error(r2)
+
+    data2 = r2.json()
+    handle = (data2 or {}).get("h")
+    if not handle or not isinstance(handle, str):
+        raise ValueError(f"Réponse Meta upload invalide (h manquant): {data2!r}")
+    return handle
 
 
 @retry_on_network_error(max_attempts=3, min_wait=1.0, max_wait=5.0)

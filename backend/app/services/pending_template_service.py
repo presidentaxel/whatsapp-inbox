@@ -495,10 +495,13 @@ async def create_and_queue_image_template(
         logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Téléchargement de l'image depuis WhatsApp (media_id: {media_id})...")
         
         # Télécharger l'image depuis WhatsApp
-        from app.services.whatsapp_api_service import get_media_url, upload_media_from_bytes
+        from app.services.whatsapp_api_service import (
+            get_media_url,
+            upload_template_header_resumable_handle,
+        )
         import asyncio
-        
-        uploaded_media_id = None  # Initialiser pour éviter les problèmes de scope
+
+        header_media_ref = None  # handle Resumable ou None
         result = None  # Résultat de la création du template
         meta_template_id = None  # ID du template créé sur Meta
         
@@ -544,130 +547,45 @@ async def create_and_queue_image_template(
                 return {"success": False, "errors": ["Impossible d'obtenir une URL publique pour l'exemple"]}
             
             logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Image uploadée vers Supabase Storage, URL publique: {public_url}")
-            
-            # Uploader vers WhatsApp API (WABA) pour obtenir un media_id
-            # Selon la documentation Meta, header_handle doit utiliser un media_id uploadé via leur API
-            logger.info("📤 [CREATE-IMAGE-TEMPLATE] Upload de l'image vers WhatsApp API (WABA) pour obtenir le media_id...")
-            upload_result = await upload_media_from_bytes(
-                phone_number_id=phone_number_id,
+
+            # Meta exige un handle Resumable Upload (Graph), pas le media_id de POST /{phone_number_id}/media
+            ct_lower = (content_type or "image/jpeg").split(";")[0].strip().lower()
+            if ct_lower not in ("image/jpeg", "image/jpg", "image/png"):
+                ct_lower = "image/jpeg"
+            logger.info(
+                "📤 [CREATE-IMAGE-TEMPLATE] Resumable Upload (META_APP_ID) pour header_handle…"
+            )
+            resumable_handle = await upload_template_header_resumable_handle(
                 access_token=access_token,
                 file_content=media_data,
-                filename=f"{template_name}_image.png",
-                mime_type=content_type
+                filename=f"{template_name}_header.png",
+                mime_type=ct_lower,
             )
-            
-            uploaded_media_id = upload_result.get("id")
-            
-            if not uploaded_media_id:
-                logger.error("❌ [CREATE-IMAGE-TEMPLATE] Pas de media_id retourné par WhatsApp API")
-                return {"success": False, "errors": ["Impossible d'uploader l'image vers WhatsApp API"]}
-            
-            logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Image uploadée vers WABA avec media_id: {uploaded_media_id}")
-            
-            # Attendre que l'image soit validée par Meta avant de créer le template
-            # Meta exige que le media_id soit validé avant de pouvoir être utilisé dans un template
-            logger.info("⏳ [CREATE-IMAGE-TEMPLATE] Attente de validation de l'image par Meta...")
-            max_retries = 60  # 60 tentatives maximum (5 minutes au total)
-            retry_delay = 5.0  # 5 secondes entre chaque tentative
-            template_created = False
-            last_error = None
-            
-            for attempt in range(max_retries):
-                try:
-                    # Construire les composants du template avec le media_id (en string)
-                    components = [
-                        {
-                            "type": "HEADER",
-                            "format": "IMAGE",
-                            "example": {
-                                "header_handle": [str(uploaded_media_id)]  # Utiliser le media_id uploadé
-                            }
-                        },
-                        {
-                            "type": "BODY",
-                            "text": sanitized_body
-                        }
-                    ]
-                    
-                    # Essayer de créer le template
-                    if attempt == 0:
-                        logger.info(f"🔄 [CREATE-IMAGE-TEMPLATE] Première tentative de création du template avec media_id: {uploaded_media_id}")
-                    elif attempt % 10 == 0:  # Logger tous les 10 essais
-                        logger.info(f"🔄 [CREATE-IMAGE-TEMPLATE] Tentative {attempt + 1}/{max_retries} de création du template...")
-                    
-                    result = await whatsapp_api_service.create_message_template(
-                        waba_id=waba_id,
-                        access_token=access_token,
-                        name=template_name,
-                        category="UTILITY",
-                        language="fr",
-                        components=components
-                    )
-                    
-                    # Si on arrive ici, le template a été créé avec succès
-                    meta_template_id = result.get("id")
-                    if meta_template_id:
-                        logger.info(f"✅ [CREATE-IMAGE-TEMPLATE] Template créé avec succès après {attempt + 1} tentatives!")
-                        logger.info("📥 [CREATE-IMAGE-TEMPLATE] ========== RÉPONSE META ==========")
-                        logger.info(f"📥 [CREATE-IMAGE-TEMPLATE] Réponse complète: {json.dumps(result, indent=2, ensure_ascii=False)}")
-                        logger.info("📥 [CREATE-IMAGE-TEMPLATE] =================================")
-                        template_created = True
-                        break
-                    else:
-                        logger.warning("⚠️ [CREATE-IMAGE-TEMPLATE] Template créé mais pas d'ID retourné, nouvelle tentative...")
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(retry_delay)
-                        
-                except Exception as template_error:
-                    last_error = template_error
-                    error_str = str(template_error)
-                    
-                    # Extraire le error_subcode depuis WhatsAppAPIError
-                    error_subcode = None
-                    if hasattr(template_error, 'error_subcode'):
-                        error_subcode = template_error.error_subcode
-                    elif hasattr(template_error, 'detail'):
-                        error_detail = template_error.detail
-                        if isinstance(error_detail, dict):
-                            error_obj = error_detail.get('error', {})
-                            error_subcode = error_obj.get('error_subcode')
-                    
-                    # Convertir en int pour la comparaison
-                    if error_subcode is not None:
-                        try:
-                            error_subcode = int(error_subcode)
-                        except (ValueError, TypeError):
-                            pass
-                    
-                    # Si l'erreur indique que le media n'est pas valide (2388273 ou 2494102), on continue à attendre
-                    is_media_validation_error = (
-                        error_subcode == 2388273 or
-                        error_subcode == 2494102 or
-                        "2494102" in error_str or
-                        "2388273" in error_str or
-                        "Uploaded Media Handle Is Invalid" in error_str or
-                        "Paramètre d'exemple manquant" in error_str or
-                        ("Invalid parameter" in error_str and ("header_handle" in error_str.lower() or "IMAGE" in error_str))
-                    )
-                    
-                    if is_media_validation_error:
-                        if attempt < max_retries - 1:
-                            if attempt == 0 or attempt % 10 == 0:  # Logger au début et tous les 10 essais
-                                logger.info(f"⏳ [CREATE-IMAGE-TEMPLATE] Image pas encore validée par Meta (tentative {attempt + 1}/{max_retries}, error_subcode={error_subcode}), nouvelle tentative dans {retry_delay}s...")
-                            await asyncio.sleep(retry_delay)
-                        else:
-                            logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Image non validée après {max_retries} tentatives (error_subcode={error_subcode})")
-                    else:
-                        # Autre erreur, on la propage
-                        logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Erreur non liée à la validation du media: {error_str} (error_subcode={error_subcode})")
-                        raise
-            
-            if not template_created:
-                logger.error(f"❌ [CREATE-IMAGE-TEMPLATE] Impossible de créer le template après {max_retries} tentatives")
-                if last_error:
-                    raise last_error
-                return {"success": False, "errors": [f"Impossible de créer le template: image non validée après {max_retries} tentatives"]}
-            
+            header_media_ref = resumable_handle
+            logger.info(
+                "✅ [CREATE-IMAGE-TEMPLATE] Handle Resumable obtenu (préfixe): %s…",
+                resumable_handle[:32] if len(resumable_handle) > 32 else resumable_handle,
+            )
+
+            components = [
+                {
+                    "type": "HEADER",
+                    "format": "IMAGE",
+                    "example": {"header_handle": [resumable_handle]},
+                },
+                {"type": "BODY", "text": sanitized_body},
+            ]
+
+            logger.info("🔄 [CREATE-IMAGE-TEMPLATE] Création du template Meta avec header_handle Resumable…")
+            result = await whatsapp_api_service.create_message_template(
+                waba_id=waba_id,
+                access_token=access_token,
+                name=template_name,
+                category="UTILITY",
+                language="fr",
+                components=components,
+            )
+
             meta_template_id = result.get("id")
             
             if not meta_template_id:
@@ -706,7 +624,7 @@ async def create_and_queue_image_template(
                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10::uuid)
                 """,
                 message_id, conversation_id, account_id, template_name, body_text,
-                meta_template_id, "PENDING", template_hash, uploaded_media_id, created_by_user_id,
+                meta_template_id, "PENDING", template_hash, header_media_ref, created_by_user_id,
             )
         else:
             pending_template_payload = {
@@ -718,7 +636,7 @@ async def create_and_queue_image_template(
                 "meta_template_id": meta_template_id,
                 "template_status": "PENDING",
                 "template_hash": template_hash,
-                "header_media_id": uploaded_media_id,
+                "header_media_id": header_media_ref,
             }
             if created_by_user_id is not None:
                 pending_template_payload["created_by_user_id"] = created_by_user_id

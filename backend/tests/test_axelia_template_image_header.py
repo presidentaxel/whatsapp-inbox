@@ -6,7 +6,7 @@ Couvre :
 - skill `prepare_template_image_header` :
   - erreur quand pas de PJ vivante,
   - erreur sur format invalide / taille excessive,
-  - chemin nominal (upload mocké → renvoie media_id) ;
+  - chemin nominal (upload Resumable mocké → renvoie header_handle) ;
 - contenu du catalogue / prompt section (le LLM doit voir le nouveau skill et le workflow).
 """
 
@@ -204,7 +204,7 @@ async def test_skill_image_header_rejects_oversize(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_skill_image_header_requires_phone_number_id(monkeypatch):
+async def test_skill_image_header_meta_app_id_error(monkeypatch):
     raw = _png_bytes()
     rt = skills.AxeliaSkillsRuntime(
         acting_user=None,
@@ -214,11 +214,19 @@ async def test_skill_image_header_requires_phone_number_id(monkeypatch):
         ),
     )
     monkeypatch.setattr(skills, "_axelia_rt", lambda: rt)
+
+    async def _boom(*, access_token, file_content, filename, mime_type):
+        raise ValueError("META_APP_ID manquant")
+
+    import app.services.whatsapp_api_service as wa_api
+
+    monkeypatch.setattr(wa_api, "upload_template_header_resumable_handle", _boom)
+
     out = await skills._skill_prepare_template_image_header(
-        {}, {"id": "a", "waba_id": "w", "access_token": "t"}
+        {}, {"id": "a", "waba_id": "w", "access_token": "t", "phone_number_id": "p"}
     )
     assert "error" in out
-    assert "phone_number_id" in out["error"]
+    assert "META_APP_ID" in out["error"]
 
 
 @pytest.mark.asyncio
@@ -235,24 +243,22 @@ async def test_skill_image_header_happy_path(monkeypatch):
 
     captured: dict = {}
 
-    async def _fake_upload(
-        *, phone_number_id, access_token, file_content, filename, mime_type
+    async def _fake_resumable(
+        *, access_token, file_content, filename, mime_type
     ):
         captured.update(
             {
-                "pid": phone_number_id,
                 "tok": access_token,
                 "size": len(file_content),
                 "filename": filename,
                 "mime": mime_type,
             }
         )
-        return {"id": "upload_xyz_123"}
+        return "2:ZmFrZWhhbmRsZQ==:image/png:fake"
 
-    # Le skill importe la fonction dynamiquement → on patche le module source.
     import app.services.whatsapp_api_service as wa_api
 
-    monkeypatch.setattr(wa_api, "upload_media_from_bytes", _fake_upload)
+    monkeypatch.setattr(wa_api, "upload_template_header_resumable_handle", _fake_resumable)
 
     out = await skills._skill_prepare_template_image_header(
         {},
@@ -264,9 +270,8 @@ async def test_skill_image_header_happy_path(monkeypatch):
         },
     )
     assert out.get("success") is True
-    assert out.get("media_id") == "upload_xyz_123"
+    assert out.get("header_handle") == "2:ZmFrZWhhbmRsZQ==:image/png:fake"
     assert out.get("mime_type") == "image/png"
-    assert captured["pid"] == "pn-1"
     assert captured["tok"] == "tok-1"
     assert captured["mime"] == "image/png"
     assert captured["size"] == len(raw)
@@ -285,7 +290,7 @@ def test_catalog_lists_prepare_template_image_header():
     )
     assert entry is not None
     assert entry["parameters"] == []
-    assert "header_handle" in entry["description"].lower() or "media_id" in entry["description"].lower()
+    assert "header_handle" in entry["description"].lower()
 
 
 def test_dispatcher_knows_new_skill():
