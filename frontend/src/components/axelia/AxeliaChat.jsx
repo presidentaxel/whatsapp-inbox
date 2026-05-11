@@ -425,6 +425,8 @@ export default function AxeliaChat({
   /** Évite les boots dupliqués ; réinitialisé si `initialAccountId` arrive tard ou échec réseau. */
   const bootstrapKeyRef = useRef(null);
   const bootstrapGenRef = useRef(0);
+  /** Périmètre choisi dans le sélecteur avant que `conversationId` existe (évite N× create pendant le bootstrap). */
+  const pendingContextForEmptyConvRef = useRef(null);
   const sidebarListScrollRef = useRef(null);
 
   /** Affichage d'un toast informatif (générique : copie, confirmation, etc.). */
@@ -621,10 +623,47 @@ export default function AxeliaChat({
     /** Dépend du périmètre résolu uniquement (évite un 2e boot si `initialAccountId` arrive après coup pour le même compte). */
     const bootstrapKey = resolvedContext;
     if (bootstrapKeyRef.current === bootstrapKey) return;
+    const prevBootstrapKey = bootstrapKeyRef.current;
     bootstrapKeyRef.current = bootstrapKey;
+    if (prevBootstrapKey != null && prevBootstrapKey !== bootstrapKey) {
+      pendingContextForEmptyConvRef.current = null;
+    }
 
     setSelectedContext(resolvedContext);
     const gen = ++bootstrapGenRef.current;
+
+    const normalizeCtx = (v) => {
+      const s = v === "" || v == null ? AXELIA_CONTEXT_ALL : String(v);
+      return s === "" ? AXELIA_CONTEXT_ALL : s;
+    };
+
+    const applyPendingAccountIfNeeded = async (cid, serverCtxBefore) => {
+      const pendingRaw = pendingContextForEmptyConvRef.current;
+      if (pendingRaw == null) return;
+      const want = normalizeCtx(pendingRaw);
+      const cur = normalizeCtx(serverCtxBefore);
+      if (want === cur) {
+        pendingContextForEmptyConvRef.current = null;
+        setSelectedContext(want);
+        return;
+      }
+      try {
+        const res = await patchAxeliaConversation(cid, {
+          account_context: want,
+        });
+        if (gen !== bootstrapGenRef.current) return;
+        pendingContextForEmptyConvRef.current = null;
+        const row = res?.data;
+        if (row && typeof row === "object") {
+          setConversations((prev) =>
+            prev.map((c) => (c.id === cid ? { ...c, ...row } : c)),
+          );
+        }
+        setSelectedContext(want);
+      } catch {
+        pendingContextForEmptyConvRef.current = null;
+      }
+    };
 
     (async () => {
       try {
@@ -636,6 +675,10 @@ export default function AxeliaChat({
         );
         if (match?.id) {
           setConversationId(match.id);
+          await applyPendingAccountIfNeeded(
+            match.id,
+            match.account_context ?? resolvedContext,
+          );
           return;
         }
         const cr = await createAxeliaConversation({
@@ -643,12 +686,17 @@ export default function AxeliaChat({
         });
         if (gen !== bootstrapGenRef.current) return;
         if (cr.data?.id) {
-          setConversationId(cr.data.id);
+          const cid = cr.data.id;
+          setConversationId(cid);
           setConversations((prev) => {
-            const exists = prev.some((x) => x.id === cr.data.id);
+            const exists = prev.some((x) => x.id === cid);
             if (exists) return prev;
             return [cr.data, ...prev];
           });
+          await applyPendingAccountIfNeeded(
+            cid,
+            cr.data?.account_context ?? resolvedContext,
+          );
         }
       } catch {
         if (gen === bootstrapGenRef.current) bootstrapKeyRef.current = null;
@@ -893,6 +941,7 @@ export default function AxeliaChat({
     if (!canUseSend) return;
     try {
       setError(null);
+      pendingContextForEmptyConvRef.current = null;
       await bootstrapNewConversation(
         selectedContext || AXELIA_CONTEXT_ALL,
       );
@@ -917,18 +966,20 @@ export default function AxeliaChat({
     try {
       setError(null);
       setSelectedContext(next);
-      if (conversationId) {
-        const res = await patchAxeliaConversation(conversationId, {
-          account_context: next,
-        });
-        const row = res?.data;
-        if (row && typeof row === "object") {
-          setConversations((prev) =>
-            prev.map((c) => (c.id === conversationId ? { ...c, ...row } : c)),
-          );
-        }
-      } else {
-        await bootstrapNewConversation(next);
+      if (!conversationId) {
+        /* Une seule création vient du bootstrap ; ici on mémorise le périmètre voulu pour patch après id. */
+        pendingContextForEmptyConvRef.current = next;
+        return;
+      }
+      pendingContextForEmptyConvRef.current = null;
+      const res = await patchAxeliaConversation(conversationId, {
+        account_context: next,
+      });
+      const row = res?.data;
+      if (row && typeof row === "object") {
+        setConversations((prev) =>
+          prev.map((c) => (c.id === conversationId ? { ...c, ...row } : c)),
+        );
       }
     } catch {
       setSelectedContext(prevCtx);
