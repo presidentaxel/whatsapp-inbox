@@ -34,6 +34,13 @@ npx supabase migration list
 npx supabase db push
 ```
 
+# Serveur - GitHub pull
+```bash
+ssh ubuntu@217.182.65.32
+cd /opt/whatsapp-inbox/deploy
+git pull
+```
+
 ## .env variables changes
 ```bash
 ssh ubuntu@217.182.65.32

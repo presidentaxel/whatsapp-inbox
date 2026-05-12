@@ -981,6 +981,8 @@ async def summarize_contact_inbox_for_account(
 
 _THEMES_MSG_CAP = 420
 _THEMES_SAMPLE_HARD_MAX = 500
+# Limite le prompt Gemini : au-delà, la latence et les timeouts dominent sans gain net.
+_INBOUND_THEMES_PROMPT_MESSAGES_MAX = 260
 
 
 def _clip_sample_text(text: str, cap: int = _THEMES_MSG_CAP) -> str:
@@ -1277,6 +1279,19 @@ def _inbound_themes_gemini_response_schema() -> Dict[str, Any]:
     }
 
 
+def _inbound_themes_prompt_text(lines: List[str]) -> str:
+    """Construit le bloc numéroté envoyé à Gemini (échantillon borné)."""
+    cap = min(len(lines), _INBOUND_THEMES_PROMPT_MESSAGES_MAX)
+    if len(lines) > cap:
+        logger.info(
+            "Gemini inbound themes: échantillon tronqué %s -> %s messages pour le prompt",
+            len(lines),
+            cap,
+        )
+    selected = lines[:cap]
+    return "\n".join(f"{i + 1}. {selected[i]}" for i in range(len(selected)))
+
+
 def _themes_gemini_generation_base(model_id: str) -> Dict[str, Any]:
     """Réduit le risque de troncation JSON sur les modèles 2.5 (thinking)."""
     gen: Dict[str, Any] = {
@@ -1371,7 +1386,7 @@ async def synthesize_inbound_question_themes_with_gemini(
     """
     from app.core.circuit_breaker import CircuitBreakerOpenError, gemini_circuit_breaker
     from app.core.config import settings
-    from app.services.bot_service import _call_gemini_api
+    from app.services.bot_service import _call_gemini_api_once
 
     if not settings.GEMINI_API_KEY:
         return {"error": "GEMINI_API_KEY non configurée.", "themes": []}
@@ -1384,7 +1399,10 @@ async def synthesize_inbound_question_themes_with_gemini(
         }
 
     mt = max(5, min(int(max_themes), 20))
-    numbered = "\n".join(f"{i + 1}. {lines[i]}" for i in range(min(len(lines), 380)))
+    numbered = _inbound_themes_prompt_text(lines)
+    read_timeout = float(
+        getattr(settings, "AXELIA_INBOUND_THEMES_READ_TIMEOUT", 120.0) or 120.0
+    )
 
     ctx = (context_label or "").strip()
     ctx_line = f"\nContexte périmètre : {ctx}\n" if ctx else ""
@@ -1441,11 +1459,11 @@ async def synthesize_inbound_question_themes_with_gemini(
     try:
         try:
             data = await gemini_circuit_breaker.call_async(
-                _call_gemini_api,
+                _call_gemini_api_once,
                 endpoint,
                 payload_structured,
                 "axelia-inbound-themes",
-                read_timeout=55.0,
+                read_timeout=read_timeout,
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (400, 404):
@@ -1454,16 +1472,29 @@ async def synthesize_inbound_question_themes_with_gemini(
                     exc.response.status_code,
                 )
                 data = await gemini_circuit_breaker.call_async(
-                    _call_gemini_api,
+                    _call_gemini_api_once,
                     endpoint,
                     payload_plain,
                     "axelia-inbound-themes",
-                    read_timeout=55.0,
+                    read_timeout=read_timeout,
                 )
             else:
                 raise
     except CircuitBreakerOpenError:
         return {"error": "Service IA temporairement indisponible (circuit ouvert).", "themes": []}
+    except httpx.TimeoutException:
+        logger.warning(
+            "Gemini inbound themes: délai dépassé (read=%ss, messages=%s)",
+            read_timeout,
+            min(len(lines), _INBOUND_THEMES_PROMPT_MESSAGES_MAX),
+        )
+        return {
+            "error": (
+                "La synthèse des thèmes a expiré. Réduisez la période analysée ou réessayez "
+                "dans quelques instants."
+            ),
+            "themes": [],
+        }
     except httpx.HTTPStatusError as exc:
         logger.warning("Gemini themes HTTP %s", exc.response.status_code)
         return {"error": "Erreur HTTP lors de la synthèse des thèmes.", "themes": []}

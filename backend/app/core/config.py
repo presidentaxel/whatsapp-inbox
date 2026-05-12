@@ -102,6 +102,8 @@ class Settings(BaseSettings):
     AXELIA_PRO_MODEL: str = "gemini-2.5-pro"
     AXELIA_DIFFICULTY_THRESHOLD: float = 0.42
     AXELIA_CLASSIFY_READ_TIMEOUT: float = 42.0
+    # Synthèse JSON des thèmes inbox (gros échantillon de messages entrants).
+    AXELIA_INBOUND_THEMES_READ_TIMEOUT: float = 120.0
     AXELIA_CLASSIFY_FALLBACK_DIFFICULTY: float = 0.52
 
     # ─── Prometheus ────────────────────────────────────────────────────────────
