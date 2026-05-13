@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     AXELIA_CLASSIFY_READ_TIMEOUT: float = 42.0
     # Synthèse JSON des thèmes inbox (gros échantillon de messages entrants).
     AXELIA_INBOUND_THEMES_READ_TIMEOUT: float = 120.0
+    AXELIA_INBOUND_THEMES_CACHE_TTL_S: float = 86_400.0
+    AXELIA_INBOUND_THEMES_MAP_BATCH_SIZE: int = 50
+    AXELIA_INBOUND_THEMES_MAP_MAX_PARALLEL: int = 3
+    AXELIA_INBOUND_THEMES_MAP_SINGLE_SHOT_MAX: int = 60
+    AXELIA_INBOUND_THEMES_MAP_READ_TIMEOUT: float = 45.0
+    AXELIA_INBOUND_THEMES_REDUCE_READ_TIMEOUT: float = 75.0
     AXELIA_CLASSIFY_FALLBACK_DIFFICULTY: float = 0.52
 
     # ─── Prometheus ────────────────────────────────────────────────────────────

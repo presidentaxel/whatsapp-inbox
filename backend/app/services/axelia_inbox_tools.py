@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -981,8 +982,10 @@ async def summarize_contact_inbox_for_account(
 
 _THEMES_MSG_CAP = 420
 _THEMES_SAMPLE_HARD_MAX = 500
-# Limite le prompt Gemini : au-delà, la latence et les timeouts dominent sans gain net.
-_INBOUND_THEMES_PROMPT_MESSAGES_MAX = 260
+# Limite le prompt Gemini en mode direct (échantillon modeste).
+_INBOUND_THEMES_PROMPT_MESSAGES_MAX = 120
+_INBOUND_THEMES_MAP_MSG_CAP = 220
+_INBOUND_THEMES_CACHE_PREFIX = "axelia_inbound_themes"
 
 
 def _clip_sample_text(text: str, cap: int = _THEMES_MSG_CAP) -> str:
@@ -1279,9 +1282,14 @@ def _inbound_themes_gemini_response_schema() -> Dict[str, Any]:
     }
 
 
-def _inbound_themes_prompt_text(lines: List[str]) -> str:
+def _inbound_themes_prompt_text(
+    lines: List[str],
+    *,
+    max_messages: Optional[int] = None,
+    clip_cap: int = _THEMES_MSG_CAP,
+) -> str:
     """Construit le bloc numéroté envoyé à Gemini (échantillon borné)."""
-    cap = min(len(lines), _INBOUND_THEMES_PROMPT_MESSAGES_MAX)
+    cap = min(len(lines), max_messages if max_messages is not None else _INBOUND_THEMES_PROMPT_MESSAGES_MAX)
     if len(lines) > cap:
         logger.info(
             "Gemini inbound themes: échantillon tronqué %s -> %s messages pour le prompt",
@@ -1289,7 +1297,162 @@ def _inbound_themes_prompt_text(lines: List[str]) -> str:
             cap,
         )
     selected = lines[:cap]
-    return "\n".join(f"{i + 1}. {selected[i]}" for i in range(len(selected)))
+    return "\n".join(
+        f"{i + 1}. {_clip_sample_text(selected[i], cap=clip_cap)}" for i in range(len(selected))
+    )
+
+
+def _chunk_inbound_theme_lines(lines: List[str], batch_size: int) -> List[List[str]]:
+    size = max(12, int(batch_size))
+    return [lines[i : i + size] for i in range(0, len(lines), size)]
+
+
+def build_inbound_themes_cache_key(
+    *,
+    account_scope: str,
+    account_id: str,
+    user_id: str,
+    since: Any,
+    until: Any,
+    sample_limit: int,
+    max_themes: int,
+    model_id: str,
+) -> str:
+    payload = {
+        "account_scope": (account_scope or "primary").strip().lower(),
+        "account_id": (account_id or "").strip(),
+        "user_id": (user_id or "").strip(),
+        "since": (str(since).strip() if since is not None else ""),
+        "until": (str(until).strip() if until is not None else ""),
+        "sample_limit": int(sample_limit),
+        "max_themes": int(max_themes),
+        "model_id": (model_id or "").strip(),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    return f"{_INBOUND_THEMES_CACHE_PREFIX}:{digest}"
+
+
+def _inbound_themes_gemini_model_id() -> str:
+    from app.core.config import settings
+
+    fast = (getattr(settings, "AXELIA_FAST_MODEL", "") or "").strip()
+    if fast:
+        return fast
+    return (settings.GEMINI_MODEL or "").strip()
+
+
+def _inbound_themes_context_line(context_label: str) -> str:
+    ctx = (context_label or "").strip()
+    return f"\nContexte périmètre : {ctx}\n" if ctx else ""
+
+
+def _inbound_themes_instruction_common(ctx_line: str, max_themes: int) -> str:
+    return (
+        "Tu analyses des messages WhatsApp **reçus des clients** (français ou mixte).\n"
+        "Tâche : identifier les **thèmes récurrents** et **types de questions / demandes** les plus fréquents.\n"
+        "Contraintes :\n"
+        "- Tu ne cites pas de données personnelles identifiables (pas de numéros complets, emails).\n"
+        "- Les libellés de thèmes sont courts et métier (ex. « Retards / horaires », « Facturation »).\n"
+        "- La fréquence est **relative à cet échantillon** (pas une vérité statistique globale).\n"
+        "- Sortie : un objet JSON avec les champs `themes` et `methodology_note` (contrainte API).\n"
+        "- Dans les chaînes entre guillemets doubles, **n’utilise pas** `\\'` pour une apostrophe (invalide en JSON) ; "
+        "écris une apostrophe telle quelle, ex. `d'affaires`.\n"
+        "- `description` : une ou deux phrases maximum par thème ; 1 à 2 exemples courts par thème.\n"
+        f"{ctx_line}"
+        "Schéma JSON attendu :\n"
+        "{\n"
+        '  "themes": [\n'
+        "    {\n"
+        '      "rank": 1,\n'
+        '      "title": "…",\n'
+        '      "description": "…",\n'
+        '      "relative_frequency": "très élevée|élevée|modérée|faible",\n'
+        '      "example_customer_messages": ["…", "…"]\n'
+        "    }\n"
+        "  ],\n"
+        '  "methodology_note": "phrase courte sur les limites (échantillon récent, pas exhaustif)"\n'
+        "}\n"
+        f"Nombre maximal de thèmes : {max_themes}.\n"
+    )
+
+
+def _inbound_themes_map_instruction(
+    ctx_line: str,
+    *,
+    batch_index: int,
+    batch_total: int,
+    max_themes: int,
+) -> str:
+    return (
+        _inbound_themes_instruction_common(ctx_line, max_themes)
+        + f"\nCe lot couvre les messages {batch_index}/{batch_total} de l’échantillon global. "
+        "Ne synthétise que ce lot ; les thèmes seront fusionnés ensuite.\n"
+    )
+
+
+def _inbound_themes_reduce_instruction(ctx_line: str, max_themes: int) -> str:
+    return (
+        "Tu reçois des thèmes candidats extraits par lots d’un même échantillon WhatsApp entrant.\n"
+        "Tâche : fusionner les doublons proches, classer les thèmes finaux par importance relative, "
+        "et produire une synthèse unique.\n"
+        "Contraintes :\n"
+        "- Ne crée pas de thème sans appui dans les candidats fournis.\n"
+        "- Les libellés restent courts et métier ; pas de données personnelles identifiables.\n"
+        "- `relative_frequency` reste relative à l’échantillon global, pas une statistique officielle.\n"
+        "- Sortie : un objet JSON avec `themes` et `methodology_note`.\n"
+        f"{ctx_line}"
+        f"Nombre maximal de thèmes finaux : {max_themes}.\n"
+    )
+
+
+def _compact_theme_candidates_for_reduce(candidates: List[Dict[str, Any]]) -> str:
+    slim: List[Dict[str, Any]] = []
+    for theme in candidates:
+        if not isinstance(theme, dict):
+            continue
+        examples = theme.get("example_customer_messages")
+        if not isinstance(examples, list):
+            examples = []
+        slim.append(
+            {
+                "title": theme.get("title"),
+                "description": theme.get("description"),
+                "relative_frequency": theme.get("relative_frequency"),
+                "example_customer_messages": [
+                    str(x).strip() for x in examples if str(x).strip()
+                ][:2],
+            }
+        )
+    return json.dumps(slim, ensure_ascii=False)
+
+
+def _finalize_inbound_themes_payload(
+    parsed: Optional[Dict[str, Any]],
+    *,
+    max_themes: int,
+    synthesis_mode: str,
+    map_batches: Optional[int] = None,
+) -> Dict[str, Any]:
+    if not parsed:
+        return {
+            "error": "Réponse IA non JSON exploitable.",
+            "themes": [],
+            "synthesis_mode": synthesis_mode,
+        }
+    themes = parsed.get("themes")
+    if not isinstance(themes, list):
+        themes = []
+    methodology_note = parsed.get("methodology_note")
+    out: Dict[str, Any] = {
+        "themes": themes[: max(5, min(int(max_themes), 20))],
+        "methodology_note": methodology_note if isinstance(methodology_note, str) else None,
+        "synthesis_mode": synthesis_mode,
+    }
+    if map_batches is not None:
+        out["map_batches"] = map_batches
+    return out
 
 
 def _themes_gemini_generation_base(model_id: str) -> Dict[str, Any]:
@@ -1375,15 +1538,17 @@ def _parse_themes_json_blob(raw: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-async def synthesize_inbound_question_themes_with_gemini(
-    texts: List[str],
+async def _invoke_inbound_themes_gemini(
     *,
-    max_themes: int = 12,
-    context_label: str = "",
+    instruction: str,
+    numbered: str,
+    conversation_tag: str,
+    model: str,
+    read_timeout: float,
+    max_themes: int,
+    synthesis_mode: str,
+    map_batches: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """
-    Regroupe les messages clients en thèmes / types de questions (sortie JSON Gemini).
-    """
     from app.core.circuit_breaker import CircuitBreakerOpenError, gemini_circuit_breaker
     from app.core.config import settings
     from app.services.bot_service import _call_gemini_api_once
@@ -1391,51 +1556,7 @@ async def synthesize_inbound_question_themes_with_gemini(
     if not settings.GEMINI_API_KEY:
         return {"error": "GEMINI_API_KEY non configurée.", "themes": []}
 
-    lines = [t.strip() for t in texts if (t or "").strip()]
-    if len(lines) < 12:
-        return {
-            "error": "Pas assez de messages dans l’échantillon pour une analyse fiable (minimum ~12).",
-            "themes": [],
-        }
-
     mt = max(5, min(int(max_themes), 20))
-    numbered = _inbound_themes_prompt_text(lines)
-    read_timeout = float(
-        getattr(settings, "AXELIA_INBOUND_THEMES_READ_TIMEOUT", 120.0) or 120.0
-    )
-
-    ctx = (context_label or "").strip()
-    ctx_line = f"\nContexte périmètre : {ctx}\n" if ctx else ""
-
-    instruction = (
-        "Tu analyses des messages WhatsApp **reçus des clients** (français ou mixte).\n"
-        "Tâche : identifier les **thèmes récurrents** et **types de questions / demandes** les plus fréquents.\n"
-        "Contraintes :\n"
-        "- Tu ne cites pas de données personnelles identifiables (pas de numéros complets, emails).\n"
-        "- Les libellés de thèmes sont courts et métier (ex. « Retards / horaires », « Facturation »).\n"
-        "- La fréquence est **relative à cet échantillon** (pas une vérité statistique globale).\n"
-        "- Sortie : un objet JSON avec les champs `themes` et `methodology_note` (contrainte API).\n"
-        "- Dans les chaînes entre guillemets doubles, **n’utilise pas** `\\'` pour une apostrophe (invalide en JSON) ; "
-        "écris une apostrophe telle quelle, ex. `d'affaires`.\n"
-        "- `description` : une ou deux phrases maximum par thème ; 1 à 2 exemples courts par thème.\n"
-        f"{ctx_line}"
-        "Schéma JSON attendu :\n"
-        "{\n"
-        '  "themes": [\n'
-        "    {\n"
-        '      "rank": 1,\n'
-        '      "title": "…",\n'
-        '      "description": "…",\n'
-        '      "relative_frequency": "très élevée|élevée|modérée|faible",\n'
-        '      "example_customer_messages": ["…", "…"]\n'
-        "    }\n"
-        "  ],\n"
-        '  "methodology_note": "phrase courte sur les limites (échantillon récent, pas exhaustif)"\n'
-        "}\n"
-        f"Nombre maximal de thèmes : {mt}.\n"
-    )
-
-    model = settings.GEMINI_MODEL
     base_gen = _themes_gemini_generation_base(model)
     gen_structured = {
         **base_gen,
@@ -1462,7 +1583,7 @@ async def synthesize_inbound_question_themes_with_gemini(
                 _call_gemini_api_once,
                 endpoint,
                 payload_structured,
-                "axelia-inbound-themes",
+                conversation_tag,
                 read_timeout=read_timeout,
             )
         except httpx.HTTPStatusError as exc:
@@ -1475,7 +1596,7 @@ async def synthesize_inbound_question_themes_with_gemini(
                     _call_gemini_api_once,
                     endpoint,
                     payload_plain,
-                    "axelia-inbound-themes",
+                    conversation_tag,
                     read_timeout=read_timeout,
                 )
             else:
@@ -1484,9 +1605,9 @@ async def synthesize_inbound_question_themes_with_gemini(
         return {"error": "Service IA temporairement indisponible (circuit ouvert).", "themes": []}
     except httpx.TimeoutException:
         logger.warning(
-            "Gemini inbound themes: délai dépassé (read=%ss, messages=%s)",
+            "Gemini inbound themes: délai dépassé (tag=%s read=%ss)",
+            conversation_tag,
             read_timeout,
-            min(len(lines), _INBOUND_THEMES_PROMPT_MESSAGES_MAX),
         )
         return {
             "error": (
@@ -1494,6 +1615,7 @@ async def synthesize_inbound_question_themes_with_gemini(
                 "dans quelques instants."
             ),
             "themes": [],
+            "synthesis_mode": synthesis_mode,
         }
     except httpx.HTTPStatusError as exc:
         logger.warning("Gemini themes HTTP %s", exc.response.status_code)
@@ -1516,13 +1638,158 @@ async def synthesize_inbound_question_themes_with_gemini(
             "error": "Réponse IA non JSON exploitable.",
             "raw_excerpt": raw_text[:800],
             "themes": [],
+            "synthesis_mode": synthesis_mode,
         }
 
-    themes = parsed.get("themes")
-    if not isinstance(themes, list):
-        themes = []
-    methodology_note = parsed.get("methodology_note")
-    return {
-        "themes": themes[:mt],
-        "methodology_note": methodology_note if isinstance(methodology_note, str) else None,
-    }
+    return _finalize_inbound_themes_payload(
+        parsed,
+        max_themes=mt,
+        synthesis_mode=synthesis_mode,
+        map_batches=map_batches,
+    )
+
+
+async def _synthesize_inbound_question_themes_map_reduce(
+    lines: List[str],
+    *,
+    max_themes: int,
+    context_label: str,
+    model: str,
+    read_timeout_map: float,
+    read_timeout_reduce: float,
+    batch_size: int,
+    max_parallel: int,
+) -> Dict[str, Any]:
+    ctx_line = _inbound_themes_context_line(context_label)
+    batches = _chunk_inbound_theme_lines(lines, batch_size)
+    local_mt = max(3, min(8, max_themes))
+    sem = asyncio.Semaphore(max(1, int(max_parallel)))
+
+    async def _map_one(batch_index: int, batch: List[str]) -> Dict[str, Any]:
+        async with sem:
+            instruction = _inbound_themes_map_instruction(
+                ctx_line,
+                batch_index=batch_index,
+                batch_total=len(batches),
+                max_themes=local_mt,
+            )
+            numbered = _inbound_themes_prompt_text(
+                batch,
+                max_messages=len(batch),
+                clip_cap=_INBOUND_THEMES_MAP_MSG_CAP,
+            )
+            return await _invoke_inbound_themes_gemini(
+                instruction=instruction,
+                numbered=numbered,
+                conversation_tag=f"axelia-inbound-themes-map-{batch_index}",
+                model=model,
+                read_timeout=read_timeout_map,
+                max_themes=local_mt,
+                synthesis_mode="map_reduce",
+            )
+
+    map_results = await asyncio.gather(
+        *(_map_one(idx, batch) for idx, batch in enumerate(batches, start=1))
+    )
+    candidates: List[Dict[str, Any]] = []
+    for result in map_results:
+        if not isinstance(result, dict):
+            continue
+        for theme in result.get("themes") or []:
+            if isinstance(theme, dict):
+                candidates.append(theme)
+
+    if not candidates:
+        return {
+            "error": "Aucun thème exploitable n’a pu être extrait des lots analysés.",
+            "themes": [],
+            "synthesis_mode": "map_reduce",
+            "map_batches": len(batches),
+        }
+
+    reduce_instruction = _inbound_themes_reduce_instruction(ctx_line, max_themes)
+    reduce_payload = _compact_theme_candidates_for_reduce(candidates)
+    return await _invoke_inbound_themes_gemini(
+        instruction=reduce_instruction,
+        numbered=reduce_payload,
+        conversation_tag="axelia-inbound-themes-reduce",
+        model=model,
+        read_timeout=read_timeout_reduce,
+        max_themes=max_themes,
+        synthesis_mode="map_reduce",
+        map_batches=len(batches),
+    )
+
+
+async def synthesize_inbound_question_themes_with_gemini(
+    texts: List[str],
+    *,
+    max_themes: int = 12,
+    context_label: str = "",
+) -> Dict[str, Any]:
+    """
+    Regroupe les messages clients en thèmes / types de questions (sortie JSON Gemini).
+    """
+    from app.core.config import settings
+
+    if not settings.GEMINI_API_KEY:
+        return {"error": "GEMINI_API_KEY non configurée.", "themes": []}
+
+    lines = [t.strip() for t in texts if (t or "").strip()]
+    if len(lines) < 12:
+        return {
+            "error": "Pas assez de messages dans l’échantillon pour une analyse fiable (minimum ~12).",
+            "themes": [],
+        }
+
+    mt = max(5, min(int(max_themes), 20))
+    model = _inbound_themes_gemini_model_id()
+    if not model:
+        return {"error": "Modèle Gemini non configuré.", "themes": []}
+
+    single_shot_max = max(
+        12,
+        int(getattr(settings, "AXELIA_INBOUND_THEMES_MAP_SINGLE_SHOT_MAX", 60) or 60),
+    )
+    batch_size = max(
+        12,
+        int(getattr(settings, "AXELIA_INBOUND_THEMES_MAP_BATCH_SIZE", 50) or 50),
+    )
+    max_parallel = max(
+        1,
+        int(getattr(settings, "AXELIA_INBOUND_THEMES_MAP_MAX_PARALLEL", 3) or 3),
+    )
+    read_timeout_single = float(
+        getattr(settings, "AXELIA_INBOUND_THEMES_READ_TIMEOUT", 120.0) or 120.0
+    )
+    read_timeout_map = float(
+        getattr(settings, "AXELIA_INBOUND_THEMES_MAP_READ_TIMEOUT", 45.0) or 45.0
+    )
+    read_timeout_reduce = float(
+        getattr(settings, "AXELIA_INBOUND_THEMES_REDUCE_READ_TIMEOUT", 75.0) or 75.0
+    )
+
+    if len(lines) <= single_shot_max:
+        ctx_line = _inbound_themes_context_line(context_label)
+        instruction = _inbound_themes_instruction_common(ctx_line, mt)
+        numbered = _inbound_themes_prompt_text(lines)
+        return await _invoke_inbound_themes_gemini(
+            instruction=instruction,
+            numbered=numbered,
+            conversation_tag="axelia-inbound-themes",
+            model=model,
+            read_timeout=read_timeout_single,
+            max_themes=mt,
+            synthesis_mode="single",
+        )
+
+    return await _synthesize_inbound_question_themes_map_reduce(
+        lines,
+        max_themes=mt,
+        context_label=context_label,
+        model=model,
+        read_timeout_map=read_timeout_map,
+        read_timeout_reduce=read_timeout_reduce,
+        batch_size=batch_size,
+        max_parallel=max_parallel,
+    )

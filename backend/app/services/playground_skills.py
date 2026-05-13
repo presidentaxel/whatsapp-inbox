@@ -1574,11 +1574,15 @@ async def _skill_analyze_inbound_question_themes(
     args: Dict[str, Any],
     account: Dict[str, Any],
 ) -> Dict[str, Any]:
+    from app.core.cache import get_cache
+    from app.core.config import settings
     from app.services.axelia_inbox_tools import (
+        build_inbound_themes_cache_key,
         parse_iso_datetime,
         sample_inbound_customer_messages_all_accessible,
         sample_inbound_customer_messages_for_account,
         synthesize_inbound_question_themes_with_gemini,
+        _inbound_themes_gemini_model_id,
     )
 
     since_raw = args.get("since")
@@ -1609,11 +1613,17 @@ async def _skill_analyze_inbound_question_themes(
     ctx_label = ""
     texts: List[str] = []
     meta: Dict[str, Any] = {"sample_limit_requested": slimit}
+    account_scope = "primary"
+    account_id = str(account.get("id") or "")
+    user_id = ""
+    rt = _axelia_rt()
+    if rt and rt.acting_user:
+        user_id = str(getattr(rt.acting_user, "id", "") or "")
 
     if _skill_args_want_all_accessible(args, account):
-        rt = _axelia_rt()
         if not rt or not rt.acting_user:
             return {"error": "Analyse multi-lignes : contexte utilisateur indisponible.", "themes": []}
+        account_scope = "all_accessible"
         bundle = await sample_inbound_customer_messages_all_accessible(
             rt.acting_user,
             limit_total=slimit,
@@ -1622,7 +1632,7 @@ async def _skill_analyze_inbound_question_themes(
         )
         if bundle.get("error"):
             return {"error": bundle.get("error"), "themes": []}
-        meta["account_scope"] = "all_accessible"
+        meta["account_scope"] = account_scope
         meta["sample_count"] = bundle.get("sample_count", 0)
         meta["accounts_iterated"] = bundle.get("accounts_iterated")
         for s in bundle.get("samples") or []:
@@ -1630,22 +1640,21 @@ async def _skill_analyze_inbound_question_themes(
                 texts.append(str(s.get("text")).strip())
         ctx_label = "Multi-lignes WABA agrégées (comptes accessibles)."
     else:
-        aid = str(account.get("id") or "")
-        if not aid:
+        if not account_id:
             return {"error": "Compte WABA manquant.", "themes": []}
         bundle = await sample_inbound_customer_messages_for_account(
-            aid,
+            account_id,
             limit=slimit,
             since=since_raw,
             until=until_raw,
         )
         if bundle.get("error"):
             return {"error": bundle.get("error"), "themes": []}
-        meta["account_scope"] = "primary"
-        meta["account_id"] = aid
+        meta["account_scope"] = account_scope
+        meta["account_id"] = account_id
         meta["sample_count"] = bundle.get("sample_count", 0)
         nm = (account.get("name") or "").strip()
-        ctx_label = f"Ligne : {nm or aid}."
+        ctx_label = f"Ligne : {nm or account_id}."
         for s in bundle.get("samples") or []:
             if isinstance(s, dict) and (s.get("text") or "").strip():
                 texts.append(str(s.get("text")).strip())
@@ -1653,12 +1662,44 @@ async def _skill_analyze_inbound_question_themes(
     if bundle.get("date_filter"):
         meta["date_filter"] = bundle.get("date_filter")
 
+    cache_key = build_inbound_themes_cache_key(
+        account_scope=account_scope,
+        account_id=account_id,
+        user_id=user_id,
+        since=since_raw,
+        until=until_raw,
+        sample_limit=slimit,
+        max_themes=max_themes,
+        model_id=_inbound_themes_gemini_model_id(),
+    )
+    cache = await get_cache()
+    cached = await cache.get(cache_key)
+    if isinstance(cached, dict) and cached.get("themes"):
+        out = {**meta, **cached, "cache_hit": True}
+        out.setdefault(
+            "disclaimer",
+            "Analyse qualitative sur un échantillon récent de messages entrants ; "
+            "les fréquences sont relatives à cet échantillon, pas des volumes officiels Meta.",
+        )
+        return out
+
     synth = await synthesize_inbound_question_themes_with_gemini(
         texts,
         max_themes=max_themes,
         context_label=ctx_label,
     )
     out = {**meta, **synth}
+    if synth.get("themes") and not synth.get("error"):
+        ttl = float(getattr(settings, "AXELIA_INBOUND_THEMES_CACHE_TTL_S", 86_400.0) or 86_400.0)
+        await cache.set(
+            cache_key,
+            {
+                key: synth[key]
+                for key in ("themes", "methodology_note", "synthesis_mode", "map_batches")
+                if key in synth
+            },
+            ttl_seconds=ttl,
+        )
     if synth.get("error") and not synth.get("themes"):
         return out
     out.setdefault(
