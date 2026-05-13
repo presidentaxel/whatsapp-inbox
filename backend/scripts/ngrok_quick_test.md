@@ -3,21 +3,51 @@
 ## Étapes Rapides
 
 ### 1. Installer ngrok (si pas déjà fait)
-```bash
-# Windows avec Chocolatey
-choco install ngrok
 
-# Ou télécharger depuis https://ngrok.com/download
+**Ubuntu / Linux (bash)** — paquet ou archive depuis [ngrok.com/download](https://ngrok.com/download) :
+
+```bash
+# Ubuntu : souvent disponible via snap
+sudo snap install ngrok
+# Sinon : archive depuis https://ngrok.com/download
 ```
 
+**Windows (PowerShell)** — avec Chocolatey :
+
+```powershell
+choco install ngrok
+```
+
+Sinon : télécharger depuis [ngrok.com/download](https://ngrok.com/download).
+
 ### 2. Démarrer le backend
+
+**Ubuntu / Linux (bash)**
+
 ```bash
 cd backend
 uvicorn app.main:app --reload --port 8000
 ```
 
+**Windows (PowerShell)**
+
+```powershell
+cd backend
+uvicorn app.main:app --reload --port 8000
+```
+
 ### 3. Lancer le script de test
+
+**Ubuntu / Linux (bash)**
+
 ```bash
+cd backend
+python scripts/test_webhook_ngrok.py
+```
+
+**Windows (PowerShell)**
+
+```powershell
 cd backend
 python scripts/test_webhook_ngrok.py
 ```
@@ -54,9 +84,12 @@ INFO:     📥 POST /whatsapp webhook received: object=whatsapp_business_account
 Si vous préférez faire manuellement :
 
 ### 1. Démarrer ngrok
+
 ```bash
 ngrok http 8000
 ```
+
+(Même commande dans PowerShell si `ngrok` est dans le `PATH`.)
 
 ### 2. Récupérer l'URL
 - Ouvrez http://127.0.0.1:4040 dans votre navigateur

@@ -24,7 +24,15 @@ La règle fondamentale (cf. `docs/GUIDE_BONNES_PRATIQUES.md`) reste :
 
 ## 2. Branche dédiée + outils
 
+**Ubuntu / Linux (bash)**
+
 ```bash
+git checkout -b chore/sync-db-from-remote
+```
+
+**Windows (PowerShell)**
+
+```powershell
 git checkout -b chore/sync-db-from-remote
 ```
 
@@ -43,12 +51,21 @@ git checkout -b chore/sync-db-from-remote
 
 Avant de toucher à quoi que ce soit, vérifier l'état remote :
 
+**Ubuntu / Linux (bash)**
+
 ```bash
 # Liste des migrations enregistrées côté remote
 # (via MCP : list_migrations)
 
 # Comparer avec le local :
 ls supabase/migrations/ | sort
+```
+
+**Windows (PowerShell)**
+
+```powershell
+# Comparer avec le local :
+Get-ChildItem supabase/migrations | Sort-Object Name
 ```
 
 Lancer aussi les advisors Supabase (security + performance) - ils signalent les
@@ -60,6 +77,8 @@ Si plusieurs fichiers locaux partagent le même préfixe (`026_a.sql`,
 `026_b.sql`), il faut conserver celui qui correspond au nom enregistré dans
 `schema_migrations` distant et renommer les autres avec un numéro libre :
 
+**Ubuntu / Linux (bash)**
+
 ```bash
 git mv supabase/migrations/026_template_deduplication.sql \
        supabase/migrations/055_template_deduplication.sql
@@ -67,17 +86,30 @@ git mv supabase/migrations/051_axelia_search_indexes.sql \
        supabase/migrations/056_axelia_search_indexes.sql
 ```
 
-> Si la migration renommée a déjà été **appliquée** hors `supabase/migrations`
-> (cas fréquent quand un dev a copié le SQL dans le Dashboard), il faut la
-> marquer comme `applied` côté remote pour éviter qu'elle se rejoue :
->
-> ```bash
-> npx supabase migration repair --status applied 055 056
-> ```
+**Windows (PowerShell)** — continuation de ligne avec `` ` `` en fin de ligne :
+
+```powershell
+git mv supabase/migrations/026_template_deduplication.sql `
+       supabase/migrations/055_template_deduplication.sql
+git mv supabase/migrations/051_axelia_search_indexes.sql `
+       supabase/migrations/056_axelia_search_indexes.sql
+```
+
+Si la migration renommée a déjà été **appliquée** hors `supabase/migrations`
+(cas fréquent quand un dev a copié le SQL dans le Dashboard), il faut la
+marquer comme `applied` côté remote pour éviter qu'elle se rejoue.
+
+**bash ou PowerShell** (identique) :
+
+```bash
+npx supabase migration repair --status applied 055 056
+```
 
 ## 5. Détecter les divergences réelles
 
 Une fois les collisions résolues, lance :
+
+**bash ou PowerShell** (identique) :
 
 ```bash
 npx supabase login
@@ -128,11 +160,18 @@ Pour les tables WhatsApp Inbox, la migration
 
 ## 7. Déploiement
 
-```bash
-# Sécurité : prod-dump avant push
-npx supabase db dump --linked --schema public > _backup_$(date +%F).sql
+**Ubuntu / Linux (bash)** — dump avec date dans le nom de fichier :
 
-# Push de la migration RLS et des fichiers renommés
+```bash
+npx supabase db dump --linked --schema public > "_backup_$(date +%F).sql"
+npx supabase db push
+```
+
+**Windows (PowerShell)**
+
+```powershell
+$d = Get-Date -Format "yyyy-MM-dd"
+npx supabase db dump --linked --schema public > "_backup_$d.sql"
 npx supabase db push
 ```
 

@@ -17,11 +17,20 @@ Même logique que les jobs **test-backend** et **test-frontend** de [`.github/wo
 - **Avec Make** : `make check` à la racine du dépôt
 - **Avec npm** : `npm run ci:check` à la racine (nécessite Node ; installe les dépendances Python et npm aux emplacements attendus)
 
-Python **3.11** est requis (comme en CI). Si la commande `python` par défaut pointe vers une autre version (souvent le cas sur Windows), définissez la variable d’environnement `PYTHON` avec le chemin de l’exécutable 3.11 avant de lancer les vérifications (ex. `PYTHON=%LocalAppData%\Programs\Python\Python311\python.exe` sous cmd, ou l’équivalent PowerShell).
+Python **3.11** est requis (comme en CI). Si la commande `python` par défaut pointe vers une autre version (souvent le cas sur Windows), pointez `PYTHON` vers l’exécutable 3.11 avant les vérifications : invite **cmd** `set PYTHON=%LocalAppData%\Programs\Python\Python311\python.exe`, ou **PowerShell** `$env:PYTHON = "$env:LocalAppData\Programs\Python\Python311\python.exe"`.
 
 Hooks Git optionnels (même linter backend + `eslint` frontend que la CI, via les scripts `lint:ci`) :
 
+**Ubuntu / Linux (bash)**
+
 ```bash
+pip install pre-commit
+pre-commit install
+```
+
+**Windows (PowerShell)**
+
+```powershell
 pip install pre-commit
 pre-commit install
 ```
@@ -38,16 +47,28 @@ pre-commit install
 
 Répertoire : `backend/`
 
+**Ubuntu / Linux (bash)**
+
 ```bash
+cd backend
+python3 -m pip install -r requirements.txt
+python3 -m pip install ruff
+# Variables d’environnement : copier depuis .env.example puis adapter
+
+pytest
+python3 -m py_compile app/main.py
+python3 -m ruff check app
+```
+
+**Windows (PowerShell)**
+
+```powershell
 cd backend
 python -m pip install -r requirements.txt
 python -m pip install ruff
 # Variables d’environnement : copier depuis .env.example puis adapter
 
-# Tests unitaires
 pytest
-
-# Aligné avec la CI : compilation + ruff (voir aussi make check / npm run ci:check)
 python -m py_compile app/main.py
 python -m ruff check app
 ```
@@ -58,7 +79,20 @@ Les routes principales vivent sous `app/api/` ; la configuration sous `app/core/
 
 Répertoire : `frontend/`
 
+**Ubuntu / Linux (bash)**
+
 ```bash
+cd frontend
+npm ci
+npm run lint
+npm run format:check
+npm run test
+npm run build
+```
+
+**Windows (PowerShell)**
+
+```powershell
 cd frontend
 npm ci
 npm run lint

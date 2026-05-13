@@ -266,7 +266,7 @@ async def webhook_events_list(
     status: str | None = Query(
         None,
         description="Filtre: pending | processing | done | failed",
-        regex="^(pending|processing|done|failed)$",
+        pattern="^(pending|processing|done|failed)$",
     ),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),

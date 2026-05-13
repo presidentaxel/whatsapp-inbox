@@ -6,18 +6,41 @@ Le script `update-version.js` permet de mettre à jour automatiquement la versio
 
 ### Utilisation
 
+À lancer depuis le dossier `frontend/`. Les commandes `npm` / `node` sont les mêmes sous bash et PowerShell ; seul le chemin du dossier courant change si besoin (`cd frontend` ou `cd frontend`).
+
+**Ubuntu / Linux (bash)**
+
 ```bash
+cd frontend
+npm run version:update <nouvelle_version>
+```
+
+**Windows (PowerShell)**
+
+```powershell
+cd frontend
 npm run version:update <nouvelle_version>
 ```
 
 **Exemple :**
+
 ```bash
 npm run version:update v2.0.2
 ```
 
 ou directement avec Node.js :
 
+**Ubuntu / Linux (bash)**
+
 ```bash
+cd frontend
+node scripts/update-version.js v2.0.2
+```
+
+**Windows (PowerShell)**
+
+```powershell
+cd frontend
 node scripts/update-version.js v2.0.2
 ```
 
